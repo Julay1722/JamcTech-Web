@@ -226,10 +226,12 @@
   }
   table.data tr:hover td { background: var(--surface-2); }
   table.data td.num { font-family: var(--font-mono); color: var(--text); }
-  table.data td.right { text-align: right; }
+  table.data td.right, table.data th.right { text-align: right; }
   table.data td.pos { color: var(--success); }
   table.data td.neg { color: var(--danger); }
   table.data td.muted { color: var(--text-3); }
+  /* fix: th de columnas numéricas también deben right-align con el td */
+  table.data th.num { font-family: var(--font-mono); }
 
   /* Inline badge inside table */
   .badge {
@@ -536,67 +538,93 @@ function Sparkline({ values, w = 200, h = 50, color = 'var(--accent)' }) {
   );
 }
 
-// LineChart con etiquetas X/Y, valores numéricos en los ejes y tooltips por punto.
-// Ideal para series mensuales (ventas, ganancia, balance, etc).
-function LineChart({ values, labels = [], w = 800, h = 180, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '', yTicks = 4 }) {
-  if (!values || values.length < 2) return <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos suficientes</div>;
-  const PAD_L = 56, PAD_R = 12, PAD_T = 8, PAD_B = 22;
+// Helper: medir ancho del container y re-render cuando cambie.
+function useContainerWidth() {
+  const ref = React.useRef(null);
+  const [w, setW] = React.useState(800);
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const measure = () => { if (ref.current) setW(ref.current.offsetWidth); };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w];
+}
+
+// LineChart responsivo: ocupa todo el ancho del container, usa viewBox para escalar.
+// Si labels son muchos (>15), se muestran salteados (cada N) para que no se amontonen.
+function LineChart({ values, labels = [], h = 200, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '', yTicks = 4 }) {
+  const [ref, containerW] = useContainerWidth();
+  if (!values || values.length < 2) return <div ref={ref} className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos suficientes</div>;
+  const w = Math.max(320, containerW);
+  const PAD_L = 64, PAD_R = 16, PAD_T = 10, PAD_B = 28;
   const cw = w - PAD_L - PAD_R, ch = h - PAD_T - PAD_B;
   const max = Math.max(...values);
   const min = Math.min(0, Math.min(...values));
   const range = (max - min) || 1;
-  const x = (i) => PAD_L + (i / (values.length - 1)) * cw;
+  const x = (i) => PAD_L + (i / Math.max(1, values.length - 1)) * cw;
   const y = (v) => PAD_T + ch - ((v - min) / range) * ch;
   const points = values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
   const areaPoints = `${PAD_L},${PAD_T + ch} ${points} ${PAD_L + cw},${PAD_T + ch}`;
   const ticks = Array.from({ length: yTicks + 1 }, (_, i) => min + (range * i / yTicks));
+  // Si hay muchos labels, mostrar cada Nth para evitar overlap
+  const labelEvery = Math.max(1, Math.ceil(values.length / Math.floor(cw / 60)));
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={ref} style={{ width: '100%', position: 'relative' }}>
       {title && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>}
-      <svg width={w} height={h} style={{ overflow: 'visible', display: 'block' }}>
-        {/* Y-axis gridlines + labels */}
+      <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
         {ticks.map((t, i) => (
           <g key={i}>
             <line x1={PAD_L} y1={y(t)} x2={PAD_L + cw} y2={y(t)} stroke="var(--border)" strokeDasharray="2 4" strokeWidth={0.5} />
-            <text x={PAD_L - 6} y={y(t) + 3} fontSize={10} fill="var(--text-3)" textAnchor="end" fontFamily="var(--font-mono)">{fmt(t)}</text>
+            <text x={PAD_L - 8} y={y(t) + 3} fontSize={10} fill="var(--text-3)" textAnchor="end" fontFamily="var(--font-mono)">{fmt(t)}</text>
           </g>
         ))}
         <polygon points={areaPoints} fill={color} opacity={0.12} />
         <polyline points={points} fill="none" stroke={color} strokeWidth={1.8} />
-        {/* Data points */}
         {values.map((v, i) => (
-          <g key={i}>
-            <circle cx={x(i)} cy={y(v)} r={3} fill={color}>
-              <title>{(labels[i] || `#${i+1}`) + ': ' + fmt(v)}</title>
-            </circle>
-          </g>
+          <circle key={i} cx={x(i)} cy={y(v)} r={3} fill={color}>
+            <title>{(labels[i] || `#${i+1}`) + ': ' + fmt(v)}</title>
+          </circle>
         ))}
-        {/* X-axis labels (each one, no skipping) */}
-        {labels.map((l, i) => (
-          <text key={i} x={x(i)} y={h - 6} fontSize={10} fill="var(--text-3)" textAnchor="middle" fontFamily="var(--font-mono)">{l}</text>
+        {labels.map((l, i) => (i % labelEvery === 0 || i === labels.length - 1) && (
+          <text key={i} x={x(i)} y={h - 8} fontSize={10} fill="var(--text-3)" textAnchor="middle" fontFamily="var(--font-mono)">{l}</text>
         ))}
       </svg>
     </div>
   );
 }
 
-// BarChart simple comparativo: dataset de {label, value}. Útil para top N o categorías.
-function BarChart({ data, w = 800, h = 180, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '' }) {
-  if (!data || data.length === 0) return null;
-  const PAD_L = 92, PAD_R = 56, PAD_T = 4, PAD_B = 4;
+// BarChart responsivo: barras horizontales. Trunca labels largos con ellipsis CSS
+// y reserva ancho proporcional al texto del label más largo.
+function BarChart({ data, h = 180, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '' }) {
+  const [ref, containerW] = useContainerWidth();
+  if (!data || data.length === 0) return <div ref={ref} className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos</div>;
+  const w = Math.max(320, containerW);
+  // Reserva ancho para label = min(35% del ancho, 160px); resto para barras.
+  const PAD_L = Math.min(180, Math.max(80, w * 0.28));
+  const PAD_R = 72, PAD_T = 4, PAD_B = 4;
   const max = Math.max(...data.map(d => d.value));
-  const barH = Math.max(18, (h - PAD_T - PAD_B) / data.length - 6);
+  const barH = 22;
   const cw = w - PAD_L - PAD_R;
+  const svgH = (barH + 8) * data.length + PAD_T + PAD_B;
   return (
-    <div>
+    <div ref={ref} style={{ width: '100%' }}>
       {title && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>}
-      <svg width={w} height={(barH + 6) * data.length} style={{ display: 'block' }}>
+      <svg width="100%" height={svgH} viewBox={`0 0 ${w} ${svgH}`} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
         {data.map((d, i) => {
-          const yPos = i * (barH + 6) + PAD_T;
+          const yPos = i * (barH + 8) + PAD_T;
           const bw = max > 0 ? (Math.abs(d.value) / max) * cw : 0;
+          // Trunca label si es muy largo (~18 chars)
+          const maxChars = Math.max(8, Math.floor(PAD_L / 7));
+          const lblShort = d.label.length > maxChars ? d.label.slice(0, maxChars - 1) + '…' : d.label;
           return (
             <g key={i}>
-              <text x={PAD_L - 6} y={yPos + barH/2 + 4} fontSize={11} fill="var(--text-2)" textAnchor="end">{d.label}</text>
+              <text x={PAD_L - 8} y={yPos + barH/2 + 4} fontSize={11} fill="var(--text-2)" textAnchor="end">
+                {lblShort}
+                <title>{d.label}</title>
+              </text>
               <rect x={PAD_L} y={yPos} width={bw} height={barH} fill={d.color || color} opacity={0.85} rx={2} />
               <text x={PAD_L + bw + 6} y={yPos + barH/2 + 4} fontSize={11} fill="var(--text)" fontFamily="var(--font-mono)">{fmt(d.value)}</text>
             </g>
@@ -652,6 +680,7 @@ function OverviewPage({ period }) {
   const allVentas = data.ventas || [];
   const allCf = data.cashflow || [];
   const SK = data.skus || [];
+  const [topMetric, setTopMetric] = useState('revenue'); // revenue | ganancia | uds
 
   // ── Filtrado por período ──────────────────────────────────────
   const ventas = filterByPeriod(allVentas, period, 'fecha');
@@ -723,7 +752,11 @@ function OverviewPage({ period }) {
       skuStats[k].ganancia += li.ganancia || 0;
     });
   });
-  const topSkus = Object.values(skuStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  const allSkuStats = Object.values(skuStats);
+  const topSkusByRevenue  = [...allSkuStats].sort((a, b) => b.revenue  - a.revenue ).slice(0, 10);
+  const topSkusByGanancia = [...allSkuStats].sort((a, b) => b.ganancia - a.ganancia).slice(0, 10);
+  const topSkusByUds      = [...allSkuStats].sort((a, b) => b.uds      - a.uds     ).slice(0, 10);
+  const topSkus = topSkusByRevenue;  // default
 
   // ── Balance acumulado mes a mes (siempre histórico) ───────────
   const balSeries = [];
@@ -831,7 +864,7 @@ function OverviewPage({ period }) {
               <div className="section-desc">Tendencia · {MES.length} meses · prom RD${fmtNum(totalVentas / Math.max(1, MES.length))}</div>
             </div>
           </div>
-          <LineChart values={ventasSerie} labels={mesLabels} w={520} h={200} color="var(--accent)"
+          <LineChart values={ventasSerie} labels={mesLabels} h={200} color="var(--accent)"
             fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE MENSUAL · RD$" />
         </div>
         <div className="section">
@@ -841,7 +874,7 @@ function OverviewPage({ period }) {
               <div className="section-desc">Margen prom {(MES.reduce((s, m) => s + m.p, 0) / Math.max(1, MES.length)).toFixed(1)}%</div>
             </div>
           </div>
-          <LineChart values={gananciaSerie} labels={mesLabels} w={520} h={200} color="var(--success)"
+          <LineChart values={gananciaSerie} labels={mesLabels} h={200} color="var(--success)"
             fmt={(n) => 'RD$' + fmtK(n)} title="GANANCIA MENSUAL · RD$" />
         </div>
       </div>
@@ -854,7 +887,7 @@ function OverviewPage({ period }) {
               <div className="section-desc">Ganancia ÷ Revenue por mes</div>
             </div>
           </div>
-          <LineChart values={margenSerie} labels={mesLabels} w={520} h={180} color="var(--warning)"
+          <LineChart values={margenSerie} labels={mesLabels} h={180} color="var(--warning)"
             fmt={(n) => n.toFixed(1) + '%'} title="MARGEN %" />
         </div>
         <div className="section">
@@ -865,7 +898,7 @@ function OverviewPage({ period }) {
             </div>
           </div>
           {topCanales.length > 0 ? (
-            <BarChart data={topCanales} w={520} fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE POR CANAL · RD$" />
+            <BarChart data={topCanales} fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE POR CANAL · RD$" />
           ) : <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos en el período</div>}
         </div>
       </div>
@@ -892,7 +925,7 @@ function OverviewPage({ period }) {
           </div>
           <span className="badge neutral">Actual: {fmtCurrency(balanceActual)}</span>
         </div>
-        <LineChart values={balSeries} labels={balLabels} w={1080} h={210} color="var(--success)"
+        <LineChart values={balSeries} labels={balLabels} h={210} color="var(--success)"
           fmt={(n) => 'RD$' + fmtK(n)} title="CAPITAL ACUMULADO · RD$" yTicks={5} />
       </div>
 
@@ -960,7 +993,7 @@ function OverviewPage({ period }) {
               <div className="section-desc">{topGastos.length} categorías · {period === 'todo' ? 'histórico' : period} · total {fmtCurrency(topGastos.reduce((s, g) => s + g.value, 0))}</div>
             </div>
           </div>
-          <BarChart data={topGastos} w={1060} fmt={(n) => 'RD$' + fmtK(n)} color="var(--danger)" title="GASTO ACUMULADO · RD$" />
+          <BarChart data={topGastos} fmt={(n) => 'RD$' + fmtK(n)} color="var(--danger)" title="GASTO ACUMULADO · RD$" />
         </div>
       )}
 
@@ -992,13 +1025,27 @@ function OverviewPage({ period }) {
         <div className="section">
           <div className="section-head">
             <div>
-              <div className="section-title">Top 5 SKUs por revenue</div>
-              <div className="section-desc">{period === 'todo' ? 'Histórico' : period} · {topSkus.length} de {Object.keys(skuStats).length}</div>
+              <div className="section-title">Top 10 SKUs</div>
+              <div className="section-desc">{period === 'todo' ? 'Histórico' : period} · ordenado por {topMetric === 'revenue' ? 'revenue' : topMetric === 'ganancia' ? 'ganancia' : 'unidades vendidas'}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[{k:'revenue',l:'Revenue'},{k:'ganancia',l:'Ganancia'},{k:'uds',l:'Uds'}].map(o => (
+                <button key={o.k} className="pill" style={{
+                  background: topMetric === o.k ? 'var(--accent)' : 'var(--surface-2)',
+                  color:      topMetric === o.k ? '#fff'         : 'var(--text-2)',
+                  border: 'none', cursor: 'pointer',
+                }} onClick={() => setTopMetric(o.k)}>{o.l}</button>
+              ))}
             </div>
           </div>
-          {topSkus.length > 0 ? (
-            <BarChart data={topSkus.map((s, i) => ({ label: s.nombre.slice(0, 22), value: s.revenue, color: canalPalette[i % canalPalette.length] }))} w={520} fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE POR SKU · RD$" />
-          ) : <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin ventas en el período</div>}
+          {(() => {
+            const list = topMetric === 'ganancia' ? topSkusByGanancia : topMetric === 'uds' ? topSkusByUds : topSkusByRevenue;
+            const fmt = topMetric === 'uds' ? ((n) => n + ' ud') : ((n) => 'RD$' + fmtK(n));
+            const title = topMetric === 'uds' ? 'UNIDADES VENDIDAS' : `${topMetric.toUpperCase()} · RD$`;
+            return list.length > 0 ? (
+              <BarChart data={list.map((s, i) => ({ label: s.nombre, value: s[topMetric], color: canalPalette[i % canalPalette.length] }))} fmt={fmt} title={title} />
+            ) : <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin ventas en el período</div>;
+          })()}
         </div>
       </div>
 
@@ -1006,8 +1053,8 @@ function OverviewPage({ period }) {
         <div className="section">
           <div className="section-head">
             <div>
-              <div className="section-title">Detalle Top SKUs</div>
-              <div className="section-desc">Unidades · revenue · ganancia · margen %</div>
+              <div className="section-title">Detalle Top 10 SKUs</div>
+              <div className="section-desc">Ordenado por {topMetric === 'revenue' ? 'revenue' : topMetric === 'ganancia' ? 'ganancia' : 'unidades'}</div>
             </div>
           </div>
           <table className="data">
@@ -1017,7 +1064,7 @@ function OverviewPage({ period }) {
               <th className="right">Ganancia</th><th className="right">Margen</th>
             </tr></thead>
             <tbody>
-              {topSkus.map(s => {
+              {(topMetric === 'ganancia' ? topSkusByGanancia : topMetric === 'uds' ? topSkusByUds : topSkusByRevenue).map(s => {
                 const mg = s.revenue > 0 ? (s.ganancia / s.revenue) * 100 : 0;
                 return (
                   <tr key={s.sku}>
