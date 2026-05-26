@@ -1,0 +1,40 @@
+# ── Secretos (NUNCA commitear) ──────────────────────────────────
+.env
+.env.*
+*.pat
+*.token
+
+# ── Documentos locales (no se publican en el sitio Netlify) ─────
+# El prompt de reconstrucción y las instrucciones a Julio viven solo
+# en su máquina; Julio también las tiene en Claude.ai Project Knowledge.
+PROMPT_RECONSTRUCCION.md
+JULIO_INSTRUCCIONES_PAT.md
+JULIO_INSTRUCCIONES_AIRTABLE.md
+# Estado de la sesión Claude Code (local · scratch para handoff entre sesiones)
+SESSION_STATE.md
+
+# ── Claude Code (config local del asistente) ────────────────────
+.claude/
+
+# ── Reportes internos de testing (§7.7, scratch local) ──────────
+_internal-report-cycle-*.md
+
+# ── Dependencias Node ────────────────────────────────────────────
+node_modules/
+
+# ── Netlify ──────────────────────────────────────────────────────
+.netlify/
+# netlify-cli usa deno internamente y crea este lockfile en root
+deno.lock
+
+# ── Playwright (cuando arranquen los ciclos de testing) ─────────
+test-results/
+playwright-report/
+playwright/.cache/
+
+# ── OS / editor ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/

@@ -1,0 +1,69 @@
+# Netlify config — JAMC's Tech Terminal v3.2 (React/JSX edition)
+# Deploy: https://app.netlify.com/projects/jamcs-tech/deploys
+
+[build]
+  publish = "."
+  command = ""
+
+[build.environment]
+  NODE_VERSION = "20"
+  # AIRTABLE_BASE_ID es un identificador, no un secreto (aparece en cualquier
+  # URL pública de Airtable). El scanner lo trata como secreto porque coincide
+  # con un env var → lo declaramos explícitamente como no-secreto.
+  SECRETS_SCAN_OMIT_KEYS = "AIRTABLE_BASE_ID"
+
+# Netlify Functions — proxy seguro para Airtable. Ver netlify/functions/airtable.js
+# y PROMPT_RECONSTRUCCION.md §3 (Tarea 0).
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Security headers (defensa en profundidad — §3.4)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+
+# El proxy de Airtable NO debe ser indexado por buscadores
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow, noarchive"
+    Cache-Control = "no-store"
+
+# JS/JSX: forzar revalidación en cada request hasta que tengamos cache busting
+# por URL (?v=hash en index.html). Sin esto, un cambio en airtable-client.js
+# puede tardar hasta max-age en propagarse — y un cambio crítico (como la
+# migración del PAT en Tarea 0) puede dejar a usuarios sirviendo código viejo
+# durante una hora. El overhead es mínimo: respuestas 304 con If-Modified-Since.
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.jsx"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Content-Type = "text/babel; charset=utf-8"
+
+# HTML always fresh
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# SPA fallback (Netlify procesa /.netlify/functions/* antes de aplicar redirects,
+# así que esta regla no intercepta llamadas al proxy)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
