@@ -308,7 +308,7 @@ function PanelInventario() {
 
       {/* SKU table */}
       <TSectionHead ix="§07" name="Inventario completo"
-        count={`${tableSKUs.length}/${SK.length} SKUs · ${atSkus.loaded ? 'LIVE · airtable' : atSkus.error ? 'MOCK (airtable falló)' : 'MOCK · cargando…'}`}
+        count={`${tableSKUs.length}/${SK.length} SKUs · ${atSkus.loaded ? 'LIVE · supabase' : atSkus.error ? 'MOCK (supabase falló)' : 'MOCK · cargando…'}`}
         right={
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
             <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)}
