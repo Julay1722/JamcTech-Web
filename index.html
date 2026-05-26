@@ -1932,6 +1932,214 @@ function FormPrestamo({ tipoFijo, onDone }) {
 // ─── Drilldown: detalle de un producto financiero ─────────────────
 // Muestra movimientos del producto (filtrados desde movFin) + form rápido
 // para registrar un nuevo movimiento scopeado a ese producto.
+// ═════════════════════════ Detalle inline · Amortización ═════════════════════════
+// Para préstamos amortizados (Coop, etc) — genera tabla mes a mes con
+// capital/interés/saldo basado en monto inicial, tasa mensual y cuota típica.
+// Marca cuotas pagadas vs proyectadas comparando contra los pagos ya hechos.
+function DetalleAmortizacion({ item }) {
+  const data = useATData();
+  const monto    = Number(item.montoTotal) || 0;
+  const tasa     = Number(item.tasaMensual) || 0;  // decimal mensual
+  const seguro   = Number(item.seguroMensual) || 0;
+  const pagado   = Number(item._capitalPagado) || 0;
+  // Cuota: median del array de productos['FIN-P'][i].cuota si existe, else compute
+  const finP = (data.productos?.['FIN-P'] || []).find(x => x._airtableId === item._airtableId);
+  const cuotaTotal = Number(finP?.cuota) || (monto * tasa / (1 - Math.pow(1 + tasa, -48)) + seguro);  // 48-month default if no median
+  // Schedule
+  const schedule = [];
+  let saldo = monto;
+  let mes = 0;
+  let pagadoAcum = 0;
+  const MAX_MESES = 240; // safety cap
+  while (saldo > 0.01 && mes < MAX_MESES) {
+    mes++;
+    const interes = saldo * tasa;
+    const capital = Math.max(0, cuotaTotal - interes - seguro);
+    const saldoNuevo = Math.max(0, saldo - capital);
+    pagadoAcum += capital;
+    schedule.push({
+      mes,
+      capital,
+      interes,
+      seguro,
+      cuota: cuotaTotal,
+      saldoInicio: saldo,
+      saldoFin: saldoNuevo,
+      pagada: pagadoAcum <= pagado + 1,  // mes pagado si el capital acumulado ≤ lo que ya se pagó
+    });
+    saldo = saldoNuevo;
+    if (capital === 0) break;  // evita loop infinito si cuota < interes
+  }
+  // Encontrar la fila actual (primera no pagada)
+  const idxActual = schedule.findIndex(r => !r.pagada);
+  const cuotasRestantes = schedule.filter(r => !r.pagada).length;
+  const interesProyectado = schedule.filter(r => !r.pagada).reduce((s, r) => s + r.interes, 0);
+  return (
+    <div className="section">
+      <div className="section-head">
+        <div>
+          <div className="section-title">Tabla de amortización · {item.nombre}</div>
+          <div className="section-desc">
+            {schedule.length} meses totales · {idxActual >= 0 ? idxActual : schedule.length} pagados ·
+            {' '}{cuotasRestantes} restantes · interés proyectado {fmtCurrency(interesProyectado)}
+          </div>
+        </div>
+        <span className="badge neutral">Cuota: {fmtCurrency(cuotaTotal)}</span>
+      </div>
+      <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+        <table className="data">
+          <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+            <tr>
+              <th className="right">Mes</th>
+              <th className="right">Capital</th>
+              <th className="right">Interés</th>
+              <th className="right">Seguro</th>
+              <th className="right">Cuota total</th>
+              <th className="right">Saldo después</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {schedule.map((r, i) => (
+              <tr key={i} style={{
+                background: i === idxActual ? 'var(--surface-2)' : undefined,
+                opacity: r.pagada ? 0.55 : 1,
+              }}>
+                <td className="num right">{r.mes}</td>
+                <td className="num right pos">{fmtCurrency(r.capital)}</td>
+                <td className="num right neg">{fmtCurrency(r.interes)}</td>
+                <td className="num right muted">{fmtCurrency(r.seguro)}</td>
+                <td className="num right">{fmtCurrency(r.cuota)}</td>
+                <td className="num right">{fmtCurrency(r.saldoFin)}</td>
+                <td><span className={`badge ${r.pagada ? 'success' : i === idxActual ? 'warning' : 'neutral'}`}>
+                  {r.pagada ? '✓ Pagada' : i === idxActual ? '→ Próxima' : 'Pendiente'}
+                </span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════ Detalle inline · Línea revolvente ═════════════════════════
+// Para líneas de crédito (BHD Linea) — muestra los movimientos (disposiciones,
+// pagos, cargos por intereses) con saldo corriente. Sin amortización fija.
+function DetalleLineaRevolvente({ item }) {
+  const movs = (item.movimientos || []).slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
+  let saldo = 0;
+  const rows = movs.map(m => {
+    const delta = m.tipo === 'pago' ? -m.monto : m.monto;  // cargo aumenta saldo, pago lo reduce
+    saldo += delta;
+    return { ...m, delta, saldoDespues: saldo };
+  }).reverse();
+  return (
+    <div className="section">
+      <div className="section-head">
+        <div>
+          <div className="section-title">Movimientos · {item.nombre} (línea revolvente)</div>
+          <div className="section-desc">
+            {movs.length} movimientos · límite {fmtCurrency(item.limite)} · usado actual {fmtCurrency(item.usado)} ·
+            {' '}disponible {fmtCurrency(item.limite - item.usado)}
+          </div>
+        </div>
+        <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+      </div>
+      <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+        <table className="data">
+          <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+            <tr>
+              <th>Fecha</th><th>Tipo</th><th>Concepto</th>
+              <th className="right">Cargo</th><th className="right">Pago</th>
+              <th className="right">Saldo después</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{fmtDate(r.fecha)}</td>
+                <td className="muted">{r.tipo === 'pago' ? 'Pago' : r.categoria === 'interes' ? 'Interés' : 'Cargo'}</td>
+                <td className="muted">{r.nota || '—'}</td>
+                <td className="num right neg">{r.tipo !== 'pago' ? fmtCurrency(r.monto) : '—'}</td>
+                <td className="num right pos">{r.tipo === 'pago' ? fmtCurrency(r.monto) : '—'}</td>
+                <td className="num right">{fmtCurrency(r.saldoDespues)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>Sin movimientos en esta línea</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════ Detalle inline · Usos de tarjeta ═════════════════════════
+// Para tarjetas de crédito — lista de cargos y pagos con saldo corriente.
+// Útil para ver qué se está cargando a la tarjeta y cuánto se ha pagado.
+function DetalleUsosTarjeta({ item, cashflow }) {
+  // Filtrar cashflow por mención de la tarjeta en auxiliar o notas
+  const nameTokens = (item.nombre || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  const usos = (cashflow || []).filter(m => {
+    const txt = ((m.a || '') + ' ' + (m.notas || '') + ' ' + (m.c || '')).toLowerCase();
+    return nameTokens.some(t => txt.includes(t));
+  }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
+  let saldo = 0;
+  const rows = usos.map(m => {
+    // Cargo (compra/disposición) aumenta saldo, pago lo reduce
+    const isPago = m.e > 0 && m.c?.toLowerCase().includes('pago');
+    const monto = m.e || m.s;
+    const delta = isPago ? -monto : monto;
+    saldo += delta;
+    return { ...m, isPago, monto, saldoDespues: saldo };
+  }).reverse();
+  return (
+    <div className="section">
+      <div className="section-head">
+        <div>
+          <div className="section-title">Usos de la tarjeta · {item.nombre}</div>
+          <div className="section-desc">
+            {usos.length} movimientos vinculados · límite {fmtCurrency(item.limite)} ·
+            {' '}usado {fmtCurrency(item.usado)} · disponible {fmtCurrency(item.limite - item.usado)}
+          </div>
+        </div>
+        <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+      </div>
+      <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+        <table className="data">
+          <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+            <tr>
+              <th>Fecha</th><th>Concepto</th><th>Contraparte</th>
+              <th className="right">Cargo</th><th className="right">Pago</th>
+              <th className="right">Saldo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{fmtDate(r.f)}</td>
+                <td className="muted">{r.c || '—'}</td>
+                <td className="muted">{r.a || '—'}</td>
+                <td className="num right neg">{!r.isPago ? fmtCurrency(r.monto) : '—'}</td>
+                <td className="num right pos">{r.isPago ? fmtCurrency(r.monto) : '—'}</td>
+                <td className="num right">{fmtCurrency(r.saldoDespues)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>
+                Sin movimientos detectados con este nombre. Para que aparezcan acá registra los cargos/pagos
+                en Movimientos con la cuenta = "{item.nombre}".
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function ProductDetailModal({ open, item, kind, onClose }) {
   const data = useATData();
   const movFin = data.movFin || [];
@@ -2239,10 +2447,10 @@ function FormInversor({ onDone }) {
 
 function FinanzasPage() {
   const data = useATData();
-  const productos = data.productos || { 'FIN-P': [], 'FIN-I': [], 'FIN-LC': [] };
-  const coop = productos['FIN-P'][0];
-  const andrea = productos['FIN-I'][0];
-  const lcs = productos['FIN-LC'] || [];
+  const productos = data.productos || {};
+  const coop   = (productos['FIN-P']  || [])[0];
+  const andrea = (productos['FIN-I']  || [])[0];
+  const lcs    = (productos['FIN-LC'] || []);
   // Split LC entries: las líneas de crédito (Línea Revolvente) van al tab Préstamos,
   // las tarjetas de crédito (Tarjeta de Crédito) van al tab Tarjetas.
   const lineasDeCredito = lcs.filter(l => /línea|linea|revolvente/i.test(l.tipoSub || ''));
@@ -2262,7 +2470,10 @@ function FinanzasPage() {
     })),
   ];
   const [subtab, setSubtab] = useState('resumen');
+  const [selectedId, setSelectedId] = useState(null); // _airtableId del producto expandido inline
   const [showCreate, setShowCreate] = useState(false);
+  // Reset selección al cambiar de tab
+  useEffect(() => { setSelectedId(null); }, [subtab]);
   const [del, setDel] = useState(null);
   const [delBusy, setDelBusy] = useState(false);
   const [edit, setEdit] = useState(null); // { kind, id, title, fields }
@@ -2505,43 +2716,71 @@ function FinanzasPage() {
         </div>
       </div>
 
-      <div className="section">
-        <div className="section-head">
-          <div>
-            <div className="section-title">Líneas de crédito · Tarjetas</div>
-            <div className="section-desc">{lcs.length} productos</div>
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Líneas de crédito (revolventes)</div>
+              <div className="section-desc">{lineasDeCredito.length} productos · ver detalle en tab Préstamos</div>
+            </div>
           </div>
+          <table className="data">
+            <thead><tr>
+              <th>Producto</th><th className="right">Límite</th>
+              <th className="right">Usado</th><th className="right">% uso</th>
+            </tr></thead>
+            <tbody>
+              {lineasDeCredito.map(l => {
+                const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
+                const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
+                return (
+                  <tr key={l.id}>
+                    <td>{l.nombre}</td>
+                    <td className="num right">{fmtCurrency(l.limite)}</td>
+                    <td className="num right">{fmtCurrency(l.usado)}</td>
+                    <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
+                  </tr>
+                );
+              })}
+              {lineasDeCredito.length === 0 && <tr><td colSpan="4" className="empty">Sin líneas</td></tr>}
+            </tbody>
+          </table>
         </div>
-        <table className="data">
-          <thead><tr>
-            <th>Producto</th><th>Tipo</th>
-            <th className="right">Límite</th><th className="right">Usado</th>
-            <th className="right">Disponible</th><th className="right">% uso</th>
-            <th className="right">Tasa</th>
-          </tr></thead>
-          <tbody>
-            {lcs.map(l => {
-              const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
-              const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
-              return (
-                <tr key={l.id}>
-                  <td>{l.nombre}</td>
-                  <td className="muted">{l.tipoSub}</td>
-                  <td className="num right">{fmtCurrency(l.limite)}</td>
-                  <td className="num right">{fmtCurrency(l.usado)}</td>
-                  <td className="num right pos">{fmtCurrency(l.limite - l.usado)}</td>
-                  <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
-                  <td className="num right muted">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Tarjetas de crédito</div>
+              <div className="section-desc">{tarjetasCredito.length} tarjetas · ver detalle en tab Tarjetas</div>
+            </div>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>Producto</th><th className="right">Límite</th>
+              <th className="right">Usado</th><th className="right">% uso</th>
+            </tr></thead>
+            <tbody>
+              {tarjetasCredito.map(l => {
+                const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
+                const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
+                return (
+                  <tr key={l.id}>
+                    <td>{l.nombre}</td>
+                    <td className="num right">{fmtCurrency(l.limite)}</td>
+                    <td className="num right">{fmtCurrency(l.usado)}</td>
+                    <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
+                  </tr>
+                );
+              })}
+              {tarjetasCredito.length === 0 && <tr><td colSpan="4" className="empty">Sin tarjetas</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
       </>)}
 
-      {/* PRÉSTAMOS — incluye Préstamos amortizados Y Líneas de crédito */}
-      {subtab === 'prestamos' && (
+      {/* PRÉSTAMOS — incluye Préstamos amortizados (normales) Y Líneas de crédito (revolventes) */}
+      {subtab === 'prestamos' && (<>
         <div className="section">
           <table className="data">
             <thead><tr>
@@ -2550,33 +2789,45 @@ function FinanzasPage() {
               <th className="right">Tasa</th><th>Moneda</th><th></th>
             </tr></thead>
             <tbody>
-              {prestamosUnified.map(p => (
-                <tr key={p._airtableId} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: p, kind: p._kind === 'linea' ? 'linea' : 'prestamo' })}>
-                  <td>{p.nombre}</td>
-                  <td className="muted">{p._kind === 'linea' ? 'Línea de crédito' : p.tipo}</td>
-                  <td className="num right">{fmtCurrency(p.montoTotal)}</td>
-                  <td className="num right pos">{fmtCurrency(p._capitalPagado || 0)}</td>
-                  <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
-                  <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%/mes</td>
-                  <td className="muted">{p.moneda || 'RD$'}</td>
-                  <td className="row-actions" onClick={e => e.stopPropagation()}>
-                    <div className="row-actions-inner">
-                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, p._kind === 'linea')}>✎</button>
-                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {prestamosUnified.map(p => {
+                const isSelected = selectedId === p._airtableId;
+                return (
+                  <tr key={p._airtableId}
+                    style={{ cursor: 'pointer', background: isSelected ? 'var(--surface-2)' : undefined }}
+                    onClick={() => setSelectedId(isSelected ? null : p._airtableId)}>
+                    <td>{p.nombre} {isSelected && <span className="muted" style={{ fontSize: 10 }}>(seleccionado ↓)</span>}</td>
+                    <td className="muted">{p._kind === 'linea' ? 'Línea de crédito (revolvente)' : 'Préstamo amortizado (normal)'}</td>
+                    <td className="num right">{fmtCurrency(p.montoTotal)}</td>
+                    <td className="num right pos">{fmtCurrency(p._capitalPagado || 0)}</td>
+                    <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
+                    <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%/mes</td>
+                    <td className="muted">{p.moneda || 'RD$'}</td>
+                    <td className="row-actions" onClick={e => e.stopPropagation()}>
+                      <div className="row-actions-inner">
+                        <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, p._kind === 'linea')}>✎</button>
+                        <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
               {prestamosUnified.length === 0 && (
                 <tr><td colSpan="8" className="empty" style={{ padding: 'var(--s-6)' }}>Sin préstamos ni líneas de crédito · click "+ Nuevo"</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+        {/* Detail panel inline: amortización (préstamo normal) o usos (revolvente) */}
+        {selectedId && (() => {
+          const sel = prestamosUnified.find(p => p._airtableId === selectedId);
+          if (!sel) return null;
+          if (sel._kind === 'linea') return <DetalleLineaRevolvente item={sel} />;
+          return <DetalleAmortizacion item={sel} />;
+        })()}
+      </>)}
 
-      {/* TARJETAS DE CRÉDITO — solo TARJETA_CREDITO (las líneas se movieron a Préstamos) */}
-      {subtab === 'tarjetas' && (
+      {/* TARJETAS DE CRÉDITO — solo TARJETA_CREDITO. Producto financiero distinto: revolventes pero con corte mensual y minimo. */}
+      {subtab === 'tarjetas' && (<>
         <div className="section">
           <table className="data">
             <thead><tr>
@@ -2588,9 +2839,12 @@ function FinanzasPage() {
               {tarjetasCredito.map(l => {
                 const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
                 const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
+                const isSelected = selectedId === l._airtableId;
                 return (
-                  <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: l, kind: 'linea' })}>
-                    <td>{l.nombre}</td>
+                  <tr key={l.id}
+                    style={{ cursor: 'pointer', background: isSelected ? 'var(--surface-2)' : undefined }}
+                    onClick={() => setSelectedId(isSelected ? null : l._airtableId)}>
+                    <td>{l.nombre} {isSelected && <span className="muted" style={{ fontSize: 10 }}>(seleccionado ↓)</span>}</td>
                     <td className="muted">{l.tipoSub}</td>
                     <td className="num right">{fmtCurrency(l.limite)}</td>
                     <td className="num right">{fmtCurrency(l.usado)}</td>
@@ -2613,7 +2867,12 @@ function FinanzasPage() {
             </tbody>
           </table>
         </div>
-      )}
+        {selectedId && (() => {
+          const sel = tarjetasCredito.find(l => l._airtableId === selectedId);
+          if (!sel) return null;
+          return <DetalleUsosTarjeta item={sel} cashflow={data.cashflow || []} />;
+        })()}
+      </>)}
 
       {/* INVERSORES — tabla CRUD */}
       {subtab === 'inversores' && (
