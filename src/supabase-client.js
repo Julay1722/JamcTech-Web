@@ -39,13 +39,14 @@ function _dispatchError(table, error) {
 
 /* ──── Mapeos enum Supabase → display que esperan los paneles ──── */
 
-// skus.categoria enum (UPPERCASE en Supabase) → label que usa el dashboard
+// skus.categoria enum (UPPERCASE, sin underscore) → label que usa el dashboard
 const CAT_MAP = {
-  MOUSE:     'Mouse',
-  TECLADO:   'Teclado',
-  HEADSET:   'Headset',
-  STAND:     'Otro',
-  MOUSE_PAD: 'Otro',
+  MOUSE:    'Mouse',
+  TECLADO:  'Teclado',
+  HEADSET:  'Headset',
+  STAND:    'Stand',
+  MOUSEPAD: 'Mouse Pad',
+  OTRO:     'Otro',
 };
 
 // movimientos.tipo enum → string amigable que esperan los panels (mismo set
@@ -766,14 +767,14 @@ const MOVFIN_REV = {
   'Otro':              { tipo: 'OTROS',              side: 'salida'  },
 };
 
-// Dashboard 'Mouse' → Supabase enum 'MOUSE'
+// Dashboard 'Mouse' → Supabase enum 'MOUSE' (sin underscore en MOUSEPAD)
 const CAT_REV = {
   'Mouse':     'MOUSE',
   'Teclado':   'TECLADO',
   'Headset':   'HEADSET',
   'Stand':     'STAND',
-  'Mouse Pad': 'MOUSE_PAD',
-  'Otro':      'MOUSE_PAD', // legacy SKUs creados con 'Otro' caen acá
+  'Mouse Pad': 'MOUSEPAD',
+  'Otro':      'OTRO',
 };
 
 // 'cf-305' → 305 · 'p-1' → 1 · 'MOU-HXS-T90-NEG' → 'MOU-HXS-T90-NEG'
