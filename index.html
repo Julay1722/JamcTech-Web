@@ -1383,6 +1383,17 @@ function InventarioPage() {
             const c = catOf(s);
             (grouped[c] ||= []).push(s);
           });
+          // Dentro de cada categoría: ordenar por marca → modelo → color para
+          // que variantes del mismo producto queden contiguas (T90 y T90 Pro,
+          // X11 y X11 Pro, etc.) Comparación natural (numérica-aware).
+          const naturalCmp = (a, b) => (a || '').localeCompare(b || '', 'es', { numeric: true, sensitivity: 'base' });
+          Object.keys(grouped).forEach(c => {
+            grouped[c].sort((a, b) =>
+              naturalCmp(a.mk, b.mk) ||
+              naturalCmp(a.modelo || a.nm, b.modelo || b.nm) ||
+              naturalCmp(a.color, b.color)
+            );
+          });
           // Orden: las categorías estándar primero, luego custom alfabético
           const orderHint = ['Mouse', 'Teclado', 'Headset', 'Mouse Pad', 'Stand', 'Otro'];
           const cats = Object.keys(grouped).sort((a, b) => {
