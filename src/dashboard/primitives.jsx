@@ -57,23 +57,26 @@ function TPill({ children, color, dim, size = 'sm' }) {
 
 }
 
-// ─── Section header (the ┌─ panel start) ─────────────────────
-// 2026-05-26: reducido padding/margin + borderTop más sutil para menos
-// peso visual entre secciones (Bloomberg con respiración).
+// ─── Section header ──────────────────────────────────────────
+// 2026-05-26: aplicando guidelines ui-ux-pro-max — Minimalism
+// (whitespace-balance: "use whitespace intentionally to group related
+// items"; visual-hierarchy: "via size, spacing, contrast — not color
+// alone"). Removed hot accent del §nn (era ruido visual), tipografía
+// más sutil y plana. Sin línea horizontal de separación.
 function TSectionHead({ ix, name, count, right }) {
   const T = useTheme();
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '10px 14px 6px',
-      marginTop: 10,
+      display: 'flex', alignItems: 'baseline', gap: 12,
+      padding: '14px 14px 8px',
+      marginTop: 6,
     }}>
-      <div style={{ fontSize: 9, color: T.hot, letterSpacing: '0.18em' }}>{ix}</div>
-      <div style={{ fontSize: 10, color: T.t2, letterSpacing: '0.12em', fontWeight: 500 }}>
+      <div style={{ fontSize: 9, color: T.t4, letterSpacing: '0.18em', fontFamily: 'inherit' }}>{ix}</div>
+      <div style={{ fontSize: 11, color: T.t, letterSpacing: '0.10em', fontWeight: 500 }}>
         {name.toUpperCase()}
       </div>
-      <div style={{ flex: 1, height: 1, background: T.bd }} />
-      {count && <div style={{ fontSize: 9, color: T.t3, letterSpacing: '0.06em' }}>{count}</div>}
+      <div style={{ flex: 1 }} />
+      {count && <div style={{ fontSize: 9, color: T.t4, letterSpacing: '0.04em' }}>{count}</div>}
       {right}
     </div>);
 
@@ -96,38 +99,40 @@ function renderTCellValue(value) {
 
 function TCell({ label, value, color, sub, spark, sparkColor, span = 1, accent, big, italic, valueClass, centered }) {
   const T = useTheme();
+  // 2026-05-26 (ui-ux-pro-max): primary-action ("one primary CTA"
+  // se aplica análogamente a un solo accent point por cell);
+  // visual-hierarchy via size/spacing not color; whitespace-balance.
+  // Removed: ▸ marker, 2px accent stripe (era ruido); accent ahora
+  // solo en color del value cuando se pasa explícitamente.
   return (
     <div style={{
       gridColumn: `span ${span}`,
       background: T.panel, border: `1px solid ${T.bd}`,
-      padding: '10px 12px 9px', position: 'relative',
-      display: 'flex', flexDirection: 'column', gap: 3,
-      minHeight: big ? 60 : 48, justifyContent: "flex-start"
+      padding: '12px 14px 11px',
+      display: 'flex', flexDirection: 'column', gap: 6,
+      minHeight: big ? 64 : 52, justifyContent: "flex-start"
     }}>
-      <div style={{
-        position: 'absolute', left: 0, top: 0, bottom: 0, width: 2,
-        background: accent || T.bd, opacity: accent ? 0.6 : 1
-      }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <div style={{
-          fontSize: 9, letterSpacing: '0.12em', color: T.t3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+          fontSize: 9, letterSpacing: '0.14em', color: T.t3, fontWeight: 400,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
         }}>{label.toUpperCase()}</div>
         {spark &&
-        <div style={{ color: sparkColor || T.hotDim, flexShrink: 0 }}>
+        <div style={{ color: sparkColor || T.t4, flexShrink: 0 }}>
             <MiniBars values={spark} w={48} h={12} color="currentColor" dim={T.t4} />
           </div>
         }
       </div>
       <div className={valueClass} style={{
         fontSize: big ? T.fzKpi + 2 : T.fzKpi,
-        fontWeight: 500, color: color || T.t, lineHeight: 1.05, letterSpacing: '-0.01em',
+        fontWeight: 500, color: color || T.t, lineHeight: 1.0, letterSpacing: '-0.01em',
         fontStyle: italic ? 'italic' : 'normal',
         textAlign: centered ? 'center' : 'left'
       }}>{renderTCellValue(value)}</div>
       {sub && <div style={{
-        fontSize: 9, color: T.t3, lineHeight: 1.25, marginTop: 'auto',
+        fontSize: 9, color: T.t3, lineHeight: 1.3, marginTop: 'auto',
         textAlign: centered ? 'center' : 'left',
-        letterSpacing: '0.02em',
+        letterSpacing: '0.02em', fontWeight: 400,
       }}>{sub}</div>}
     </div>);
 
