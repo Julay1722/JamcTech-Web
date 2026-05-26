@@ -624,12 +624,27 @@ function _buildFinancieroProductos() {
         })),
       });
     } else if (t.includes('línea') || t.includes('linea') || t.includes('crédito') || t.includes('credito') || t.includes('tarjeta')) {
-      const movsLC = cf.filter((m) =>
-        m.a && (
-          m.a.toLowerCase().includes('bhd') ||
-          m.a.toLowerCase().includes((r.nombre || '').toLowerCase())
-        )
-      );
+      // Filtrar movs específicos del producto. Mapeo aproximado por nombre:
+      //   "BHD Linea"      → m.a contiene 'bhd' o 'linea de credito'
+      //   "Scotia CC RD"   → m.a contiene 'scotia' (asume el cuenta_id estaba bien
+      //                     en supabase para distinguir RD vs USD si necesario)
+      //   "Qik CC"         → m.a contiene 'qik'
+      // Para tarjetas Scotia/Qik la data histórica probablemente no las trackeaba
+      // separado del banco; aceptamos imprecisión moderada en exchange de no
+      // duplicar el mismo monto en los 4 productos.
+      const nameLC = (r.nombre || '').toLowerCase();
+      let movsLC = [];
+      if (nameLC.includes('bhd')) {
+        movsLC = cf.filter((m) =>
+          m.a && (m.a.toLowerCase().includes('bhd') || m.a.toLowerCase().includes('linea de credito'))
+        );
+      } else if (nameLC.includes('scotia')) {
+        movsLC = cf.filter((m) =>
+          m.a && m.a.toLowerCase().includes('scotia') && !m.a.toLowerCase().includes('usd') === !nameLC.includes('usd')
+        );
+      } else if (nameLC.includes('qik')) {
+        movsLC = cf.filter((m) => m.a && m.a.toLowerCase().includes('qik'));
+      }
       const usado = movsLC.reduce((sum, m) => sum + (m.e || 0) - (m.s || 0), 0);
       // BHD no tiene tasa_mensual en prestamos (NULL). Fallback al 26% anual
       // que tenía data.js hardcoded.
