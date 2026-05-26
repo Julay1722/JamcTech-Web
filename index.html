@@ -883,15 +883,29 @@ function OverviewPage({ period }) {
     { label: 'En reposición',  value: SKbuilt.filter(s => s.estado === 'en_reposicion').length,  color: '#3b82f6' },
   ].filter(d => d.value > 0);
 
-  // Categorías de gasto (period) — para BarChart
+  // Categorías de gasto (period) — para BarChart.
+  // Importante: NO contar como gasto los movimientos cuyo concepto es de
+  // ingreso (Venta de mercancia, Envio cobrado, Aportes, etc) aunque tengan
+  // un valor en `salida`. Esto pasa con ventas legacy que registraron el
+  // envío del courier como salida en la misma fila del ingreso de la venta.
+  // El "salida" en esos casos es un gasto disfrazado y debe atribuirse a
+  // su concepto propio (Pago Envío) — pero como la data histórica no lo
+  // separa, lo agrupamos bajo "Envío (de ventas)" para no contaminar el
+  // concepto "Venta de mercancia".
+  const CONCEPTOS_INGRESO = ['Venta de mercancia', 'Envio cobrado', 'Aportes para negocio', 'Aporte Inversor', 'Refund proveedor', 'Drawdown'];
   const gastosByConcepto = {};
   cf.forEach(m => {
     if (!m.s || m.s === 0) return;
-    const k = m.c || 'Otros';
+    let k = m.c || 'Otros';
+    if (CONCEPTOS_INGRESO.includes(k)) {
+      // Salida en una fila de ingreso = envío/comisión del cliente.
+      // Reasignar a un bucket dedicado para que no aparezca como "Venta de mercancia".
+      k = 'Envío de ventas (legacy)';
+    }
     gastosByConcepto[k] = (gastosByConcepto[k] || 0) + m.s;
   });
   const topGastos = Object.entries(gastosByConcepto)
-                          .sort((a, b) => b[1] - a[1]).slice(0, 6)
+                          .sort((a, b) => b[1] - a[1]).slice(0, 8)
                           .map(([label, value]) => ({ label, value }));
 
   // Format helpers
@@ -2566,6 +2580,11 @@ function FormVenta() {
   const [notas, setNotas] = useState('');
   const [lineas, setLineas] = useState([{ id: 1, skuId: '', qty: 1 }]);
   const [busy, setBusy] = useState(false);
+  // Gasto asociado a la venta (ej. envío pagado a un courier por el dueño).
+  // Se registra como MOVIMIENTO SEPARADO (Pago Envio) — NO como salida en la
+  // fila de la venta. Así Resumen no mezcla ingreso con gasto.
+  const [gastoEnvio, setGastoEnvio] = useState(0);
+  const [gastoConcepto, setGastoConcepto] = useState('Pago Envio');
 
   const addLinea = () => setLineas(arr => [...arr, { id: Date.now(), skuId: '', qty: 1 }]);
   const removeLinea = (id) => setLineas(arr => arr.filter(l => l.id !== id));
@@ -2593,8 +2612,27 @@ function FormVenta() {
         nota: notas,
       });
       window.toastOk('Venta registrada', `${res.idVenta} · ${fmtCurrency(precio)} · ${lineasValidas.length} línea(s)`);
+      // Si hay gasto asociado, registrarlo como movimiento separado de cashflow
+      // (no como salida en la fila de la venta).
+      if (Number(gastoEnvio) > 0) {
+        try {
+          const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
+          await window.AT_CLIENT.create('cashflow', {
+            fecha, cuenta: 'BHD Debito',
+            auxiliar: canal,
+            concepto: gastoConcepto,
+            tipo: TIPO_MAP[gastoConcepto] || 'OTROS',
+            entrada: 0,
+            salida: Number(gastoEnvio),
+            notas: `Asociado a venta ${res.idVenta}`,
+          });
+          window.toastOk('Gasto asociado registrado', `${gastoConcepto} · ${fmtCurrency(gastoEnvio)}`);
+        } catch (e) {
+          window.toastWarn?.('Gasto asociado falló', e.message?.slice(0, 100));
+        }
+      }
       // Reset
-      setPrecio(''); setEnvio(0); setNotas('');
+      setPrecio(''); setEnvio(0); setNotas(''); setGastoEnvio(0);
       setLineas([{ id: 1, skuId: '', qty: 1 }]);
     } catch (e) {
       window.toastErr('No se pudo registrar', e.message?.slice(0, 120));
@@ -2662,6 +2700,28 @@ function FormVenta() {
         <div className="field">
           <div className="field-label">Notas</div>
           <input className="input" type="text" value={notas} onChange={e => setNotas(e.target.value)} placeholder="cliente, referencia, etc." />
+        </div>
+      </div>
+
+      <div className="row-3">
+        <div className="field">
+          <div className="field-label">Gasto asociado · concepto</div>
+          <select className="select" value={gastoConcepto} onChange={e => setGastoConcepto(e.target.value)}>
+            <option value="Pago Envio">Pago Envío (courier)</option>
+            <option value="Pago Comision">Pago Comisión</option>
+            <option value="Otro">Otro gasto</option>
+          </select>
+        </div>
+        <div className="field">
+          <div className="field-label">Gasto asociado · monto (RD$)</div>
+          <input className="input num" type="number" value={gastoEnvio} onChange={e => setGastoEnvio(e.target.value)} placeholder="0" />
+          <div className="field-hint">Se registra como movimiento SEPARADO (no se resta de la venta)</div>
+        </div>
+        <div className="field" style={{ opacity: 0.6 }}>
+          <div className="field-label">Resultado</div>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', paddingTop: 4 }}>
+            {Number(gastoEnvio) > 0 ? `Venta ${fmtCurrency(precio || 0)} → BHD · Gasto ${fmtCurrency(gastoEnvio)} ← BHD (2 mov)` : 'Solo venta (1 mov)'}
+          </div>
         </div>
       </div>
 
