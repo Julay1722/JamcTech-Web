@@ -2865,7 +2865,16 @@ function FormLote() {
   const [cuentaEnvio,     setCuentaEnvio]     = useState('BHD Debito');
   const [cuentaCourier,   setCuentaCourier]   = useState('BHD Debito');
   const [cuentaOtros,     setCuentaOtros]     = useState('BHD Debito');
-  const [tasaCambio,      setTasaCambio]      = useState(60);  // RD$ por 1 USD
+  // Tasa de cambio editable, persiste en localStorage para que la próxima
+  // vez ya esté llena con el último valor que usó Julio (típicamente cambia
+  // poco entre lotes y se quiere reusar).
+  const [tasaCambio, setTasaCambio] = useState(() => {
+    const saved = localStorage.getItem('tasa-cambio-usd');
+    return saved ? Number(saved) : 60;
+  });
+  useEffect(() => {
+    if (Number(tasaCambio) > 0) localStorage.setItem('tasa-cambio-usd', String(tasaCambio));
+  }, [tasaCambio]);
 
   // Helper: cuenta es USD? (busca en cuentas reales primero, fallback name)
   const isUSDCuenta = (name) => {
@@ -3017,6 +3026,19 @@ function FormLote() {
         <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
       </div>
 
+      {/* Tasa de cambio · siempre visible para que se pueda ajustar antes
+          de tocar cualquier costo en USD. Persiste en localStorage. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Tasa de cambio</div>
+        <div style={{ flex: 1, fontSize: 12, color: 'var(--text-3)' }}>
+          Cuántos RD$ pagaste por 1 USD$ al comprar los dólares. Se aplica a cualquier costo pagado con cuenta USD.
+        </div>
+        <input className="input num" type="number" step="0.01" value={tasaCambio}
+          onChange={e => setTasaCambio(e.target.value)}
+          style={{ width: 100 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>RD$/USD</span>
+      </div>
+
       {/* Costos del lote — cada costo con su propia cuenta de origen.
           Útil cuando pagas mercancía con débito y envío con tarjeta de crédito,
           o courier en efectivo, etc. */}
@@ -3064,26 +3086,12 @@ function FormLote() {
               </div>
             );
           };
-          const anyUsd = [cuentaMercancia, cuentaEnvio, cuentaCourier, cuentaOtros]
-            .some((cn, i) => [costoBase, envio, courier, otros][i] > 0 && isUSDCuenta(cn));
           return (
             <>
               {renderCostRow('Mercancía (costo base)',     'Auto-calculado desde los SKUs arriba',                  costoBase, null,        cuentaMercancia, setCuentaMercancia, true)}
               {renderCostRow('Envío China → USA',          'Shipping de la mercancía al hub en USA',                envio,     setEnvio,    cuentaEnvio,    setCuentaEnvio)}
               {renderCostRow('Courier USA → DR',           'Lo que paga el courier desde USA a DR',                 courier,   setCourier,  cuentaCourier,  setCuentaCourier)}
               {renderCostRow('Otros (aduana, comisión)',   'Aduana, fee bancario, comisión de proveedor, etc.',     otros,     setOtros,    cuentaOtros,    setCuentaOtros)}
-              {anyUsd && (
-                <div style={{ marginTop: 8, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>USD detectado</div>
-                  <div style={{ flex: 1, fontSize: 12, color: 'var(--text-3)' }}>
-                    Los montos en cuentas USD se convertirán a RD$ con esta tasa para registrar en cashflow:
-                  </div>
-                  <input className="input num" type="number" step="0.01" value={tasaCambio}
-                    onChange={e => setTasaCambio(e.target.value)}
-                    style={{ width: 100 }} />
-                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>RD$/USD</span>
-                </div>
-              )}
             </>
           );
         })()}
