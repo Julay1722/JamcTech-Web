@@ -2271,41 +2271,7 @@ function DetalleCuentaLedger({ cuenta, cashflow }) {
              delta={netoPeriodo >= 0 ? 1 : -1} deltaLabel={netoPeriodo >= 0 ? 'positivo' : 'negativo'} />
       </div>
 
-      {/* Resumen mensual — cuadrar mes a mes */}
-      {meses.length > 1 && (
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Resumen mensual · cuadrar con banco</div>
-              <div className="section-desc">{meses.length} meses · usa estos totales contra el estado de cuenta mensual</div>
-            </div>
-          </div>
-          <table className="data">
-            <thead><tr>
-              <th>Mes</th><th className="right">Movimientos</th>
-              <th className="right">Entradas</th><th className="right">Salidas</th>
-              <th className="right">Neto del mes</th>
-            </tr></thead>
-            <tbody>
-              {meses.map(ym => {
-                const b = buckets[ym];
-                const neto = b.entradas - b.salidas;
-                return (
-                  <tr key={ym}>
-                    <td>{ym}</td>
-                    <td className="num right muted">{b.count}</td>
-                    <td className="num right pos">{fmtCurrency(b.entradas)}</td>
-                    <td className="num right neg">{fmtCurrency(b.salidas)}</td>
-                    <td className={`num right ${neto >= 0 ? 'pos' : 'neg'}`}>{fmtCurrency(neto)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Ledger detallado */}
+      {/* Ledger detallado · ARRIBA (consumo primario) */}
       <div className="section">
         <div className="section-head">
           <div>
@@ -2349,6 +2315,40 @@ function DetalleCuentaLedger({ cuenta, cashflow }) {
           </table>
         </div>
       </div>
+
+      {/* Resumen mensual · ABAJO (visión agregada para cuadrar) */}
+      {meses.length > 1 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Resumen mensual · cuadrar con banco</div>
+              <div className="section-desc">{meses.length} meses · usa estos totales contra el estado de cuenta mensual</div>
+            </div>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>Mes</th><th className="right">Movimientos</th>
+              <th className="right">Entradas</th><th className="right">Salidas</th>
+              <th className="right">Neto del mes</th>
+            </tr></thead>
+            <tbody>
+              {meses.map(ym => {
+                const b = buckets[ym];
+                const neto = b.entradas - b.salidas;
+                return (
+                  <tr key={ym}>
+                    <td>{ym}</td>
+                    <td className="num right muted">{b.count}</td>
+                    <td className="num right pos">{fmtCurrency(b.entradas)}</td>
+                    <td className="num right neg">{fmtCurrency(b.salidas)}</td>
+                    <td className={`num right ${neto >= 0 ? 'pos' : 'neg'}`}>{fmtCurrency(neto)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
