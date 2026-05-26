@@ -2850,6 +2850,7 @@ function FormVenta() {
 function FormLote() {
   const data = useATData();
   const skus = data.skus || [];
+  const cuentas = data._cuentas || [];
   const [fecha, setFecha] = useState(window.HOY || HOY);
   const [status, setStatus] = useState('En Camino');
   const [proveedor, setProveedor] = useState('Alibaba');
@@ -2857,6 +2858,7 @@ function FormLote() {
   const [courier, setCourier] = useState(0);
   const [otros, setOtros] = useState(0);
   const [notas, setNotas] = useState('');
+  const [cuentaOrigen, setCuentaOrigen] = useState('BHD Debito');
   const [lineas, setLineas] = useState([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
   const [busy, setBusy] = useState(false);
 
@@ -2882,7 +2884,46 @@ function FormLote() {
         lineas: lineasValidas.map(l => ({ skuId: l.skuId, qty: Number(l.qty), costoUd: Number(l.costoUd) })),
         nota: notas,
       });
-      window.toastOk('Lote registrado', `${res.loteId} · ${lineasValidas.length} SKU(s) · ${fmtCurrency(total)}`);
+      // Crear movimientos de cashflow correspondientes a este lote, todos
+      // saliendo de la cuenta seleccionada. Así el balance de la cuenta refleja
+      // el outflow real del lote. Los CFs creados con loteId se linkean al lote
+      // vía movimientos.lote_id (gracias a _recordLote), así removeLote los
+      // borra en cascada.
+      const cfPromises = [];
+      if (costoBase > 0) {
+        cfPromises.push(window.AT_CLIENT.create('cashflow', {
+          fecha, cuenta: cuentaOrigen, auxiliar: proveedor,
+          concepto: 'Compra de mercancia', tipo: 'COMPRA_MERCANCIA',
+          entrada: 0, salida: costoBase,
+          notas: `Lote ${res.loteId} · costo base`,
+        }).catch(e => console.warn('CF compra falló:', e.message)));
+      }
+      if (Number(envio) > 0) {
+        cfPromises.push(window.AT_CLIENT.create('cashflow', {
+          fecha, cuenta: cuentaOrigen, auxiliar: proveedor,
+          concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
+          entrada: 0, salida: Number(envio),
+          notas: `Lote ${res.loteId} · envío China→USA`,
+        }).catch(e => console.warn('CF envío falló:', e.message)));
+      }
+      if (Number(courier) > 0) {
+        cfPromises.push(window.AT_CLIENT.create('cashflow', {
+          fecha, cuenta: cuentaOrigen, auxiliar: 'Courier',
+          concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
+          entrada: 0, salida: Number(courier),
+          notas: `Lote ${res.loteId} · courier USA→DR`,
+        }).catch(e => console.warn('CF courier falló:', e.message)));
+      }
+      if (Number(otros) > 0) {
+        cfPromises.push(window.AT_CLIENT.create('cashflow', {
+          fecha, cuenta: cuentaOrigen, auxiliar: 'Aduana',
+          concepto: 'Otro', tipo: 'OTROS',
+          entrada: 0, salida: Number(otros),
+          notas: `Lote ${res.loteId} · otros (aduana/comisión)`,
+        }).catch(e => console.warn('CF otros falló:', e.message)));
+      }
+      await Promise.all(cfPromises);
+      window.toastOk('Lote registrado', `${res.loteId} · ${lineasValidas.length} SKU(s) · ${fmtCurrency(total)} desde ${cuentaOrigen}`);
       setEnvio(0); setCourier(0); setOtros(0); setNotas('');
       setLineas([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
     } catch (e) {
@@ -2917,7 +2958,15 @@ function FormLote() {
       </div>
 
       <div>
-        <div className="field-label" style={{ marginBottom: 8 }}>SKUs del lote · costo base por unidad</div>
+        <div className="field-label" style={{ marginBottom: 8 }}>SKUs del lote</div>
+        {/* Header de columnas alineado con la grid line-row (2fr 80px 100px 100px 40px) */}
+        <div className="line-row" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>SKU</span>
+          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Cantidad</span>
+          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Costo/ud</span>
+          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Subtotal</span>
+          <span></span>
+        </div>
         {lineas.map(l => {
           const subtotal = Number(l.qty) * Number(l.costoUd || 0);
           return (
@@ -2929,9 +2978,9 @@ function FormLote() {
                 ))}
               </select>
               <input className="input num" type="number" min="1" value={l.qty}
-                onChange={e => updateLinea(l.id, { qty: e.target.value })} placeholder="Cant." />
+                onChange={e => updateLinea(l.id, { qty: e.target.value })} placeholder="0" />
               <input className="input num" type="number" value={l.costoUd}
-                onChange={e => updateLinea(l.id, { costoUd: e.target.value })} placeholder="Costo/ud" />
+                onChange={e => updateLinea(l.id, { costoUd: e.target.value })} placeholder="0" />
               <span className="num" style={{ fontSize: 12, textAlign: 'right' }}>
                 {subtotal > 0 ? fmtCurrency(subtotal) : '—'}
               </span>
@@ -2958,6 +3007,16 @@ function FormLote() {
             <input className="input num" type="number" value={otros} onChange={e => setOtros(e.target.value)} />
           </div>
         </div>
+      </div>
+
+      <div className="field">
+        <div className="field-label">¿De dónde salió el dinero? · cuenta de origen</div>
+        <select className="select" value={cuentaOrigen} onChange={e => setCuentaOrigen(e.target.value)}>
+          {cuentas.length > 0
+            ? cuentas.map(c => <option key={c.id} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
+            : <><option value="BHD Debito">BHD Debito (DEBITO)</option><option value="Efectivo">Efectivo</option><option value="Scotia RD">Scotia RD (CREDITO)</option><option value="Scotia USD">Scotia USD (CREDITO)</option><option value="Qik">Qik (CREDITO)</option></>}
+        </select>
+        <div className="field-hint">Se generarán {[costoBase > 0, Number(envio) > 0, Number(courier) > 0, Number(otros) > 0].filter(Boolean).length} movimiento(s) de salida desde esta cuenta</div>
       </div>
 
       <div className="summary">
