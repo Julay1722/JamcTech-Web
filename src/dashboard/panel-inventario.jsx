@@ -1652,7 +1652,7 @@ function splitNmColor(nm) {
 
 
 // Genera ID auto siguiendo la convención CAT-MK-MODELO-COL.
-const CAT_CODE = { 'Mouse': 'MOU', 'Headset': 'HEA', 'Teclado': 'TEC', 'Mousepad': 'MOU-PAD', 'Otro': 'OTR' };
+const CAT_CODE = { 'Mouse': 'MOU', 'Headset': 'HEA', 'Teclado': 'TEC', 'Stand': 'STA', 'Mouse Pad': 'PAD', 'Otro': 'OTR' };
 const COLOR_CODE = {
   'Negro': 'NEG', 'Blanco': 'BLA', 'Azul': 'AZU', 'Rojo': 'ROJ',
   'Gris': 'GRI', 'Verde': 'VER', 'Mamut': 'MAM', 'Conmemorativo': 'CON', 'Amarillo': 'AMA',
@@ -1679,12 +1679,10 @@ function FormNuevoSku({ SK }) {
     return [...new Set([...Object.keys(COLOR_CODE), ...fromSk])].sort();
   }, []);
 
-  // Categorías permitidas por el singleSelect Supabase (schema verificado).
-  const SKU_CATS_AIRTABLE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Otro'];
-  // Dropdown incluye 'Mousepad' porque Julio vende/planea vender mousepads.
-  // Si lo elige y no está aún en Supabase: soft warning. El writer lo rechazará
-  // hasta que Julio agregue la opción al singleSelect (1 minuto, sin push).
-  const SKU_CATS_UI = [...new Set([...SKU_CATS_AIRTABLE, 'Mousepad'])];
+  // Categorías permitidas por el enum categoria_sku en Supabase (incluye
+  // Stand y Mouse Pad agregadas en la migración 2026-05-26).
+  const SKU_CATS_SUPABASE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'];
+  const SKU_CATS_UI = SKU_CATS_SUPABASE;
 
   const [cat, setCat] = React.useState('Mouse');
   const [mk, setMk] = React.useState('');
@@ -1709,7 +1707,7 @@ function FormNuevoSku({ SK }) {
   const autoNm = [modelo, color].filter(Boolean).join(' ');
   const finalNm = nm.trim() || autoNm;
   const collision = skuId && SK.find((s) => s.id === skuId);
-  const catPendingSupabase = cat && !SKU_CATS_AIRTABLE.includes(cat);
+  const catPendingSupabase = cat && !SKU_CATS_SUPABASE.includes(cat);
 
   // Margen estimado
   const pvN = parseFloat(pv) || 0;
@@ -1781,7 +1779,7 @@ function FormNuevoSku({ SK }) {
         <div style={{ flex: 1, height: 1, background: T.bd }} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
-        <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
+        <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_SUPABASE.join(' · ')}`}>
           <Combobox
             value={cat} onChange={setCat}
             options={SKU_CATS_UI}
@@ -1927,10 +1925,10 @@ function FormEditarSku({ SK }) {
     return [...new Set([...Object.keys(COLOR_CODE), ...fromSk])].sort();
   }, []);
 
-  const SKU_CATS_AIRTABLE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Otro'];
-  // Dropdown incluye 'Mousepad' aunque no esté aún en Supabase · ver
+  const SKU_CATS_SUPABASE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'];
+  // (legacy comment) Dropdown incluye 'Mousepad' aunque no esté aún en Supabase · ver
   // comentario en FormNuevoSku.
-  const SKU_CATS_UI = [...new Set([...SKU_CATS_AIRTABLE, 'Mousepad'])];
+  const SKU_CATS_UI = SKU_CATS_SUPABASE;
 
   const [selId, setSelId] = React.useState('');
   // selId stores the full picker label "ID · Nombre"; parse back to find the SKU
@@ -1966,7 +1964,7 @@ function FormEditarSku({ SK }) {
   const finalNm = nm.trim() || autoNm;
   const changed = sel && (newId !== sel.id || finalNm !== sel.nm || cat !== sel.cat || mk !== sel.mk);
   const collision = sel && newId && newId !== sel.id && SK.find((s) => s.id === newId);
-  const catPendingSupabase = cat && !SKU_CATS_AIRTABLE.includes(cat);
+  const catPendingSupabase = cat && !SKU_CATS_SUPABASE.includes(cat);
 
   const modelosForMarca = modelosByMarca[mk] || [];
 
@@ -2084,7 +2082,7 @@ function FormEditarSku({ SK }) {
             <div style={{ flex: 1, height: 1, background: T.bd }} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
-            <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
+            <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_SUPABASE.join(' · ')}`}>
               <Combobox value={cat} onChange={setCat}
                 options={SKU_CATS_UI}
                 placeholder="categoría" allowAdd={false} />
