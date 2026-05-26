@@ -469,6 +469,12 @@ function useATData() {
   useEffect(() => {
     const onLoad = () => setTick((t) => t + 1);
     window.addEventListener('airtable-loaded', onLoad);
+    // Fuerza una re-evaluación tras montar para capturar datos que pudieron
+    // haberse cargado ANTES de que este componente montara (race condition:
+    // el loader emite 'airtable-loaded' antes de que el listener esté
+    // attached, así que sin este tick inicial el componente queda con la
+    // vista vacía hasta el próximo evento).
+    setTick((t) => t + 1);
     return () => window.removeEventListener('airtable-loaded', onLoad);
   }, []);
   return window.__AIRTABLE_DATA__ || {};
@@ -1362,36 +1368,79 @@ function InventarioPage() {
       <div className="section">
         {subtab === 'lotes' ? <LotesTab /> :
          subtab === 'nuevo-sku' ? <FormSKU /> :
-         subtab === 'nuevo-lote' ? <FormLote /> : (
-        <table className="data">
-          <thead><tr>
-            <th>SKU</th><th>Categoría</th><th>Marca</th>
-            <th className="right">Stock</th><th className="right">En camino</th>
-            <th className="right">CPP</th><th className="right">Precio</th>
-            <th className="right">Margen</th><th>Estado</th><th></th>
-          </tr></thead>
-          <tbody>
-            {filtered.map(s => {
-              const margen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
-              const badgeCls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
-              return (
-                <tr key={s.id}>
-                  <td><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></td>
-                  <td>{s.cat}</td>
-                  <td>{s.mk}</td>
-                  <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
-                  <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
-                  <td className="num right">{fmtCurrency(s.cpp)}</td>
-                  <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
-                  <td className="num right muted">{s.pv > 0 ? margen + '%' : '—'}</td>
-                  <td><span className={`badge ${badgeCls}`}>{s.estado.replace('_', ' ')}</span></td>
-                  <td><button className="icon-btn danger" onClick={() => setDel(s)}>×</button></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        )}
+         subtab === 'nuevo-lote' ? <FormLote /> : (() => {
+          // Agrupar SKUs por categoría. Si el SKU tiene categoría "Otro" pero
+          // el id_sku empieza con un prefijo distinto a los conocidos (MOU/TEC/
+          // HEA/STA/PAD/OTR), usamos ese prefijo como categoría visible.
+          const KNOWN_PREFIX = { MOU: 'Mouse', TEC: 'Teclado', HEA: 'Headset', STA: 'Stand', PAD: 'Mouse Pad', OTR: 'Otro' };
+          const catOf = (s) => {
+            if (s.cat && s.cat !== 'Otro') return s.cat;
+            const prefix = (s.id || '').split('-')[0];
+            return KNOWN_PREFIX[prefix] || s.cat || 'Otro';
+          };
+          const grouped = {};
+          filtered.forEach(s => {
+            const c = catOf(s);
+            (grouped[c] ||= []).push(s);
+          });
+          // Orden: las categorías estándar primero, luego custom alfabético
+          const orderHint = ['Mouse', 'Teclado', 'Headset', 'Mouse Pad', 'Stand', 'Otro'];
+          const cats = Object.keys(grouped).sort((a, b) => {
+            const ia = orderHint.indexOf(a), ib = orderHint.indexOf(b);
+            if (ia === -1 && ib === -1) return a.localeCompare(b);
+            if (ia === -1) return 1;
+            if (ib === -1) return -1;
+            return ia - ib;
+          });
+          return (
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Marca</th>
+              <th className="right">Stock</th><th className="right">En camino</th>
+              <th className="right">CPP</th><th className="right">Precio</th>
+              <th className="right">Margen</th><th>Estado</th><th></th>
+            </tr></thead>
+            <tbody>
+              {cats.map(cat => {
+                const items = grouped[cat];
+                const totalStock = items.reduce((sum, x) => sum + (x.s || 0), 0);
+                const totalCapital = items.reduce((sum, x) => sum + ((x.s || 0) * (x.cpp || 0)), 0);
+                return (
+                  <React.Fragment key={cat}>
+                    <tr style={{ background: 'var(--surface-2)' }}>
+                      <td colSpan="9" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 12, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {cat} <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--text-3)', fontSize: 11, textTransform: 'none', letterSpacing: 0 }}>
+                          {items.length} SKU{items.length !== 1 ? 's' : ''} · {fmtNum(totalStock)} ud · {fmtCurrency(totalCapital)} en stock
+                        </span>
+                      </td>
+                    </tr>
+                    {items.map(s => {
+                      const margen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
+                      const badgeCls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+                      return (
+                        <tr key={s.id}>
+                          <td>
+                            <div><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></div>
+                            <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{s.nm}</div>
+                          </td>
+                          <td>{s.mk}</td>
+                          <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
+                          <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
+                          <td className="num right">{fmtCurrency(s.cpp)}</td>
+                          <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
+                          <td className="num right muted">{s.pv > 0 ? margen + '%' : '—'}</td>
+                          <td><span className={`badge ${badgeCls}`}>{s.estado.replace('_', ' ')}</span></td>
+                          <td><button className="icon-btn danger" onClick={() => setDel(s)}>×</button></td>
+                        </tr>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+          );
+         })()}
       </div>
 
       <ConfirmModal open={!!del} danger busy={busy}
@@ -3693,7 +3742,10 @@ function AlertasPage() {
 // Form Nuevo SKU
 // ════════════════════════════════════════════════════════════════
 function FormSKU() {
+  const data = useATData();
   const [cat, setCat] = useState('Mouse');
+  const [customCat, setCustomCat] = useState('');
+  const [showCustom, setShowCustom] = useState(false);
   const [mk, setMk] = useState('');
   const [modelo, setModelo] = useState('');
   const [color, setColor] = useState('');
@@ -3701,10 +3753,31 @@ function FormSKU() {
   const [notas, setNotas] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const cats = window.AT_CLIENT?.SKU_CATEGORIAS || ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'];
+  // Categorías base del enum Supabase + cualquier categoría custom ya en uso
+  // (derivada del prefijo del id_sku para SKUs con cat="Otro" pero prefijo
+  // distinto a OTR). Así si Julio crea "Controles" mañana, mañana ya
+  // aparece en el dropdown.
+  const baseCats = window.AT_CLIENT?.SKU_CATEGORIAS || ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'];
+  const KNOWN_PREFIX = { MOU: 'Mouse', TEC: 'Teclado', HEA: 'Headset', STA: 'Stand', PAD: 'Mouse Pad', OTR: 'Otro' };
+  const customCatsInUse = [...new Set((data.skus || [])
+    .map(s => {
+      const prefix = (s.id || '').split('-')[0];
+      if (KNOWN_PREFIX[prefix]) return null;  // standard prefix → ya está en baseCats
+      // Custom prefix → necesita label. Usar el primer SKU de ese prefijo
+      // con un nombre legible en notas o derivar.
+      return prefix ? `[${prefix}] ${s.cat || 'Otro'}` : null;
+    })
+    .filter(Boolean))];
+  const cats = [...baseCats, ...customCatsInUse];
   const CAT_CODE = { 'Mouse': 'MOU', 'Teclado': 'TEC', 'Headset': 'HEA', 'Stand': 'STA', 'Mouse Pad': 'PAD', 'Otro': 'OTR' };
 
-  const catCode  = CAT_CODE[cat] || 'OTR';
+  // Derivar prefijo y nombre visible para la categoría seleccionada
+  // - Si es estándar → usar CAT_CODE
+  // - Si es custom (showCustom=true) → primeras 3 letras del customCat
+  const effectiveCat = showCustom ? customCat.trim() : cat;
+  const catCode  = showCustom
+    ? (customCat || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'OTR'
+    : (CAT_CODE[cat] || 'OTR');
   const mkCode   = (mk || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
   const modCode  = (modelo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const colCode  = (color || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
@@ -3716,12 +3789,21 @@ function FormSKU() {
   const onSubmit = async () => {
     setBusy(true);
     try {
+      // Para categorías custom (ej "Controles") el enum Supabase no las acepta,
+      // así que guardamos 'Otro' como categoría y prefijo custom en el id_sku
+      // (CTR-...). El nombre se enriquece con la categoría custom para que sea
+      // visible en listas.
+      const catToSave = showCustom ? 'Otro' : cat;
+      const nameToSave = showCustom && customCat
+        ? `[${customCat}] ${autoNm}`
+        : autoNm;
       const res = await window.AT_CLIENT.createSKU({
-        id: skuId, nm: autoNm, mk, modelo, color, cat,
+        id: skuId, nm: nameToSave, mk, modelo, color, cat: catToSave,
         pv: Number(pv) || null, notas,
       });
-      window.toastOk('SKU creado', `${res.id} · ${res.nm}`);
+      window.toastOk('SKU creado', `${res.id} · ${effectiveCat}`);
       setMk(''); setModelo(''); setColor(''); setPv(''); setNotas('');
+      // Mantener la categoría custom seleccionada para crear varios SKUs seguidos
     } catch (e) {
       window.toastErr('No se pudo crear', e.message?.slice(0, 120));
     }
@@ -3732,10 +3814,22 @@ function FormSKU() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
       <div className="row-4">
         <div className="field">
-          <div className="field-label">Categoría</div>
-          <select className="select" value={cat} onChange={e => setCat(e.target.value)}>
-            {cats.map(c => <option key={c}>{c}</option>)}
-          </select>
+          <div className="field-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Categoría</span>
+            <button type="button" style={{
+              background: 'none', border: 'none', color: 'var(--accent)',
+              cursor: 'pointer', fontSize: 11, padding: 0,
+            }} onClick={() => { setShowCustom(s => !s); if (!showCustom) setCustomCat(''); }}>
+              {showCustom ? '← usar lista' : '+ nueva categoría'}
+            </button>
+          </div>
+          {!showCustom ? (
+            <select className="select" value={cat} onChange={e => setCat(e.target.value)}>
+              {cats.map(c => <option key={c}>{c}</option>)}
+            </select>
+          ) : (
+            <input className="input" value={customCat} onChange={e => setCustomCat(e.target.value)} placeholder="ej. Controles, Webcam, Cable…" autoFocus />
+          )}
         </div>
         <div className="field">
           <div className="field-label">Marca</div>
@@ -3765,8 +3859,8 @@ function FormSKU() {
       {valid && (
         <div className="summary">
           <div className="summary-item"><span className="lbl">ID generado</span><span className="val num">{skuId}</span></div>
-          <div className="summary-item"><span className="lbl">Nombre</span><span className="val" style={{ fontSize: 13 }}>{autoNm}</span></div>
-          <div className="summary-item"><span className="lbl">Categoría</span><span className="val" style={{ fontSize: 13 }}>{cat}</span></div>
+          <div className="summary-item"><span className="lbl">Nombre</span><span className="val" style={{ fontSize: 13 }}>{showCustom && customCat ? `[${customCat}] ${autoNm}` : autoNm}</span></div>
+          <div className="summary-item"><span className="lbl">Categoría</span><span className="val" style={{ fontSize: 13 }}>{effectiveCat || '—'}</span></div>
           <div className="summary-item"><span className="lbl">Precio</span><span className="val">{pv ? fmtCurrency(pv) : '—'}</span></div>
         </div>
       )}
