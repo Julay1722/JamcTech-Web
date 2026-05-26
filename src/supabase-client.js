@@ -413,20 +413,32 @@ async function loadFinanciero() {
     };
 
     const fin = [];
+    // Normaliza el código de moneda del backend ('RD' o 'USD') al símbolo
+    // visible ('RD$' o 'USD$'). Default a RD$ si viene null/vacío.
+    const monedaLabel = (m) => {
+      const s = String(m || '').toUpperCase();
+      if (s === 'USD' || s === 'USD$' || s === 'US$') return 'USD$';
+      return 'RD$';
+    };
     (prestamos || []).forEach((p) => {
       const sal = saldosByPrestamoId[p.id] || {};
       fin.push({
-        _airtableId:   'p-' + p.id,
-        idFin:         'FIN-P-' + p.id,
-        tipo:          tipoLabel[p.tipo] || p.tipo,
-        nombre:        p.nombre,
-        montoTotal:    parseFloat(p.monto_inicial || p.limite_credito) || 0,
-        totalPagado:   sal.capital_pagado || 0,  // capital pagado (no incluye intereses/seguro)
-        tasaMensual:   parseFloat(p.tasa_mensual)   || 0,
-        seguroMensual: parseFloat(p.seguro_mensual) || 0,
-        fechaInicio:   p.fecha_inicio || '',
-        notas:         p.notas || '',
-        balance:       sal.saldo_pendiente || 0,  // saldo oficial desde vw_saldo_prestamo
+        _airtableId:    'p-' + p.id,
+        idFin:          'FIN-P-' + p.id,
+        tipo:           tipoLabel[p.tipo] || p.tipo,
+        nombre:         p.nombre,
+        montoTotal:     parseFloat(p.monto_inicial || p.limite_credito) || 0,
+        totalPagado:    sal.capital_pagado || 0,
+        tasaMensual:    parseFloat(p.tasa_mensual)   || 0,
+        seguroMensual:  parseFloat(p.seguro_mensual) || 0,
+        plazoMeses:     parseInt(p.plazo_meses) || null,
+        fechaInicio:    p.fecha_inicio || '',
+        fechaPrimerPago: p.fecha_primer_pago || '',
+        diaCorte:       parseInt(p.dia_corte) || null,   // tarjetas: día del mes que corta
+        diaVencimiento: parseInt(p.dia_vencimiento) || null,  // día que se paga
+        moneda:         monedaLabel(p.moneda),
+        notas:          p.notas || '',
+        balance:        sal.saldo_pendiente || 0,
         _capitalPagado: sal.capital_pagado || 0,
         _interesPagado: sal.interes_pagado || 0,
       });
@@ -671,7 +683,7 @@ function _buildFinancieroProductos() {
       productos['FIN-LC'].push({
         ...base,
         tipoSub:     isTarjeta ? 'Tarjeta de Crédito' : 'Línea Revolvente',
-        moneda:      'DOP',
+        moneda:      r.moneda || 'RD$',  // ya viene normalizada del loader (RD$ o USD$)
         limite:      r.montoTotal,
         usado:       Math.max(0, usado),
         tasaAnual:   tasaMensualPct * 12,

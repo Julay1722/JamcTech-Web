@@ -1839,35 +1839,55 @@ function FormPrestamo({ tipoFijo, onDone }) {
   const [tipo, setTipo] = useState(tipoFijo || 'PRESTAMO');
   const [monto, setMonto] = useState('');
   const [limite, setLimite] = useState('');
-  const [tasa, setTasa] = useState('');
+  // Tasa anual — más natural para el usuario. Se convierte a mensual al guardar.
+  const [tasaAnual, setTasaAnual] = useState('');
   const [seguro, setSeguro] = useState('');
   const [plazo, setPlazo] = useState('');
   const [fechaInicio, setFechaInicio] = useState('');
+  const [fechaPrimerPago, setFechaPrimerPago] = useState('');
+  // Tarjetas: día de corte y vencimiento
+  const [diaCorte, setDiaCorte] = useState('');
+  const [diaVencimiento, setDiaVencimiento] = useState('');
   const [moneda, setMoneda] = useState('RD');
   const [contraparte, setContraparte] = useState('');
   const [notas, setNotas] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const esLinea = tipo === 'LINEA_CREDITO' || tipo === 'TARJETA_CREDITO';
+  const esLinea   = tipo === 'LINEA_CREDITO' || tipo === 'TARJETA_CREDITO';
+  const esTarjeta = tipo === 'TARJETA_CREDITO';
   const valid = nombre.length > 1 && (esLinea ? Number(limite) > 0 : Number(monto) > 0);
+  const tasaMensualCalc = tasaAnual ? (Number(tasaAnual) / 12) : null;
 
   const onSubmit = async () => {
     setBusy(true);
     try {
+      // Concatena info de tarjeta en notas porque la columna día_corte
+      // puede no existir en Supabase. La línea sí persiste si la columna existe.
+      let notasFinal = notas;
+      if (esTarjeta && (diaCorte || diaVencimiento)) {
+        const extra = [];
+        if (diaCorte) extra.push(`Corte día ${diaCorte}`);
+        if (diaVencimiento) extra.push(`Pago día ${diaVencimiento}`);
+        notasFinal = (notas ? notas + ' · ' : '') + extra.join(' · ');
+      }
       await window.AT_CLIENT.createPrestamo({
         nombre, tipo, moneda,
         montoInicial: esLinea ? null : Number(monto),
         limiteCredito: esLinea ? Number(limite) : null,
-        tasaMensual: tasa ? (Number(tasa) / 100) : null,  // user enters % → store as decimal
+        tasaMensual: tasaMensualCalc != null ? tasaMensualCalc / 100 : null,  // % → decimal
         seguroMensual: seguro || null,
         plazoMeses: plazo || null,
         fechaInicio: fechaInicio || null,
+        fechaPrimerPago: fechaPrimerPago || null,
+        diaCorte: esTarjeta && diaCorte ? Number(diaCorte) : null,
+        diaVencimiento: esTarjeta && diaVencimiento ? Number(diaVencimiento) : null,
         contraparteId: contraparte || null,
-        notas,
+        notas: notasFinal,
       });
       const labelTipo = { PRESTAMO: 'Préstamo', LINEA_CREDITO: 'Línea', TARJETA_CREDITO: 'Tarjeta' }[tipo];
       window.toastOk(`${labelTipo} creado`, `${nombre}`);
-      setNombre(''); setMonto(''); setLimite(''); setTasa(''); setSeguro(''); setPlazo(''); setNotas('');
+      setNombre(''); setMonto(''); setLimite(''); setTasaAnual(''); setSeguro(''); setPlazo('');
+      setFechaInicio(''); setFechaPrimerPago(''); setDiaCorte(''); setDiaVencimiento(''); setNotas('');
       onDone?.();
     } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
     setBusy(false);
@@ -1877,7 +1897,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
       <div className="row-3">
         <div className="field"><div className="field-label">Nombre</div>
-          <input className="input" value={nombre} onChange={e => setNombre(e.target.value)} placeholder="ej. BHD Línea" /></div>
+          <input className="input" value={nombre} onChange={e => setNombre(e.target.value)} placeholder={esTarjeta ? 'ej. Scotia CC RD' : 'ej. BHD Línea'} /></div>
         {!tipoFijo && (
           <div className="field"><div className="field-label">Tipo</div>
             <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
@@ -1901,23 +1921,53 @@ function FormPrestamo({ tipoFijo, onDone }) {
           <div className="field"><div className="field-label">Límite</div>
             <input className="input num" type="number" value={limite} onChange={e => setLimite(e.target.value)} placeholder="0" /></div>
         )}
-        <div className="field"><div className="field-label">Tasa mensual (%)</div>
-          <input className="input num" type="number" step="0.01" value={tasa} onChange={e => setTasa(e.target.value)} placeholder="1.67" /></div>
+        <div className="field">
+          <div className="field-label">Tasa anual (%)</div>
+          <input className="input num" type="number" step="0.01" value={tasaAnual} onChange={e => setTasaAnual(e.target.value)} placeholder="20" />
+          {tasaMensualCalc != null && <div className="field-hint">≈ {tasaMensualCalc.toFixed(2)}% mensual</div>}
+        </div>
         {!esLinea && (
           <div className="field"><div className="field-label">Seguro mensual</div>
             <input className="input num" type="number" value={seguro} onChange={e => setSeguro(e.target.value)} placeholder="0" /></div>
         )}
         <div className="field"><div className="field-label">Moneda</div>
           <select className="select" value={moneda} onChange={e => setMoneda(e.target.value)}>
-            <option value="RD">RD$</option><option value="USD">USD</option>
+            <option value="RD">RD$</option><option value="USD">USD$</option>
           </select></div>
       </div>
       {!esLinea && (
-        <div className="row">
+        <div className="row-3">
           <div className="field"><div className="field-label">Plazo (meses)</div>
             <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="48" /></div>
-          <div className="field"><div className="field-label">Fecha inicio</div>
+          <div className="field"><div className="field-label">Fecha desembolso</div>
             <input className="input num" type="date" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} /></div>
+          <div className="field">
+            <div className="field-label">Fecha primer pago</div>
+            <input className="input num" type="date" value={fechaPrimerPago} onChange={e => setFechaPrimerPago(e.target.value)} />
+            <div className="field-hint">Cuándo se paga la 1ª cuota (define el ciclo mensual)</div>
+          </div>
+        </div>
+      )}
+      {esTarjeta && (
+        <div className="row-3">
+          <div className="field">
+            <div className="field-label">Día de corte</div>
+            <input className="input num" type="number" min="1" max="31" value={diaCorte} onChange={e => setDiaCorte(e.target.value)} placeholder="25" />
+            <div className="field-hint">Día del mes en que cierra el ciclo (corte)</div>
+          </div>
+          <div className="field">
+            <div className="field-label">Día de pago/vencimiento</div>
+            <input className="input num" type="number" min="1" max="31" value={diaVencimiento} onChange={e => setDiaVencimiento(e.target.value)} placeholder="15" />
+            <div className="field-hint">Día del mes siguiente al corte para evitar intereses</div>
+          </div>
+          <div className="field" style={{ opacity: 0.6 }}>
+            <div className="field-label">Próximo vencimiento</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', paddingTop: 4 }}>
+              {diaCorte && diaVencimiento
+                ? `Si compras hoy, pagas día ${diaVencimiento} del mes siguiente al corte (día ${diaCorte}).`
+                : 'Llena corte + vencimiento para ver fecha.'}
+            </div>
+          </div>
         </div>
       )}
       <div className="field"><div className="field-label">Notas</div>
