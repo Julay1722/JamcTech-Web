@@ -391,12 +391,20 @@ async function loadCashflow() {
 // ── Financiero (productos: préstamo/línea/tarjeta + inversores) ──
 async function loadFinanciero() {
   try {
-    const [{ data: prestamos, error: e1 }, { data: inversores, error: e2 }] = await Promise.all([
+    const [{ data: prestamos, error: e1 }, { data: inversores, error: e2 }, { data: saldos }] = await Promise.all([
       sb.from('prestamos').select('*').eq('activa', true),
       sb.from('inversores').select('*').eq('activa', true),
+      sb.from('vw_saldo_prestamo').select('*'),
     ]);
     if (e1) throw e1;
     if (e2) throw e2;
+    const saldosByPrestamoId = Object.fromEntries(
+      (saldos || []).map((s) => [s.id, {
+        capital_pagado:  parseFloat(s.capital_pagado)  || 0,
+        interes_pagado:  parseFloat(s.interes_pagado)  || 0,
+        saldo_pendiente: parseFloat(s.saldo_pendiente) || 0,
+      }])
+    );
 
     const tipoLabel = {
       PRESTAMO:        'Préstamo',
@@ -406,18 +414,21 @@ async function loadFinanciero() {
 
     const fin = [];
     (prestamos || []).forEach((p) => {
+      const sal = saldosByPrestamoId[p.id] || {};
       fin.push({
         _airtableId:   'p-' + p.id,
         idFin:         'FIN-P-' + p.id,
         tipo:          tipoLabel[p.tipo] || p.tipo,
         nombre:        p.nombre,
         montoTotal:    parseFloat(p.monto_inicial || p.limite_credito) || 0,
-        totalPagado:   0,         // se completa en _buildProductos post-cashflow
+        totalPagado:   sal.capital_pagado || 0,  // capital pagado (no incluye intereses/seguro)
         tasaMensual:   parseFloat(p.tasa_mensual)   || 0,
         seguroMensual: parseFloat(p.seguro_mensual) || 0,
         fechaInicio:   p.fecha_inicio || '',
         notas:         p.notas || '',
-        balance:       0,         // se completa en _buildProductos
+        balance:       sal.saldo_pendiente || 0,  // saldo oficial desde vw_saldo_prestamo
+        _capitalPagado: sal.capital_pagado || 0,
+        _interesPagado: sal.interes_pagado || 0,
       });
     });
     (inversores || []).forEach((i) => {
@@ -579,22 +590,22 @@ function _buildFinancieroProductos() {
     };
     if (t.includes('préstamo') || t.includes('prestamo')) {
       const pagosCF = cf.filter((m) => m.c === 'Pago Prestamo');
-      const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0), 0);
-      // Cuota mensual desde la primer cuota pendiente del schedule cuotas[]
-      // si está cargado, sino fallback a la mediana de pagos históricos.
       const medianaPagos = pagosCF.length > 0
         ? pagosCF.slice().map((m) => m.s).sort((a, b) => a - b)[Math.floor(pagosCF.length / 2)]
         : 0;
+      // Saldo oficial desde vw_saldo_prestamo (resta solo capital pagado,
+      // no intereses/seguro). Fallback a cálculo desde cashflow.
+      const saldo = r.balance > 0 ? r.balance : Math.max(0, r.montoTotal - pagosCF.reduce((s, m) => s + (m.s || 0), 0));
       productos['FIN-P'].push({
         ...base,
         tipoSub:      'Cooperativa',
         monto:        r.montoTotal,
-        saldo:        Math.max(0, r.montoTotal - pagado),
-        pagado,
-        tasa:         (r.tasaMensual || 0) * 100, // 0.0167 → 1.67 (% mensual)
+        saldo,
+        pagado:       r._capitalPagado || 0, // capital pagado, no incluye intereses/seguro
+        tasa:         (r.tasaMensual || 0) * 100,
         cuota:        medianaPagos || 3568.64,
         seguro:       r.seguroMensual,
-        abonoMin5pct: Math.max(0, r.montoTotal - pagado) * 0.05,
+        abonoMin5pct: saldo * 0.05,
         abonoAcum:    0,
         movimientos:  pagosCF.map((m) => ({
           id:      'pp-' + m._airtableId,
