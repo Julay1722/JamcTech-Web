@@ -109,6 +109,20 @@ Supabase tiene backups diarios automáticos en el plan pago. En plan free son 7 
 
 ---
 
+## P1.5 — Side-effect cleanup en remove de Lote/MovFin
+
+**Bug detectado** durante tests UI: cuando se REGISTRA un lote o un MovFin desde el dashboard, los handlers `handleCreateLote` (panel-inventario) y `handleAddMov` (panel-fin-productos) también llaman a `AT_CLIENT.create('cashflow', ...)` para crear movimientos satélites en cashflow (representa el dinero saliendo del banco). Pero cuando se BORRA el lote/movFin con `removeLote`/`removeMovFin`, esos cashflow satélites NO se borran. Quedan huérfanos en la tabla `movimientos`.
+
+**Reproducer**: Registrar un lote con envío 500 + courier 1200 + otros 200 + costo 6500 → se crean 4 movs adicionales (ENVIO_LOTE, COMPRA_MERCANCIA, ENVIO_LOTE, OTROS). Borrar el lote → solo se borran las entradas + lote header, los 4 CF quedan.
+
+**Fix posible**: cuando `createLote`/`createMovFin` se ejecutan, persistir los IDs de los CF satélites en el cache. Cuando se borra el lote/movFin, también borrar esos CFs.
+
+**Fix temporal manual**: si Julio nota duplicados en el cashflow tail, buscar `notas` con el patrón "BHD Cuenta Corriente · 9421" y la fecha exacta del lote borrado.
+
+Mismo comportamiento que tenía airtable-client, así que NO es una regresión de la migración. Pero vale la pena arreglar.
+
+---
+
 ## P2 — Cleanup post-migración
 
 Una vez que Julio confirme que el dashboard nuevo (Supabase) funciona perfectamente en producción durante 1-2 semanas:

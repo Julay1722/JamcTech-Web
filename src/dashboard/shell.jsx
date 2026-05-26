@@ -36,7 +36,7 @@ function TerminalHeader({ activePanel, filter }) {
       </div>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
         <div style={{ fontSize: 10, color: T.t2 }}>
-          <span style={{ color: T.t3 }}>SYNC</span> {HOY.toUpperCase()} · {t}
+          <span style={{ color: T.t3 }}>SYNC</span> {(window.HOY || HOY).toUpperCase()} · {t}
         </div>
         <button onClick={() => window.postMessage({ type: '__activate_edit_mode' }, '*')} style={{
           background: T.panel, color: T.t2, border: `1px solid ${T.bd}`,
@@ -190,7 +190,7 @@ function TerminalFooter() {
       <span>{nVentas} VENTAS</span>
       <span>{nSkus} SKUS</span>
       <span>{nCF} MOV.CF</span>
-      <span style={{ marginLeft: 'auto', color: T.t3 }}>SYNC {HOY.toUpperCase()} · BUILD v2.4</span>
+      <span style={{ marginLeft: 'auto', color: T.t3 }}>SYNC {(window.HOY || HOY).toUpperCase()} · BUILD v2.4</span>
     </div>
   );
 }
