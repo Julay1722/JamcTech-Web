@@ -476,6 +476,10 @@ function useATData() {
 function KPI({ label, value, delta, deltaLabel, currency }) {
   const cls = delta == null ? 'neutral' : (delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'neutral');
   const arrow = delta == null ? '' : (delta > 0 ? '↗' : delta < 0 ? '↘' : '→');
+  // Siempre renderear la fila inferior (delta / deltaLabel) para mantener
+  // altura uniforme entre KPIs. Si no hay nada que mostrar, usa &nbsp;
+  // para reservar el espacio.
+  const hasContent = delta != null || (deltaLabel && deltaLabel.length > 0);
   return (
     <div className="kpi">
       <div className="kpi-label">{label}</div>
@@ -483,13 +487,16 @@ function KPI({ label, value, delta, deltaLabel, currency }) {
         {currency && <span className="currency">RD$</span>}
         {value}
       </div>
-      {delta != null && (
-        <div className={`kpi-delta ${cls}`}>
-          <span>{arrow}</span>
-          <span>{fmtPct(delta)}</span>
-          {deltaLabel && <span style={{ color: 'var(--text-3)', marginLeft: 2 }}>{deltaLabel}</span>}
-        </div>
-      )}
+      <div className={`kpi-delta ${cls}`} style={{ minHeight: 18 }}>
+        {delta != null && (
+          <>
+            <span>{arrow}</span>
+            <span>{fmtPct(delta)}</span>
+          </>
+        )}
+        {deltaLabel && <span style={{ color: 'var(--text-3)', marginLeft: delta != null ? 2 : 0 }}>{deltaLabel}</span>}
+        {!hasContent && <span>&nbsp;</span>}
+      </div>
     </div>
   );
 }
