@@ -57,18 +57,21 @@ Migrations aplicadas: `link_movimientos_venta_with_ventas`, `link_movimientos_ve
 
 ---
 
-## P1 — Auto-regeneración de cuotas BHD con cada drawdown
+## ✅ P1 — Auto-regeneración de cuotas BHD · **RESUELTO** (2026-05-26)
 
-La línea de crédito BHD (`prestamo_id=2`) acumula intereses mensuales sobre el balance actual. Cada vez que Julio hace un DRAWDOWN, el balance sube y los intereses futuros cambian.
+Se eligió la opción simple (sin schedule fijo, ya que BHD es revolvente).
+El panel FINANC > LÍNEAS DE CRÉDITO > BHD Linea muestra en vivo:
 
-**Solución propuesta:** crear una función SQL `regenerar_cuotas_bhd()` que:
-1. Calcula el balance actual: `SUM(drawdowns) - SUM(pagos_capital)`
-2. Genera/actualiza un schedule de "cuotas estimadas" basado en el balance actual y la tasa BHD
-3. Las cuotas BHD son flexibles (no es un préstamo amortizado fijo), así que el schedule sirve como proyección
+- **LÍMITE** (de `prestamos.limite_credito` = 112,000)
+- **USADO** (calculado: SUM drawdowns − SUM pagos línea, filtrado por banco)
+- **DISPONIBLE** (limite − usado)
+- **% USO**
+- **TASA ANUAL** = 26%
+- **INTERÉS/MES EST.** = usado × tasaMensual (proyección actualizada cada vez que cargan los movimientos)
 
-**O alternativa simple:** no generar cuotas para BHD. Solo trackear el balance corriente con `vw_saldo_prestamo`. Cuando Julio paga, queda como `PAGO_LINEA_CREDITO` movement.
-
-⚠ **Pregúntele a Julio cuál prefiere antes de implementar.**
+No se genera tabla `cuotas` para BHD porque la línea es flexible y no tiene
+schedule amortizado. El balance corriente vive en cashflow y el panel lo
+recalcula automáticamente cada refresh.
 
 ---
 

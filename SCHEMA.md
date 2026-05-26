@@ -218,7 +218,7 @@ Por cada SKU: stock_fisico (entradas RECIBIDO - ventas), stock_camino (entradas 
 
 ---
 
-## Enums
+## Enums (verificados vs Supabase 2026-05-26)
 
 ```sql
 movimiento_tipo: APORTE_DUENO, APORTE_INVERSOR, VENTA, ENVIO_COBRADO,
@@ -231,9 +231,15 @@ prestamo_tipo:    PRESTAMO, LINEA_CREDITO, TARJETA_CREDITO
 entrada_status:   PENDIENTE, RECIBIDO, PERDIDO
 lote_status:      PENDIENTE, RECIBIDO
 moneda:           RD, USD
-categoria_sku:    Stand, Mouse, Teclado, Headset, Mouse Pad
-cuenta_tipo:      DEBITO, EFECTIVO
-contraparte_tipo: BANCO, PROVEEDOR, CLIENTE, CANAL, INVERSOR, PERSONA, SERVICIO, OTRO
+categoria_sku:    MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO
+                  (UPPERCASE en DB. Dashboard mapea a 'Mouse'/'Teclado'/...
+                   vía CAT_MAP en src/supabase-client.js. 'OTRO' se agregó
+                   2026-05-26 en migración add_categoria_sku_otro.)
+cuenta_tipo:      DEBITO, CREDITO, EFECTIVO
+                  (DEBITO=cuenta operativa; CREDITO=tarjeta de crédito;
+                   EFECTIVO=caja física)
+contraparte_tipo: BANCO, PROVEEDOR, INVERSOR, CANAL_VENTA, PERSONA_OPERATIVA,
+                  CLIENTE_FAMILIAR, SERVICIO, OTRO
 ```
 
 ---
