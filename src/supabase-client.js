@@ -733,6 +733,20 @@ function _findContraparteId(name, fallback = DEFAULT_CONTRAPARTE_ID) {
   return found ? found.id : fallback;
 }
 
+// Busca o crea una contraparte por nombre. Usada por createPrestamo/createInversor
+// para satisfacer el NOT NULL en contraparte_id sin forzar al usuario a crear
+// la contraparte manualmente primero.
+async function _ensureContraparteId(name, tipo) {
+  const existing = _findContraparteId(name, null);
+  if (existing) return existing;
+  const { data, error } = await sb.from('contrapartes')
+    .insert({ nombre: name, tipo: tipo || 'OTRO' })
+    .select().single();
+  if (error) throw new Error(`ensureContraparte: ${error.message}`);
+  (window.__AIRTABLE_DATA__._contrapartes ||= []).push({ id: data.id, nombre: data.nombre, tipo: data.tipo });
+  return data.id;
+}
+
 function _findCuentaId(name, fallback = DEFAULT_CUENTA_ID) {
   if (!name) return fallback;
   const list = window.__AIRTABLE_DATA__._cuentas || [];
@@ -1181,6 +1195,152 @@ async function createMovFin(data) {
   return mapped;
 }
 
+/* ════════════════════════ WRITERS — Cuentas (banks) ════════════════════════ */
+
+// data = { nombre, tipo (DEBITO/CREDITO/EFECTIVO), moneda (RD/USD),
+//          limite (solo si tipo=CREDITO), notas }
+async function createCuenta(data) {
+  const row = {
+    nombre:         data.nombre,
+    tipo:           data.tipo || 'DEBITO',
+    moneda:         data.moneda || 'RD',
+    limite_credito: data.tipo === 'CREDITO' && data.limite ? Number(data.limite) : null,
+    notas:          data.notas || '',
+    activa:         true,
+  };
+  const { data: ins, error } = await sb.from('cuentas').insert(row).select().single();
+  if (error) throw new Error(`createCuenta: ${error.message}`);
+  await _loadLookups();  // refresh cuentas cache
+  _dispatch('cuentas', (window.__AIRTABLE_DATA__?._cuentas || []).length);
+  return ins;
+}
+
+async function updateCuenta(id, patch) {
+  const row = {};
+  if (patch.nombre  != null) row.nombre = patch.nombre;
+  if (patch.tipo    != null) row.tipo = patch.tipo;
+  if (patch.moneda  != null) row.moneda = patch.moneda;
+  if (patch.limite  != null) row.limite_credito = Number(patch.limite) || null;
+  if (patch.notas   != null) row.notas = patch.notas;
+  if (patch.activa  != null) row.activa = !!patch.activa;
+  const { data, error } = await sb.from('cuentas').update(row).eq('id', id).select().single();
+  if (error) throw new Error(`updateCuenta: ${error.message}`);
+  await _loadLookups();
+  _dispatch('cuentas', (window.__AIRTABLE_DATA__?._cuentas || []).length);
+  return data;
+}
+
+async function removeCuenta(id) {
+  const { error } = await sb.from('cuentas').delete().eq('id', id);
+  if (error) throw new Error(`removeCuenta: ${error.message}`);
+  await _loadLookups();
+  _dispatch('cuentas', (window.__AIRTABLE_DATA__?._cuentas || []).length);
+  return { deleted: true, id };
+}
+
+/* ════════════════════════ WRITERS — Préstamos (incluye líneas y tarjetas) ════════════════════════ */
+
+// data = { nombre, tipo (PRESTAMO/LINEA_CREDITO/TARJETA_CREDITO),
+//          montoInicial?, limiteCredito?, tasaMensual?, seguroMensual?,
+//          plazoMeses?, fechaInicio?, fechaPrimerPago?, moneda, contraparteId?, notas }
+async function createPrestamo(data) {
+  const row = {
+    nombre:            data.nombre,
+    tipo:              data.tipo || 'PRESTAMO',
+    monto_inicial:     data.montoInicial ? Number(data.montoInicial) : null,
+    limite_credito:    data.limiteCredito ? Number(data.limiteCredito) : null,
+    tasa_mensual:      data.tasaMensual != null && data.tasaMensual !== '' ? Number(data.tasaMensual) : null,
+    seguro_mensual:    data.seguroMensual ? Number(data.seguroMensual) : null,
+    plazo_meses:       data.plazoMeses ? Number(data.plazoMeses) : null,
+    fecha_inicio:      data.fechaInicio || null,
+    fecha_primer_pago: data.fechaPrimerPago || null,
+    moneda:            data.moneda || 'RD',
+    contraparte_id:    data.contraparteId ? Number(data.contraparteId)
+                        : await _ensureContraparteId(data.contraparte || data.nombre, 'BANCO'),
+    activa:            true,
+    notas:             data.notas || '',
+  };
+  const { data: ins, error } = await sb.from('prestamos').insert(row).select().single();
+  if (error) throw new Error(`createPrestamo: ${error.message}`);
+  await loadFinanciero();
+  return ins;
+}
+
+async function updatePrestamo(id, patch) {
+  const row = {};
+  const map = {
+    nombre: 'nombre', tipo: 'tipo', notas: 'notas',
+    montoInicial: 'monto_inicial', limiteCredito: 'limite_credito',
+    tasaMensual: 'tasa_mensual', seguroMensual: 'seguro_mensual',
+    plazoMeses: 'plazo_meses', fechaInicio: 'fecha_inicio',
+    fechaPrimerPago: 'fecha_primer_pago', moneda: 'moneda',
+    contraparteId: 'contraparte_id', activa: 'activa',
+  };
+  for (const [k, dbCol] of Object.entries(map)) {
+    if (patch[k] !== undefined) {
+      row[dbCol] = ['nombre', 'tipo', 'fechaInicio', 'fechaPrimerPago', 'moneda', 'notas'].includes(k)
+        ? patch[k]
+        : (k === 'activa' ? !!patch[k] : (patch[k] === '' ? null : Number(patch[k])));
+    }
+  }
+  const { data, error } = await sb.from('prestamos').update(row).eq('id', id).select().single();
+  if (error) throw new Error(`updatePrestamo: ${error.message}`);
+  await loadFinanciero();
+  return data;
+}
+
+async function removePrestamo(id) {
+  const { error } = await sb.from('prestamos').delete().eq('id', id);
+  if (error) throw new Error(`removePrestamo: ${error.message}`);
+  await loadFinanciero();
+  return { deleted: true, id };
+}
+
+/* ════════════════════════ WRITERS — Inversores ════════════════════════ */
+
+// data = { nombre, capitalInvertido, montoPactadoDevolver, fechaInicio?,
+//          plazoMeses?, contraparteId?, notas }
+async function createInversor(data) {
+  const row = {
+    nombre:                 data.nombre,
+    capital_invertido:      Number(data.capitalInvertido) || 0,
+    monto_pactado_devolver: Number(data.montoPactadoDevolver) || 0,
+    fecha_inicio:           data.fechaInicio || null,
+    plazo_meses:            data.plazoMeses ? Number(data.plazoMeses) : null,
+    contraparte_id:         data.contraparteId ? Number(data.contraparteId)
+                             : await _ensureContraparteId(data.nombre, 'INVERSOR'),
+    activa:                 true,
+    notas:                  data.notas || '',
+  };
+  const { data: ins, error } = await sb.from('inversores').insert(row).select().single();
+  if (error) throw new Error(`createInversor: ${error.message}`);
+  await loadFinanciero();
+  return ins;
+}
+
+async function updateInversor(id, patch) {
+  const row = {};
+  if (patch.nombre               != null) row.nombre = patch.nombre;
+  if (patch.capitalInvertido     != null) row.capital_invertido = Number(patch.capitalInvertido) || 0;
+  if (patch.montoPactadoDevolver != null) row.monto_pactado_devolver = Number(patch.montoPactadoDevolver) || 0;
+  if (patch.fechaInicio          != null) row.fecha_inicio = patch.fechaInicio || null;
+  if (patch.plazoMeses           != null) row.plazo_meses = patch.plazoMeses ? Number(patch.plazoMeses) : null;
+  if (patch.contraparteId        != null) row.contraparte_id = patch.contraparteId ? Number(patch.contraparteId) : null;
+  if (patch.notas                != null) row.notas = patch.notas;
+  if (patch.activa               != null) row.activa = !!patch.activa;
+  const { data, error } = await sb.from('inversores').update(row).eq('id', id).select().single();
+  if (error) throw new Error(`updateInversor: ${error.message}`);
+  await loadFinanciero();
+  return data;
+}
+
+async function removeInversor(id) {
+  const { error } = await sb.from('inversores').delete().eq('id', id);
+  if (error) throw new Error(`removeInversor: ${error.message}`);
+  await loadFinanciero();
+  return { deleted: true, id };
+}
+
 async function removeMovFin(airtableId) {
   const mid = _stripPrefix(airtableId);
   const { error } = await sb.from('movimientos').delete().eq('id', mid);
@@ -1583,6 +1743,9 @@ Object.assign(window.AT_CLIENT, {
   createVenta, removeVenta, updateVentaHeader,
   createLote, removeLote, updateLoteHeader,
   createMovFin, removeMovFin,
+  createCuenta, updateCuenta, removeCuenta,
+  createPrestamo, updatePrestamo, removePrestamo,
+  createInversor, updateInversor, removeInversor,
   // Writers genéricos
   create, update, remove,
   // Constantes (los formularios las leen para validar enums)

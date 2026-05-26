@@ -908,6 +908,217 @@ function VentasPage() {
   );
 }
 
+// ─── Form Crear Cuenta ───────────────────────────────────────────
+function FormCuenta({ onDone }) {
+  const [nombre, setNombre] = useState('');
+  const [tipo, setTipo] = useState('DEBITO');
+  const [moneda, setMoneda] = useState('RD');
+  const [limite, setLimite] = useState('');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = nombre.length > 1;
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.createCuenta({ nombre, tipo, moneda, limite, notas });
+      window.toastOk('Cuenta creada', `${nombre} · ${tipo} ${moneda}`);
+      setNombre(''); setLimite(''); setNotas('');
+      onDone?.();
+    } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+      <div className="row-3">
+        <div className="field"><div className="field-label">Nombre</div>
+          <input className="input" value={nombre} onChange={e => setNombre(e.target.value)} placeholder="ej. Popular Ahorros" /></div>
+        <div className="field"><div className="field-label">Tipo</div>
+          <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
+            <option value="DEBITO">Débito</option>
+            <option value="CREDITO">Crédito (tarjeta)</option>
+            <option value="EFECTIVO">Efectivo</option>
+          </select></div>
+        <div className="field"><div className="field-label">Moneda</div>
+          <select className="select" value={moneda} onChange={e => setMoneda(e.target.value)}>
+            <option value="RD">RD$</option><option value="USD">USD</option>
+          </select></div>
+      </div>
+      {tipo === 'CREDITO' && (
+        <div className="field"><div className="field-label">Límite de crédito</div>
+          <input className="input num" type="number" value={limite} onChange={e => setLimite(e.target.value)} placeholder="0" /></div>
+      )}
+      <div className="field"><div className="field-label">Notas</div>
+        <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear cuenta'}</button>
+        <button className="btn ghost" disabled={busy} onClick={() => { setNombre(''); setLimite(''); setNotas(''); }}>Limpiar</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Form Crear Préstamo / Línea / Tarjeta ───────────────────────
+function FormPrestamo({ tipoFijo, onDone }) {
+  const data = useATData();
+  const bancos = (data._contrapartes || []).filter(c => c.tipo === 'BANCO');
+  const [nombre, setNombre] = useState('');
+  const [tipo, setTipo] = useState(tipoFijo || 'PRESTAMO');
+  const [monto, setMonto] = useState('');
+  const [limite, setLimite] = useState('');
+  const [tasa, setTasa] = useState('');
+  const [seguro, setSeguro] = useState('');
+  const [plazo, setPlazo] = useState('');
+  const [fechaInicio, setFechaInicio] = useState('');
+  const [moneda, setMoneda] = useState('RD');
+  const [contraparte, setContraparte] = useState('');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const esLinea = tipo === 'LINEA_CREDITO' || tipo === 'TARJETA_CREDITO';
+  const valid = nombre.length > 1 && (esLinea ? Number(limite) > 0 : Number(monto) > 0);
+
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.createPrestamo({
+        nombre, tipo, moneda,
+        montoInicial: esLinea ? null : Number(monto),
+        limiteCredito: esLinea ? Number(limite) : null,
+        tasaMensual: tasa ? (Number(tasa) / 100) : null,  // user enters % → store as decimal
+        seguroMensual: seguro || null,
+        plazoMeses: plazo || null,
+        fechaInicio: fechaInicio || null,
+        contraparteId: contraparte || null,
+        notas,
+      });
+      const labelTipo = { PRESTAMO: 'Préstamo', LINEA_CREDITO: 'Línea', TARJETA_CREDITO: 'Tarjeta' }[tipo];
+      window.toastOk(`${labelTipo} creado`, `${nombre}`);
+      setNombre(''); setMonto(''); setLimite(''); setTasa(''); setSeguro(''); setPlazo(''); setNotas('');
+      onDone?.();
+    } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+      <div className="row-3">
+        <div className="field"><div className="field-label">Nombre</div>
+          <input className="input" value={nombre} onChange={e => setNombre(e.target.value)} placeholder="ej. BHD Línea" /></div>
+        {!tipoFijo && (
+          <div className="field"><div className="field-label">Tipo</div>
+            <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
+              <option value="PRESTAMO">Préstamo amortizado</option>
+              <option value="LINEA_CREDITO">Línea de crédito</option>
+              <option value="TARJETA_CREDITO">Tarjeta de crédito</option>
+            </select></div>
+        )}
+        <div className="field"><div className="field-label">Banco emisor</div>
+          <select className="select" value={contraparte} onChange={e => setContraparte(e.target.value)}>
+            <option value="">— ninguno —</option>
+            {bancos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select></div>
+      </div>
+      <div className="row-4">
+        {!esLinea && (
+          <div className="field"><div className="field-label">Monto inicial</div>
+            <input className="input num" type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" /></div>
+        )}
+        {esLinea && (
+          <div className="field"><div className="field-label">Límite</div>
+            <input className="input num" type="number" value={limite} onChange={e => setLimite(e.target.value)} placeholder="0" /></div>
+        )}
+        <div className="field"><div className="field-label">Tasa mensual (%)</div>
+          <input className="input num" type="number" step="0.01" value={tasa} onChange={e => setTasa(e.target.value)} placeholder="1.67" /></div>
+        {!esLinea && (
+          <div className="field"><div className="field-label">Seguro mensual</div>
+            <input className="input num" type="number" value={seguro} onChange={e => setSeguro(e.target.value)} placeholder="0" /></div>
+        )}
+        <div className="field"><div className="field-label">Moneda</div>
+          <select className="select" value={moneda} onChange={e => setMoneda(e.target.value)}>
+            <option value="RD">RD$</option><option value="USD">USD</option>
+          </select></div>
+      </div>
+      {!esLinea && (
+        <div className="row">
+          <div className="field"><div className="field-label">Plazo (meses)</div>
+            <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="48" /></div>
+          <div className="field"><div className="field-label">Fecha inicio</div>
+            <input className="input num" type="date" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} /></div>
+        </div>
+      )}
+      <div className="field"><div className="field-label">Notas</div>
+        <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear'}</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Form Crear Inversor ─────────────────────────────────────────
+function FormInversor({ onDone }) {
+  const data = useATData();
+  const personas = (data._contrapartes || []).filter(c => c.tipo === 'INVERSOR' || c.tipo === 'PERSONA_OPERATIVA' || c.tipo === 'CLIENTE_FAMILIAR');
+  const [nombre, setNombre] = useState('');
+  const [capital, setCapital] = useState('');
+  const [retorno, setRetorno] = useState('');
+  const [fechaInicio, setFechaInicio] = useState('');
+  const [plazo, setPlazo] = useState('');
+  const [contraparte, setContraparte] = useState('');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+  const valid = nombre.length > 1 && Number(capital) > 0;
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.createInversor({
+        nombre,
+        capitalInvertido: Number(capital),
+        montoPactadoDevolver: Number(retorno) || Number(capital) * 2,  // default 2× capital
+        fechaInicio: fechaInicio || null,
+        plazoMeses: plazo || null,
+        contraparteId: contraparte || null,
+        notas,
+      });
+      window.toastOk('Inversor creado', `${nombre} · aporte ${fmtCurrency(capital)}`);
+      setNombre(''); setCapital(''); setRetorno(''); setNotas('');
+      onDone?.();
+    } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+      <div className="row">
+        <div className="field"><div className="field-label">Nombre</div>
+          <input className="input" value={nombre} onChange={e => setNombre(e.target.value)} placeholder="ej. Andrea Correa" /></div>
+        <div className="field"><div className="field-label">Vincular a contraparte</div>
+          <select className="select" value={contraparte} onChange={e => setContraparte(e.target.value)}>
+            <option value="">— ninguna —</option>
+            {personas.map(c => <option key={c.id} value={c.id}>{c.nombre} ({c.tipo})</option>)}
+          </select></div>
+      </div>
+      <div className="row-3">
+        <div className="field"><div className="field-label">Capital invertido</div>
+          <input className="input num" type="number" value={capital} onChange={e => setCapital(e.target.value)} placeholder="50000" /></div>
+        <div className="field"><div className="field-label">Monto a devolver</div>
+          <input className="input num" type="number" value={retorno} onChange={e => setRetorno(e.target.value)} placeholder={capital ? (capital * 2) : '100000'} />
+          <div className="field-hint">Default 2× capital si vacío</div></div>
+        <div className="field"><div className="field-label">Plazo (meses)</div>
+          <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="48" /></div>
+      </div>
+      <div className="row">
+        <div className="field"><div className="field-label">Fecha inicio</div>
+          <input className="input num" type="date" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} /></div>
+        <div className="field"><div className="field-label">Notas</div>
+          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear inversor'}</button>
+      </div>
+    </div>
+  );
+}
+
 function FinanzasPage() {
   const data = useATData();
   const productos = data.productos || { 'FIN-P': [], 'FIN-I': [], 'FIN-LC': [] };
@@ -915,16 +1126,76 @@ function FinanzasPage() {
   const andrea = productos['FIN-I'][0];
   const lcs = productos['FIN-LC'] || [];
   const cuentas = data._cuentas || [];
+  const fin = data.financiero || [];
+  const [subtab, setSubtab] = useState('resumen');
+  const [showCreate, setShowCreate] = useState(false);
+  const [del, setDel] = useState(null);
+  const [delBusy, setDelBusy] = useState(false);
+
+  const doDelete = async () => {
+    setDelBusy(true);
+    try {
+      const { kind, id, label } = del;
+      if      (kind === 'cuenta')   await window.AT_CLIENT.removeCuenta(id);
+      else if (kind === 'prestamo') await window.AT_CLIENT.removePrestamo(id);
+      else if (kind === 'inversor') await window.AT_CLIENT.removeInversor(id);
+      window.toastOk('Eliminado', label);
+      setDel(null);
+    } catch (e) { window.toastErr('No se pudo eliminar', e.message?.slice(0, 120)); }
+    setDelBusy(false);
+  };
 
   return (
     <>
       <div className="topbar">
         <div>
           <h1>Finanzas</h1>
-          <div className="sub">Préstamos · Inversores · Líneas de crédito · Cuentas</div>
+          <div className="sub">Préstamos · Inversores · Líneas · Cuentas · todo CRUD</div>
         </div>
+        {subtab !== 'resumen' && (
+          <button className="btn" onClick={() => setShowCreate(true)}>+ Nuevo</button>
+        )}
       </div>
 
+      <div className="tabs">
+        <button className={`tab ${subtab === 'resumen' ? 'active' : ''}`} onClick={() => setSubtab('resumen')}>Resumen</button>
+        <button className={`tab ${subtab === 'prestamos' ? 'active' : ''}`} onClick={() => setSubtab('prestamos')}>Préstamos</button>
+        <button className={`tab ${subtab === 'lineas' ? 'active' : ''}`} onClick={() => setSubtab('lineas')}>Líneas / Tarjetas</button>
+        <button className={`tab ${subtab === 'inversores' ? 'active' : ''}`} onClick={() => setSubtab('inversores')}>Inversores</button>
+        <button className={`tab ${subtab === 'cuentas' ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Cuentas de banco</button>
+      </div>
+
+      {/* CREATE MODAL */}
+      {showCreate && (
+        <div className="modal-backdrop" onClick={() => setShowCreate(false)}>
+          <div className="modal" style={{ minWidth: 600 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-title">
+              {subtab === 'prestamos' ? 'Nuevo préstamo' :
+               subtab === 'lineas' ? 'Nueva línea / tarjeta' :
+               subtab === 'inversores' ? 'Nuevo inversor' :
+               'Nueva cuenta de banco'}
+            </div>
+            <div style={{ marginBottom: 'var(--s-3)' }}>
+              {subtab === 'prestamos'  && <FormPrestamo tipoFijo="PRESTAMO" onDone={() => setShowCreate(false)} />}
+              {subtab === 'lineas'     && <FormPrestamo onDone={() => setShowCreate(false)} />}
+              {subtab === 'inversores' && <FormInversor onDone={() => setShowCreate(false)} />}
+              {subtab === 'cuentas'    && <FormCuenta onDone={() => setShowCreate(false)} />}
+            </div>
+            <div className="modal-actions">
+              <button className="btn ghost" onClick={() => setShowCreate(false)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmModal open={!!del} danger busy={delBusy}
+        title={`¿Eliminar ${del?.kind}?`}
+        body={`${del?.label}. Esta acción es permanente. Si hay movimientos linkeados, puede fallar por constraint FK.`}
+        onCancel={() => setDel(null)}
+        onConfirm={doDelete} />
+
+      {/* RESUMEN — vista original */}
+      {subtab === 'resumen' && (<>
       <div className="kpi-row">
         <KPI label="Saldo Coop" value={fmtNum(coop?.saldo || 0)} currency
           delta={null} deltaLabel={`${coop?.tasa?.toFixed?.(2) || 0}%/mes`} />
@@ -1018,6 +1289,120 @@ function FinanzasPage() {
           </tbody>
         </table>
       </div>
+      </>)}
+
+      {/* PRÉSTAMOS — tabla CRUD */}
+      {subtab === 'prestamos' && (
+        <div className="section">
+          <table className="data">
+            <thead><tr>
+              <th>Nombre</th><th>Tipo</th><th className="right">Monto inicial</th>
+              <th className="right">Capital pagado</th><th className="right">Saldo</th>
+              <th className="right">Tasa</th><th>Moneda</th><th></th>
+            </tr></thead>
+            <tbody>
+              {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).map(p => (
+                <tr key={p._airtableId}>
+                  <td>{p.nombre}</td>
+                  <td className="muted">{p.tipo}</td>
+                  <td className="num right">{fmtCurrency(p.montoTotal)}</td>
+                  <td className="num right pos">{fmtCurrency(p._capitalPagado || 0)}</td>
+                  <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
+                  <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%</td>
+                  <td className="muted">RD$</td>
+                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button></td>
+                </tr>
+              ))}
+              {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).length === 0 && (
+                <tr><td colSpan="8" className="empty" style={{ padding: 'var(--s-6)' }}>Sin préstamos · click "+ Nuevo" para crear uno</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* LÍNEAS / TARJETAS — tabla CRUD */}
+      {subtab === 'lineas' && (
+        <div className="section">
+          <table className="data">
+            <thead><tr>
+              <th>Nombre</th><th>Tipo</th><th className="right">Límite</th>
+              <th className="right">Usado</th><th className="right">Tasa</th><th>Moneda</th><th></th>
+            </tr></thead>
+            <tbody>
+              {lcs.map(l => (
+                <tr key={l.id}>
+                  <td>{l.nombre}</td>
+                  <td className="muted">{l.tipoSub}</td>
+                  <td className="num right">{fmtCurrency(l.limite)}</td>
+                  <td className="num right">{fmtCurrency(l.usado)}</td>
+                  <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
+                  <td className="muted">{l.moneda}</td>
+                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button></td>
+                </tr>
+              ))}
+              {lcs.length === 0 && (
+                <tr><td colSpan="7" className="empty" style={{ padding: 'var(--s-6)' }}>Sin líneas o tarjetas · click "+ Nuevo"</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* INVERSORES — tabla CRUD */}
+      {subtab === 'inversores' && (
+        <div className="section">
+          <table className="data">
+            <thead><tr>
+              <th>Nombre</th><th className="right">Capital</th>
+              <th className="right">A devolver</th><th className="right">Pagado</th>
+              <th className="right">Pendiente</th><th></th>
+            </tr></thead>
+            <tbody>
+              {fin.filter(f => /inversor/i.test(f.tipo)).map(i => (
+                <tr key={i._airtableId}>
+                  <td>{i.nombre}</td>
+                  <td className="num right">{fmtCurrency(i.montoTotal)}</td>
+                  <td className="num right">{fmtCurrency(i.balance)}</td>
+                  <td className="num right pos">{fmtCurrency(i.totalPagado)}</td>
+                  <td className="num right neg">{fmtCurrency((i.balance || 0) - (i.totalPagado || 0))}</td>
+                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button></td>
+                </tr>
+              ))}
+              {fin.filter(f => /inversor/i.test(f.tipo)).length === 0 && (
+                <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>Sin inversores · click "+ Nuevo"</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* CUENTAS DE BANCO — tabla CRUD */}
+      {subtab === 'cuentas' && (
+        <div className="section">
+          <table className="data">
+            <thead><tr>
+              <th>Nombre</th><th>Tipo</th><th>Moneda</th>
+              <th className="right">Límite crédito</th><th>Notas</th><th></th>
+            </tr></thead>
+            <tbody>
+              {cuentas.map(c => (
+                <tr key={c.id}>
+                  <td>{c.nombre}</td>
+                  <td><span className={`badge ${c.tipo === 'DEBITO' ? 'success' : c.tipo === 'CREDITO' ? 'warning' : 'neutral'}`}>{c.tipo}</span></td>
+                  <td className="muted">{c.moneda}</td>
+                  <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{c.notas || '—'}</td>
+                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button></td>
+                </tr>
+              ))}
+              {cuentas.length === 0 && (
+                <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>Sin cuentas · click "+ Nuevo"</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
@@ -1640,6 +2025,7 @@ function VentasPageExt({ period }) {
   const allVentas = data.ventas || [];
   const [search, setSearch] = useState('');
   const [del, setDel] = useState(null);
+  const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const filteredPeriod = filterByPeriod(allVentas, period, 'fecha');
@@ -1658,6 +2044,19 @@ function VentasPageExt({ period }) {
     } catch (e) {
       window.toastErr('No se pudo eliminar', e.message?.slice(0, 120));
     }
+    setBusy(false);
+  };
+
+  const doSave = async (vals) => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.updateVentaHeader(edit.idVenta, {
+        fecha: vals.fecha, canal: vals.canal,
+        envio: Number(vals.envio) || 0, notas: vals.notas,
+      });
+      window.toastOk('Venta actualizada', `${edit.idVenta}`);
+      setEdit(null);
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
     setBusy(false);
   };
 
@@ -1693,7 +2092,10 @@ function VentasPageExt({ period }) {
                 <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
                 <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
                 <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
-                <td><button className="icon-btn danger" onClick={() => setDel(v)}>×</button></td>
+                <td style={{ display: 'flex', gap: 4 }}>
+                  <button className="icon-btn" onClick={() => setEdit(v)} title="Editar header">✎</button>
+                  <button className="icon-btn danger" onClick={() => setDel(v)} title="Eliminar">×</button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1705,6 +2107,17 @@ function VentasPageExt({ period }) {
         body={`${del?.fecha || ''} · ${del?.canal || ''} · ${fmtCurrency(del?.precioFacturadoTotal || 0)}. Esta acción borra ${(del?.lineas || []).length} línea(s) y movimientos asociados de Supabase. No es reversible.`}
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
+
+      <EditModal open={!!edit} busy={busy}
+        title={`Editar venta ${edit?.idVenta}`}
+        fields={edit ? [
+          { name: 'fecha', label: 'Fecha', type: 'date', value: edit.fecha },
+          { name: 'canal', label: 'Canal', type: 'text', value: edit.canal },
+          { name: 'envio', label: 'Envío cobrado (RD$)', type: 'number', value: edit.envio || 0 },
+          { name: 'notas', label: 'Notas', type: 'text', value: edit.notas || '', span: 2 },
+        ] : []}
+        onCancel={() => setEdit(null)}
+        onSave={doSave} />
     </>
   );
 }
@@ -1717,6 +2130,7 @@ function MovimientosPage({ period }) {
   const all = data.cashflow || [];
   const filtered = filterByPeriod(all, period, 'f').slice(0, 100);
   const [del, setDel] = useState(null);
+  const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const doDelete = async () => {
@@ -1728,6 +2142,24 @@ function MovimientosPage({ period }) {
     } catch (e) {
       window.toastErr('No se pudo eliminar', e.message?.slice(0, 120));
     }
+    setBusy(false);
+  };
+
+  const doSaveEdit = async (vals) => {
+    setBusy(true);
+    try {
+      const F = window.AT?.fields?.cashflow || { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar', entrada: 'entrada', salida: 'salida', notas: 'notas' };
+      await window.AT_CLIENT.update('cashflow', edit._airtableId, {
+        [F.fecha]: vals.fecha,
+        [F.cuenta]: vals.cuenta,
+        [F.auxiliar]: vals.auxiliar,
+        [F.entrada]: Number(vals.entrada) || 0,
+        [F.salida]: Number(vals.salida) || 0,
+        [F.notas]: vals.notas,
+      });
+      window.toastOk('Movimiento actualizado', vals.cuenta);
+      setEdit(null);
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
     setBusy(false);
   };
 
@@ -1760,7 +2192,10 @@ function MovimientosPage({ period }) {
                   <td className={`num right ${neto > 0 ? 'pos' : neto < 0 ? 'neg' : 'muted'}`}>
                     {neto > 0 ? '+' : ''}{fmtCurrency(neto)}
                   </td>
-                  <td><button className="icon-btn danger" onClick={() => setDel(m)}>×</button></td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="icon-btn" onClick={() => setEdit(m)} title="Editar">✎</button>
+                    <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
+                  </td>
                 </tr>
               );
             })}
@@ -1773,7 +2208,69 @@ function MovimientosPage({ period }) {
         body={`${del?.f || ''} · ${del?.c || ''} · ${del?.a || ''}. ${fmtCurrency(del?.e || del?.s || 0)}. Borra de Supabase, no reversible.`}
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
+
+      <EditModal open={!!edit} busy={busy}
+        title={`Editar movimiento`}
+        fields={edit ? [
+          { name: 'fecha', label: 'Fecha', type: 'date', value: edit.f },
+          { name: 'cuenta', label: 'Tipo (categoría)', type: 'text', value: edit.c },
+          { name: 'auxiliar', label: 'Contraparte', type: 'text', value: edit.a || '' },
+          { name: 'entrada', label: 'Entrada (RD$)', type: 'number', value: edit.e || 0 },
+          { name: 'salida', label: 'Salida (RD$)', type: 'number', value: edit.s || 0 },
+          { name: 'notas', label: 'Notas', type: 'text', value: '', span: 2 },
+        ] : []}
+        onCancel={() => setEdit(null)}
+        onSave={doSaveEdit} />
     </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// EditModal — modal genérico para edit forms
+// fields: [{name, label, type, value, options?, span?}]
+// ════════════════════════════════════════════════════════════════
+function EditModal({ open, title, fields, onCancel, onSave, busy }) {
+  const [values, setValues] = useState({});
+  useEffect(() => {
+    if (open && fields) {
+      const init = {};
+      fields.forEach(f => { init[f.name] = f.value ?? ''; });
+      setValues(init);
+    }
+  }, [open]);
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal" style={{ minWidth: 520, maxWidth: '90vw' }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">{title}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 'var(--s-4)' }}>
+          {fields.map(f => (
+            <div key={f.name} className="field" style={f.span === 2 ? { gridColumn: 'span 2' } : undefined}>
+              <div className="field-label">{f.label}</div>
+              {f.type === 'select' ? (
+                <select className="select" value={values[f.name] ?? ''} onChange={e => setValues({ ...values, [f.name]: e.target.value })}>
+                  {f.options.map(o => typeof o === 'string' ? <option key={o}>{o}</option> : <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              ) : f.type === 'textarea' ? (
+                <textarea className="textarea" rows={3} value={values[f.name] ?? ''} onChange={e => setValues({ ...values, [f.name]: e.target.value })} />
+              ) : (
+                <input className={'input ' + (f.type === 'number' || f.type === 'date' ? 'num' : '')}
+                       type={f.type || 'text'} value={values[f.name] ?? ''}
+                       onChange={e => setValues({ ...values, [f.name]: e.target.value })}
+                       placeholder={f.placeholder} />
+              )}
+              {f.hint && <div className="field-hint">{f.hint}</div>}
+            </div>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onCancel} disabled={busy}>Cancelar</button>
+          <button className="btn" disabled={busy} onClick={() => onSave(values)}>
+            {busy ? 'Guardando…' : 'Guardar'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
