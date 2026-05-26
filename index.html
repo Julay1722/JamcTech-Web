@@ -2243,8 +2243,24 @@ function FinanzasPage() {
   const coop = productos['FIN-P'][0];
   const andrea = productos['FIN-I'][0];
   const lcs = productos['FIN-LC'] || [];
+  // Split LC entries: las líneas de crédito (Línea Revolvente) van al tab Préstamos,
+  // las tarjetas de crédito (Tarjeta de Crédito) van al tab Tarjetas.
+  const lineasDeCredito = lcs.filter(l => /línea|linea|revolvente/i.test(l.tipoSub || ''));
+  const tarjetasCredito = lcs.filter(l => /tarjeta/i.test(l.tipoSub || ''));
   const cuentas = data._cuentas || [];
   const fin = data.financiero || [];
+  // Unifica préstamos amortizados + líneas de crédito en una sola lista
+  // para el tab "Préstamos".
+  const prestamosUnified = [
+    ...fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).map(p => ({ ...p, _kind: 'prestamo' })),
+    ...lineasDeCredito.map(l => ({
+      ...l, _kind: 'linea',
+      montoTotal: l.limite,
+      _capitalPagado: 0,
+      balance: l.usado,
+      tasaMensual: l.tasaMensual ? l.tasaMensual / 100 : 0,
+    })),
+  ];
   const [subtab, setSubtab] = useState('resumen');
   const [showCreate, setShowCreate] = useState(false);
   const [del, setDel] = useState(null);
@@ -2382,7 +2398,7 @@ function FinanzasPage() {
       <div className="tabs">
         <button className={`tab ${subtab === 'resumen' ? 'active' : ''}`} onClick={() => setSubtab('resumen')}>Resumen</button>
         <button className={`tab ${subtab === 'prestamos' ? 'active' : ''}`} onClick={() => setSubtab('prestamos')}>Préstamos</button>
-        <button className={`tab ${subtab === 'lineas' ? 'active' : ''}`} onClick={() => setSubtab('lineas')}>Líneas / Tarjetas</button>
+        <button className={`tab ${subtab === 'tarjetas' ? 'active' : ''}`} onClick={() => setSubtab('tarjetas')}>Tarjetas</button>
         <button className={`tab ${subtab === 'inversores' ? 'active' : ''}`} onClick={() => setSubtab('inversores')}>Inversores</button>
         <button className={`tab ${subtab === 'cuentas' ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Cuentas de banco</button>
       </div>
@@ -2392,14 +2408,16 @@ function FinanzasPage() {
         <div className="modal-backdrop" onClick={() => setShowCreate(false)}>
           <div className="modal" style={{ minWidth: 600 }} onClick={e => e.stopPropagation()}>
             <div className="modal-title">
-              {subtab === 'prestamos' ? 'Nuevo préstamo' :
-               subtab === 'lineas' ? 'Nueva línea / tarjeta' :
+              {subtab === 'prestamos' ? 'Nuevo préstamo o línea de crédito' :
+               subtab === 'tarjetas' ? 'Nueva tarjeta de crédito' :
                subtab === 'inversores' ? 'Nuevo inversor' :
                'Nueva cuenta de banco'}
             </div>
             <div style={{ marginBottom: 'var(--s-3)' }}>
-              {subtab === 'prestamos'  && <FormPrestamo tipoFijo="PRESTAMO" onDone={() => setShowCreate(false)} />}
-              {subtab === 'lineas'     && <FormPrestamo onDone={() => setShowCreate(false)} />}
+              {/* Préstamos tab: tanto Préstamos amortizados como Líneas de crédito */}
+              {subtab === 'prestamos'  && <FormPrestamo onDone={() => setShowCreate(false)} />}
+              {/* Tarjetas tab: solo TARJETA_CREDITO */}
+              {subtab === 'tarjetas'   && <FormPrestamo tipoFijo="TARJETA_CREDITO" onDone={() => setShowCreate(false)} />}
               {subtab === 'inversores' && <FormInversor onDone={() => setShowCreate(false)} />}
               {subtab === 'cuentas'    && <FormCuenta onDone={() => setShowCreate(false)} />}
             </div>
@@ -2522,68 +2540,75 @@ function FinanzasPage() {
       </div>
       </>)}
 
-      {/* PRÉSTAMOS — tabla CRUD */}
+      {/* PRÉSTAMOS — incluye Préstamos amortizados Y Líneas de crédito */}
       {subtab === 'prestamos' && (
         <div className="section">
           <table className="data">
             <thead><tr>
-              <th>Nombre</th><th>Tipo</th><th className="right">Monto inicial</th>
-              <th className="right">Capital pagado</th><th className="right">Saldo</th>
+              <th>Nombre / Entidad</th><th>Tipo</th><th className="right">Monto inicial / Límite</th>
+              <th className="right">Capital pagado</th><th className="right">Saldo / Usado</th>
               <th className="right">Tasa</th><th>Moneda</th><th></th>
             </tr></thead>
             <tbody>
-              {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).map(p => (
-                <tr key={p._airtableId} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: p, kind: 'prestamo' })}>
+              {prestamosUnified.map(p => (
+                <tr key={p._airtableId} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: p, kind: p._kind === 'linea' ? 'linea' : 'prestamo' })}>
                   <td>{p.nombre}</td>
-                  <td className="muted">{p.tipo}</td>
+                  <td className="muted">{p._kind === 'linea' ? 'Línea de crédito' : p.tipo}</td>
                   <td className="num right">{fmtCurrency(p.montoTotal)}</td>
                   <td className="num right pos">{fmtCurrency(p._capitalPagado || 0)}</td>
                   <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
-                  <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%</td>
-                  <td className="muted">RD$</td>
+                  <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%/mes</td>
+                  <td className="muted">{p.moneda || 'RD$'}</td>
                   <td className="row-actions" onClick={e => e.stopPropagation()}>
                     <div className="row-actions-inner">
-                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, false)}>✎</button>
+                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, p._kind === 'linea')}>✎</button>
                       <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).length === 0 && (
-                <tr><td colSpan="8" className="empty" style={{ padding: 'var(--s-6)' }}>Sin préstamos · click "+ Nuevo" para crear uno</td></tr>
+              {prestamosUnified.length === 0 && (
+                <tr><td colSpan="8" className="empty" style={{ padding: 'var(--s-6)' }}>Sin préstamos ni líneas de crédito · click "+ Nuevo"</td></tr>
               )}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* LÍNEAS / TARJETAS — tabla CRUD */}
-      {subtab === 'lineas' && (
+      {/* TARJETAS DE CRÉDITO — solo TARJETA_CREDITO (las líneas se movieron a Préstamos) */}
+      {subtab === 'tarjetas' && (
         <div className="section">
           <table className="data">
             <thead><tr>
-              <th>Nombre</th><th>Tipo</th><th className="right">Límite</th>
-              <th className="right">Usado</th><th className="right">Tasa</th><th>Moneda</th><th></th>
+              <th>Nombre / Entidad</th><th>Tipo</th><th className="right">Límite</th>
+              <th className="right">Usado</th><th className="right">Disponible</th>
+              <th className="right">% uso</th><th className="right">Tasa</th><th>Moneda</th><th></th>
             </tr></thead>
             <tbody>
-              {lcs.map(l => (
-                <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: l, kind: 'linea' })}>
-                  <td>{l.nombre}</td>
-                  <td className="muted">{l.tipoSub}</td>
-                  <td className="num right">{fmtCurrency(l.limite)}</td>
-                  <td className="num right">{fmtCurrency(l.usado)}</td>
-                  <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
-                  <td className="muted">{l.moneda}</td>
-                  <td className="row-actions" onClick={e => e.stopPropagation()}>
-                    <div className="row-actions-inner">
-                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
-                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {lcs.length === 0 && (
-                <tr><td colSpan="7" className="empty" style={{ padding: 'var(--s-6)' }}>Sin líneas o tarjetas · click "+ Nuevo"</td></tr>
+              {tarjetasCredito.map(l => {
+                const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
+                const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
+                return (
+                  <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: l, kind: 'linea' })}>
+                    <td>{l.nombre}</td>
+                    <td className="muted">{l.tipoSub}</td>
+                    <td className="num right">{fmtCurrency(l.limite)}</td>
+                    <td className="num right">{fmtCurrency(l.usado)}</td>
+                    <td className="num right pos">{fmtCurrency(l.limite - l.usado)}</td>
+                    <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
+                    <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
+                    <td className="muted">{l.moneda}</td>
+                    <td className="row-actions" onClick={e => e.stopPropagation()}>
+                      <div className="row-actions-inner">
+                        <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
+                        <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {tarjetasCredito.length === 0 && (
+                <tr><td colSpan="9" className="empty" style={{ padding: 'var(--s-6)' }}>Sin tarjetas de crédito · click "+ Nuevo"</td></tr>
               )}
             </tbody>
           </table>
