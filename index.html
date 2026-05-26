@@ -2253,12 +2253,15 @@ function PeriodFilter({ value, onChange }) {
 }
 function periodToRange(p) {
   if (p === 'todo') return null;
+  // window.HOY se actualiza al día real durante el boot del cliente Supabase
+  // (data.js lo hardcodea a 2026-05-20). Usar window.HOY garantiza que el
+  // filtro "7D" hasta hoy realmente incluya las ventas de HOY.
+  const todayReal = window.HOY || new Date().toISOString().slice(0, 10);
   if (p.startsWith('d:')) {
     const dias = parseInt(p.slice(2));
-    const base = new Date(HOY);
-    const desde = new Date(base);
-    desde.setDate(desde.getDate() - dias);
-    return { from: desde.toISOString().slice(0, 10), to: HOY };
+    const desde = new Date(todayReal);
+    desde.setDate(desde.getDate() - (dias - 1));  // 7D incluye HOY + 6 días previos
+    return { from: desde.toISOString().slice(0, 10), to: todayReal };
   }
   return null;
 }
@@ -3424,7 +3427,13 @@ function App() {
 
       <main className="main">
         {showPeriod && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--s-3)' }}>
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end',
+            position: 'sticky', top: 0, zIndex: 50,
+            background: 'var(--bg)', padding: 'var(--s-3) 0',
+            marginBottom: 'var(--s-3)',
+            borderBottom: '1px solid var(--border)',
+          }}>
             <PeriodFilter value={period} onChange={setPeriod} />
           </div>
         )}
