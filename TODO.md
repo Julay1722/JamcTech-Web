@@ -109,17 +109,14 @@ Supabase tiene backups diarios automáticos en el plan pago. En plan free son 7 
 
 ---
 
-## P1.5 — Side-effect cleanup en remove de Lote/MovFin
+## ✅ P1.5 — Side-effect cleanup en remove de Lote/MovFin · **RESUELTO** (2026-05-26)
 
-**Bug detectado** durante tests UI: cuando se REGISTRA un lote o un MovFin desde el dashboard, los handlers `handleCreateLote` (panel-inventario) y `handleAddMov` (panel-fin-productos) también llaman a `AT_CLIENT.create('cashflow', ...)` para crear movimientos satélites en cashflow (representa el dinero saliendo del banco). Pero cuando se BORRA el lote/movFin con `removeLote`/`removeMovFin`, esos cashflow satélites NO se borran. Quedan huérfanos en la tabla `movimientos`.
+Implementado en `src/supabase-client.js` con temporal binding (sin tocar paneles):
 
-**Reproducer**: Registrar un lote con envío 500 + courier 1200 + otros 200 + costo 6500 → se crean 4 movs adicionales (ENVIO_LOTE, COMPRA_MERCANCIA, ENVIO_LOTE, OTROS). Borrar el lote → solo se borran las entradas + lote header, los 4 CF quedan.
+- **Lote satélites**: cuando `createLote` corre, registra el `lote_id_num` con TTL 8s. Los siguientes `create('cashflow')` del wizard (envío, courier, otros, compra) auto-setean `movimientos.lote_id = X`. `removeLote` ahora hace `DELETE FROM movimientos WHERE lote_id = X` antes de borrar entradas + lote header, cascadeando el cleanup.
+- **MovFin mirror**: cuando `createMovFin` corre, registra el `mov_id + fecha + monto` con TTL 8s. El siguiente `create('cashflow')` del wizard que matchee (misma fecha, monto ±1) se **suprime** (returns el id existente con `_dedup: true`). En el modelo Supabase un PAGO_PRESTAMO es 1 mov, no 2.
 
-**Fix posible**: cuando `createLote`/`createMovFin` se ejecutan, persistir los IDs de los CF satélites en el cache. Cuando se borra el lote/movFin, también borrar esos CFs.
-
-**Fix temporal manual**: si Julio nota duplicados en el cashflow tail, buscar `notas` con el patrón "BHD Cuenta Corriente · 9421" y la fecha exacta del lote borrado.
-
-Mismo comportamiento que tenía airtable-client, así que NO es una regresión de la migración. Pero vale la pena arreglar.
+Verificado: lote completo crea 4 satélites con `lote_id=3`, removeLote borra los 4. MovFin Cuota Préstamo + intento de mirror → 1 mov solo, no 2.
 
 ---
 
