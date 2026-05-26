@@ -1440,6 +1440,46 @@ function _overrideGlobals() {
     }
   }
 
+  // ── BANCOS_SEED (cuentas de banco) ──
+  // Reemplaza el mock hardcoded de panel-fin-productos con las cuentas
+  // reales de Supabase. Calcula saldo dinámicamente desde cashflow.
+  if (Array.isArray(D._cuentas) && window.BANCOS_SEED) {
+    // Compute saldos por cuenta_id desde el cashflow ya cargado.
+    // Como solo BHD Debito (id=1) tiene movimientos en la data histórica,
+    // las otras 4 cuentas salen en 0 (correcto reflejo de la migración).
+    const saldoPorCuenta = {};
+    (D.cashflow || []).forEach((m) => {
+      const cid = (window.__AIRTABLE_DATA__._cuentas || []).find((c) => c.nombre === m._origen)?.id;
+      if (!cid) return;
+      saldoPorCuenta[cid] = (saldoPorCuenta[cid] || 0) + (m.e || 0) - (m.s || 0);
+    });
+    const tipoSubMap = { DEBITO: 'Corriente', CREDITO: 'Tarjeta de Crédito', EFECTIVO: 'Caja Física' };
+    const newBancos = (D._cuentas || []).map((c) => ({
+      id:         'BNK-' + String(c.id).padStart(3, '0'),
+      _cuentaId:  c.id,
+      nombre:     c.nombre,
+      tipoSub:    `${tipoSubMap[c.tipo] || c.tipo} ${c.moneda}`,
+      fechaInicio: '',
+      saldo:      saldoPorCuenta[c.id] || 0,
+      moneda:     c.moneda === 'RD' ? 'DOP' : c.moneda,
+      nota:       c.notas || '',
+      movimientos: (D.cashflow || [])
+        .filter((m) => {
+          const cuentaName = (window.__AIRTABLE_DATA__._cuentas || []).find((x) => x.id === c.id)?.nombre;
+          return m._origen === cuentaName;
+        })
+        .slice(0, 20)
+        .map((m, i) => ({
+          id:    'mov-' + c.id + '-' + i,
+          fecha: m.f,
+          tipo:  m.e > 0 ? 'deposito' : (m.s > 0 ? 'retiro' : 'otro'),
+          monto: Math.max(m.e, m.s),
+          nota:  (m.c || '') + (m.a ? ' · ' + m.a : ''),
+        })),
+    }));
+    _replaceArray(window.BANCOS_SEED, newBancos);
+  }
+
   // ── BHD (línea de crédito) ──
   if (Array.isArray(D.financiero) && Array.isArray(D.cashflow)) {
     const bhd = D.financiero.find((f) =>
