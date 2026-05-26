@@ -315,6 +315,11 @@
   }
   .icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-2); }
   .icon-btn.danger:hover { color: var(--danger); border-color: var(--danger); }
+  /* Action cell helper: contiene los botones ✎/× sin romper la grid del td.
+     Antes usábamos `td style={{display:'flex'}}` lo cual rompe display:table-cell
+     y descuadra columnas. Esta clase lo hace seguro. */
+  .row-actions { white-space: nowrap; }
+  .row-actions-inner { display: inline-flex; gap: 4px; align-items: center; }
 
   /* ────────── Modal ────────── */
   .modal-backdrop {
@@ -1307,9 +1312,11 @@ function LotesTab() {
                 <td className="num right">{l.envio > 0 ? fmtCurrency(l.envio) : '—'}</td>
                 <td className="num right">{l.courier > 0 ? fmtCurrency(l.courier) : '—'}</td>
                 <td className="num right">{l.otros > 0 ? fmtCurrency(l.otros) : '—'}</td>
-                <td style={{ display: 'flex', gap: 4 }}>
-                  <button className="icon-btn" title="Editar" onClick={() => setEdit(l)}>✎</button>
-                  <button className="icon-btn danger" title="Eliminar" onClick={() => setDel(l)}>×</button>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <div style={{ display: 'inline-flex', gap: 4 }}>
+                    <button className="icon-btn" title="Editar" onClick={() => setEdit(l)}>✎</button>
+                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel(l)}>×</button>
+                  </div>
                 </td>
               </tr>
             );
@@ -2534,9 +2541,11 @@ function FinanzasPage() {
                   <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
                   <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%</td>
                   <td className="muted">RD$</td>
-                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
-                    <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, false)}>✎</button>
-                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
+                  <td className="row-actions" onClick={e => e.stopPropagation()}>
+                    <div className="row-actions-inner">
+                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, false)}>✎</button>
+                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2565,9 +2574,11 @@ function FinanzasPage() {
                   <td className="num right">{fmtCurrency(l.usado)}</td>
                   <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
                   <td className="muted">{l.moneda}</td>
-                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
-                    <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
-                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
+                  <td className="row-actions" onClick={e => e.stopPropagation()}>
+                    <div className="row-actions-inner">
+                      <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
+                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2596,9 +2607,11 @@ function FinanzasPage() {
                   <td className="num right">{fmtCurrency(i.balance)}</td>
                   <td className="num right pos">{fmtCurrency(i.totalPagado)}</td>
                   <td className="num right neg">{fmtCurrency((i.balance || 0) - (i.totalPagado || 0))}</td>
-                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
-                    <button className="icon-btn" title="Editar" onClick={() => openEditInversor(i)}>✎</button>
-                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button>
+                  <td className="row-actions" onClick={e => e.stopPropagation()}>
+                    <div className="row-actions-inner">
+                      <button className="icon-btn" title="Editar" onClick={() => openEditInversor(i)}>✎</button>
+                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2626,9 +2639,11 @@ function FinanzasPage() {
                   <td className="muted">{c.moneda}</td>
                   <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
                   <td className="muted" style={{ fontSize: 11 }}>{c.notas || '—'}</td>
-                  <td style={{ display: 'flex', gap: 4 }}>
-                    <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
-                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button>
+                  <td className="row-actions">
+                    <div className="row-actions-inner">
+                      <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
+                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -3782,9 +3797,11 @@ function VentasPageExt({ period }) {
                     <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
                     <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
                     <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
-                    <td style={{ display: 'flex', gap: 4 }}>
-                      <button className="icon-btn" onClick={() => setEdit(v)} title="Editar header">✎</button>
-                      <button className="icon-btn danger" onClick={() => setDel(v)} title="Eliminar">×</button>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <div style={{ display: 'inline-flex', gap: 4 }}>
+                        <button className="icon-btn" onClick={() => setEdit(v)} title="Editar header">✎</button>
+                        <button className="icon-btn danger" onClick={() => setDel(v)} title="Eliminar">×</button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -3920,22 +3937,24 @@ function MovimientosPage({ period, onNavigate }) {
                   <td className={`num right ${neto > 0 ? 'pos' : neto < 0 ? 'neg' : 'muted'}`}>
                     {neto > 0 ? '+' : ''}{fmtCurrency(neto)}
                   </td>
-                  <td style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                    {source ? (
-                      <button
-                        onClick={() => onNavigate?.(source.page)}
-                        title={`Este movimiento vino de ${source.kind}. Edítalo allá para que se recalculen ganancia/totales.`}
-                        style={{
-                          background: 'transparent', border: '1px solid var(--border)',
-                          color: 'var(--accent)', cursor: 'pointer', fontSize: 11,
-                          padding: '4px 8px', borderRadius: 4, whiteSpace: 'nowrap',
-                        }}>
-                        {source.label} →
-                      </button>
-                    ) : (
-                      <button className="icon-btn" onClick={() => setEdit(m)} title="Editar (movimiento manual)">✎</button>
-                    )}
-                    <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
+                  <td className="row-actions">
+                    <div className="row-actions-inner">
+                      {source ? (
+                        <button
+                          onClick={() => onNavigate?.(source.page)}
+                          title={`Este movimiento vino de ${source.kind}. Edítalo allá para que se recalculen ganancia/totales.`}
+                          style={{
+                            background: 'transparent', border: '1px solid var(--border)',
+                            color: 'var(--accent)', cursor: 'pointer', fontSize: 11,
+                            padding: '4px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                          }}>
+                          {source.label} →
+                        </button>
+                      ) : (
+                        <button className="icon-btn" onClick={() => setEdit(m)} title="Editar (movimiento manual)">✎</button>
+                      )}
+                      <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
+                    </div>
                   </td>
                 </tr>
               );
