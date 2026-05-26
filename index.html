@@ -1226,6 +1226,7 @@ function LotesTab() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [del, setDel] = useState(null);
+  const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
 
   let filtered = lotes;
@@ -1251,6 +1252,25 @@ function LotesTab() {
     } catch (e) {
       window.toastErr('No se pudo eliminar', e.message?.slice(0, 120));
     }
+    setBusy(false);
+  };
+
+  const doSaveEdit = async (vals) => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.updateLoteHeader(edit.id, {
+        fecha:     vals.fecha,
+        status:    vals.status,
+        proveedor: vals.proveedor,
+        envio:     vals.envio     === '' ? 0 : Number(vals.envio),
+        courier:   vals.courier   === '' ? 0 : Number(vals.courier),
+        otros:     vals.otros     === '' ? 0 : Number(vals.otros),
+        impuestos: vals.impuestos === '' ? 0 : Number(vals.impuestos),
+        notas:     vals.notas,
+      });
+      window.toastOk('Lote actualizado', `${edit.id}`);
+      setEdit(null);
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
     setBusy(false);
   };
 
@@ -1287,7 +1307,10 @@ function LotesTab() {
                 <td className="num right">{l.envio > 0 ? fmtCurrency(l.envio) : '—'}</td>
                 <td className="num right">{l.courier > 0 ? fmtCurrency(l.courier) : '—'}</td>
                 <td className="num right">{l.otros > 0 ? fmtCurrency(l.otros) : '—'}</td>
-                <td><button className="icon-btn danger" onClick={() => setDel(l)}>×</button></td>
+                <td style={{ display: 'flex', gap: 4 }}>
+                  <button className="icon-btn" title="Editar" onClick={() => setEdit(l)}>✎</button>
+                  <button className="icon-btn danger" title="Eliminar" onClick={() => setDel(l)}>×</button>
+                </td>
               </tr>
             );
           })}
@@ -1299,6 +1322,22 @@ function LotesTab() {
         body={`${del?.skus?.length || 0} entrada(s) · ${del?.proveedor || ''} · ${fmtDate(del?.fecha || '')}. Borra entradas, lote header y CFs satélites linkeados (envío/courier/otros) en cascada. No reversible.`}
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
+
+      <EditModal open={!!edit} busy={busy}
+        title={`Editar lote ${edit?.id}`}
+        fields={edit ? [
+          { name: 'fecha',     label: 'Fecha',            type: 'date',   value: edit.fecha },
+          { name: 'status',    label: 'Status',           type: 'select', value: edit.status,
+            options: [{value:'En Camino',label:'En Camino'},{value:'Recibido',label:'Recibido'},{value:'Perdido',label:'Perdido'}] },
+          { name: 'proveedor', label: 'Proveedor',        type: 'text',   value: edit.proveedor || '' },
+          { name: 'envio',     label: 'Envío (RD$)',      type: 'number', value: edit.envio || 0 },
+          { name: 'courier',   label: 'Courier (RD$)',    type: 'number', value: edit.courier || 0 },
+          { name: 'otros',     label: 'Otros (RD$)',      type: 'number', value: edit.otros || 0 },
+          { name: 'impuestos', label: 'Impuestos (RD$)',  type: 'number', value: edit.impuestos || 0 },
+          { name: 'notas',     label: 'Notas',            type: 'text',   value: edit.notas || '', span: 2 },
+        ] : []}
+        onCancel={() => setEdit(null)}
+        onSave={doSaveEdit} />
     </>
   );
 }
