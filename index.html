@@ -2268,24 +2268,22 @@ function filterByPeriod(arr, period, dateKey = 'f') {
 // Registrar Page (3 sub-tabs: Venta · Lote · Movimiento Financiero)
 // ════════════════════════════════════════════════════════════════
 function RegistrarPage() {
-  const [tab, setTab] = useState('venta');
+  const [tab, setTab] = useState('lote');
   return (
     <>
       <div className="topbar">
         <div>
           <h1>Registrar</h1>
-          <div className="sub">Crea nuevas ventas, entradas de lote y movimientos financieros · datos van a Supabase</div>
+          <div className="sub">Crea entradas de lote, movimientos financieros, SKUs y ajustes · datos van a Supabase. (Nueva venta vive ahora en la página Ventas.)</div>
         </div>
       </div>
       <div className="tabs">
-        <button className={`tab ${tab === 'venta' ? 'active' : ''}`} onClick={() => setTab('venta')}>Nueva venta</button>
         <button className={`tab ${tab === 'lote' ? 'active' : ''}`} onClick={() => setTab('lote')}>Nuevo lote</button>
         <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>Movimiento financiero</button>
         <button className={`tab ${tab === 'sku' ? 'active' : ''}`} onClick={() => setTab('sku')}>Nuevo SKU</button>
         <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>Ajuste CF</button>
       </div>
       <div className="section">
-        {tab === 'venta'  && <FormVenta />}
         {tab === 'lote'   && <FormLote />}
         {tab === 'movfin' && <FormMovFin />}
         {tab === 'sku'    && <FormSKU />}
@@ -2790,6 +2788,7 @@ function VentasPageExt({ period }) {
   const [del, setDel] = useState(null);
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState('lista');
 
   const filteredPeriod = filterByPeriod(allVentas, period, 'fecha');
   const filtered = filteredPeriod.filter(v => {
@@ -2830,12 +2829,26 @@ function VentasPageExt({ period }) {
           <h1>Ventas</h1>
           <div className="sub">{allVentas.length} ventas totales · {filteredPeriod.length} en período</div>
         </div>
-        <div className="topbar-actions">
-          <input className="input" style={{ width: 180 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
-          <span className="pill">{filtered.length} mostrando</span>
-        </div>
+        {tab === 'lista' && (
+          <div className="topbar-actions">
+            <input className="input" style={{ width: 180 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+            <span className="pill">{filtered.length} mostrando</span>
+          </div>
+        )}
       </div>
 
+      <div className="tabs">
+        <button className={`tab ${tab === 'lista' ? 'active' : ''}`} onClick={() => setTab('lista')}>Lista de ventas</button>
+        <button className={`tab ${tab === 'nueva' ? 'active' : ''}`} onClick={() => setTab('nueva')}>+ Nueva venta</button>
+      </div>
+
+      {tab === 'nueva' && (
+        <div className="section">
+          <FormVenta />
+        </div>
+      )}
+
+      {tab === 'lista' && (
       <div className="section">
         <table className="data">
           <thead><tr>
@@ -2864,6 +2877,7 @@ function VentasPageExt({ period }) {
           </tbody>
         </table>
       </div>
+      )}
 
       <ConfirmModal open={!!del} danger busy={busy}
         title={`¿Eliminar venta ${del?.idVenta}?`}
