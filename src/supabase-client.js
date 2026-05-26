@@ -347,27 +347,37 @@ async function loadEntradas() {
 }
 
 // ── Cashflow ────────────────────────────────────────────────────
+// Lee de la tabla `movimientos` directamente (no de vw_cashflow), para
+// incluir TODOS los movimientos (operacionales + financieros). Esto matchea
+// el comportamiento de la antigua tabla Airtable "Cashflow" que mezclaba
+// ambas naturalezas, y permite que COOP/ANDREA/BHD overrides funcionen
+// filtrando por categoría desde CF_ALL.
 async function loadCashflow() {
   try {
     const { data, error } = await sb
-      .from('vw_cashflow')
-      .select('*')
+      .from('movimientos')
+      .select(`
+        id, fecha, tipo, entrada, salida, naturaleza, notas,
+        cuenta:cuentas!cuenta_id ( nombre ),
+        contraparte:contrapartes!contraparte_id ( nombre )
+      `)
       .order('fecha', { ascending: false })
-      .limit(2000);
+      .limit(5000);
     if (error) throw error;
     const cf = (data || []).map((r) => ({
-      f:   r.fecha,
-      c:   TIPO_MAP[r.tipo] || r.tipo || 'Otro',
-      a:   r.contraparte || '',
-      e:   parseFloat(r.entrada) || 0,
-      s:   parseFloat(r.salida)  || 0,
+      f:           r.fecha,
+      c:           TIPO_MAP[r.tipo] || r.tipo || 'Otro',
+      a:           r.contraparte?.nombre || '',
+      e:           parseFloat(r.entrada) || 0,
+      s:           parseFloat(r.salida)  || 0,
       _src:        'supabase · cf',
-      _origen:     r.cuenta,
+      _origen:     r.cuenta?.nombre,
+      _naturaleza: r.naturaleza,
       _airtableId: 'cf-' + r.id,
     }));
     window.__AIRTABLE_DATA__.cashflow = cf;
     _dispatch('cashflow', cf.length);
-    console.log(`✓ [SB/cashflow] ${cf.length} movimientos`);
+    console.log(`✓ [SB/cashflow] ${cf.length} movimientos (operacionales + financieros)`);
     return cf;
   } catch (e) {
     console.error('✕ [SB/cashflow] falló:', e.message);
@@ -1131,6 +1141,179 @@ Object.assign(window.AT.fields, {
   cashflow:   { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar',
                 entrada: 'entrada', salida: 'salida', notas: 'notas' },
   financiero: { totalPagado: 'totalPagado', balancePendiente: 'balancePendiente' },
+});
+
+/* ════════════════════════ Override globals (CF_ALL, CF_MES, MES, COOP, ANDREA, BHD) ════════════════════════
+   Los paneles ya consumen window.__AIRTABLE_DATA__ vía useAirtableTable
+   hook PARA SUS PROPIOS RENDERS, pero algunas piezas (ticker, footer,
+   paneles financieros, gráficos mensuales) todavía leen los globals
+   hardcoded de data.js. Acá los sobrescribimos con datos reales para que
+   todo el dashboard se vea consistente. Mismo patrón que VENTAS_SKU/EN_CAMINO.
+
+   Llamar a _overrideGlobals() después de que carguen ventas + cashflow +
+   financiero. Dispara airtable-loaded con table='globals' para forzar
+   re-render de cualquier componente que esté suscrito.                  */
+
+const _MES_LABELS = {
+  '01': 'Ene', '02': 'Feb', '03': 'Mar', '04': 'Abr', '05': 'May', '06': 'Jun',
+  '07': 'Jul', '08': 'Ago', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dic',
+};
+function _ymToLabel(ym) {
+  const mm = ym.slice(5, 7);
+  const yy = ym.slice(2, 4);
+  return `${_MES_LABELS[mm] || mm}-${yy}`;
+}
+
+function _overrideGlobals() {
+  const D = window.__AIRTABLE_DATA__;
+  if (!D) return;
+
+  // ── CF_ALL: lista plana de cashflow ──
+  if (Array.isArray(D.cashflow)) {
+    window.CF_ALL = D.cashflow.slice();
+  }
+
+  // ── CF_MES: cashflow agregado por mes ──
+  if (Array.isArray(D.cashflow)) {
+    const buckets = {};
+    D.cashflow.forEach((r) => {
+      const ym = (r.f || '').slice(0, 7);
+      if (!ym) return;
+      if (!buckets[ym]) buckets[ym] = { e: 0, s: 0 };
+      buckets[ym].e += r.e || 0;
+      buckets[ym].s += r.s || 0;
+    });
+    window.CF_MES = Object.keys(buckets)
+      .sort()
+      .map((ym) => ({ m: _ymToLabel(ym), e: buckets[ym].e, s: buckets[ym].s }));
+  }
+
+  // ── MES: P&L mensual real (reemplaza el array hardcoded) ──
+  if (Array.isArray(D.ventas) && Array.isArray(D.cashflow)) {
+    const vmap = {};
+    D.ventas.forEach((v) => {
+      const ym = (v.fecha || '').slice(0, 7);
+      if (!ym) return;
+      if (!vmap[ym]) vmap[ym] = { v: 0, g: 0 };
+      vmap[ym].v += v.precioFacturadoTotal || 0;
+      vmap[ym].g += v.gananciaTotal        || 0;
+    });
+    // Capital cierre = balance acumulado al fin del mes (cashflow)
+    const sorted = D.cashflow.slice().sort((a, b) => (a.f < b.f ? -1 : 1));
+    let running = 0;
+    const cmap = {};
+    sorted.forEach((r) => {
+      running += (r.e || 0) - (r.s || 0);
+      const ym = (r.f || '').slice(0, 7);
+      if (ym) cmap[ym] = running;
+    });
+    const allMonths = Array.from(new Set([...Object.keys(vmap), ...Object.keys(cmap)])).sort();
+    window.MES = allMonths.map((ym) => {
+      const v = vmap[ym]?.v || 0;
+      const g = vmap[ym]?.g || 0;
+      return {
+        m: _ymToLabel(ym),
+        v,
+        g,
+        p: v > 0 ? Number(((g / v) * 100).toFixed(2)) : 0,
+        c: cmap[ym] || 0,
+        f: `${ym}-01`,
+      };
+    });
+  }
+
+  // ── COOP (préstamo Cooperativa) ──
+  if (Array.isArray(D.financiero) && Array.isArray(D.cashflow)) {
+    const coop = D.financiero.find((f) =>
+      /préstamo|prestamo/i.test(f.tipo) && /coop/i.test(f.nombre)
+    );
+    if (coop) {
+      const pagosCF = D.cashflow.filter((m) => m.c === 'Pago Prestamo');
+      const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
+      window.COOP = {
+        nombre:       'Préstamo Cooperativa',
+        inicio:       coop.fechaInicio || '2026-02-14',
+        monto:        coop.montoTotal || 115000,
+        saldo:        Math.max(0, (coop.montoTotal || 115000) - pagado),
+        pagado,
+        tasa:         (coop.tasaMensual || 0.0167) * 100,
+        seguro:       coop.seguroMensual || 66.7,
+        cuota:        3568.64,
+        abonoMin5pct: Math.max(0, (coop.montoTotal || 115000) - pagado) * 0.05,
+        abonoAcum:    0,
+        pagos: pagosCF.map((m, i) => ({
+          mes:     _ymToLabel(m.f.slice(0, 7)),
+          total:   m.s,
+          capital: 0, interes: 0, seguro: 0, abono: 0,
+          nota:    m.a || `Cuota ${i + 1}`,
+        })),
+      };
+    }
+  }
+
+  // ── ANDREA (inversora) ──
+  if (Array.isArray(D.financiero) && Array.isArray(D.cashflow)) {
+    const inv = D.financiero.find((f) => /inversor/i.test(f.tipo));
+    if (inv) {
+      const pagosCF = D.cashflow.filter((m) => m.c === 'Pago a Inversores');
+      const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
+      window.ANDREA = {
+        nombre:    inv.nombre || 'Andrea Correa',
+        inicio:    inv.fechaInicio || '2026-02-14',
+        aporte:    inv.montoTotal || 50000,
+        retorno:   inv.balance    || 100000,
+        pagado,
+        pendiente: (inv.balance || 100000) - pagado,
+        pagos: pagosCF.map((m) => ({
+          mes:   _ymToLabel(m.f.slice(0, 7)),
+          monto: m.s,
+        })),
+      };
+    }
+  }
+
+  // ── BHD (línea de crédito) ──
+  if (Array.isArray(D.financiero) && Array.isArray(D.cashflow)) {
+    const bhd = D.financiero.find((f) =>
+      /línea|linea/i.test(f.tipo) && /bhd/i.test(f.nombre)
+    );
+    if (bhd) {
+      // 'usado' = drawdowns netos − pagos a línea. Aproximación desde cashflow:
+      //   entradas categoría 'Otro' con auxiliar tipo BHD = drawdowns
+      //   salidas categoría 'Pago Linea de Credito' = pagos a línea
+      const drawdowns = D.cashflow.filter(
+        (m) => m.e > 0 && /bhd|linea/i.test(m.a || '') && (m.c === 'Otro' || m.c === 'Pago Linea de Credito')
+      );
+      const pagosLinea = D.cashflow.filter((m) => m.c === 'Pago Linea de Credito');
+      const usado  = drawdowns.reduce((s, m) => s + (m.e || 0), 0)
+                   - pagosLinea.reduce((s, m) => s + (m.s || 0), 0);
+      window.BHD = {
+        id:          bhd.idFin || 'FIN-003',
+        nombre:      'Línea de Crédito BHD',
+        limite:      bhd.montoTotal || 112000,
+        usado:       Math.max(0, usado),
+        tasaAnual:   26,
+        tasaMensual: 26 / 12,
+        pagado:      pagosLinea.reduce((s, m) => s + (m.s || 0), 0),
+        pagos:       pagosLinea.map((m) => ({ mes: _ymToLabel(m.f.slice(0, 7)), monto: m.s })),
+        nota:        bhd.notas || `Línea BHD · 26% anual (~2.17% mensual).`,
+      };
+    }
+  }
+
+  // Notificar a paneles que escuchan
+  _dispatch('globals', 0);
+}
+
+// Auto-run el override cuando cargan las tablas relevantes. Idempotente.
+let _overrideTimer = null;
+window.addEventListener('airtable-loaded', (e) => {
+  const t = e.detail?.table;
+  if (t === 'cashflow' || t === 'ventas' || t === 'financiero' || t === 'productos') {
+    // Debounce: evita correr 5 veces en el burst de loaders iniciales
+    if (_overrideTimer) clearTimeout(_overrideTimer);
+    _overrideTimer = setTimeout(_overrideGlobals, 80);
+  }
 });
 
 /* ════════════════════════ Exports + boot ════════════════════════ */

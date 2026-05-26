@@ -58,9 +58,12 @@ function TerminalHeader({ activePanel, filter }) {
 
 function TerminalTicker({ show }) {
   const T = useTheme();
+  // Re-renderizar cuando supabase actualiza el cashflow
+  useAirtableTable('cashflow');
   if (!show) return null;
-  // pick the latest 16 movements, marquee them
-  const items = CF_ALL.slice(0, 16).map((m) => {
+  // Preferir cashflow real de Supabase; fallback al hardcoded CF_ALL.
+  const source = (window.__AIRTABLE_DATA__?.cashflow?.length ? window.__AIRTABLE_DATA__.cashflow : CF_ALL);
+  const items = source.slice(0, 16).map((m) => {
     const v = m.e - m.s;
     const sign = v >= 0 ? '+' : '-';
     const amt = Math.abs(v).toLocaleString('es-DO', { maximumFractionDigits: 0 });
@@ -167,6 +170,14 @@ function TerminalMobileTabs({ active, onChange }) {
 
 function TerminalFooter() {
   const T = useTheme();
+  // Suscríbete a las tablas para que el footer reactivo se actualice
+  useAirtableTable('ventas');
+  useAirtableTable('skus');
+  useAirtableTable('cashflow');
+  const D = window.__AIRTABLE_DATA__ || {};
+  const nVentas = D.ventas?.length ?? 189;
+  const nSkus   = D.skus?.length   ?? 43;
+  const nCF     = D.cashflow?.length ?? 361;
   return (
     <div style={{
       display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'center',
@@ -176,10 +187,10 @@ function TerminalFooter() {
       <span style={{ color: T.hot, display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 6, height: 6, background: T.hot, display: 'inline-block' }} /> JAMC.TECH
       </span>
-      <span>189 VENTAS</span>
-      <span>43 SKUS</span>
-      <span>361 MOV.CF</span>
-      <span style={{ marginLeft: 'auto', color: T.t3 }}>SYNC 20-MAY-2026 · BUILD v2.3</span>
+      <span>{nVentas} VENTAS</span>
+      <span>{nSkus} SKUS</span>
+      <span>{nCF} MOV.CF</span>
+      <span style={{ marginLeft: 'auto', color: T.t3 }}>SYNC {HOY.toUpperCase()} · BUILD v2.4</span>
     </div>
   );
 }
