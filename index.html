@@ -1613,8 +1613,8 @@ function InventarioPage() {
 
       <div className="tabs">
         <button className={`tab ${subtab === 'skus' ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
-        <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
         <button className={`tab ${subtab === 'nuevo-sku' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-sku')}>+ Nuevo SKU</button>
+        <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
         <button className={`tab ${subtab === 'nuevo-lote' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-lote')}>+ Nuevo lote</button>
       </div>
 
