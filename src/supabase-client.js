@@ -784,6 +784,21 @@ function _stripPrefix(id) {
   return m ? Number(m[1]) : s;
 }
 
+// ──── Tracking de writes recientes para auto-linkage / dedupe ────
+// El wizard de paneles invoca:
+//   createLote(...) + N × create('cashflow', satéliteN)   (legítimos, deben linkearse)
+//   createMovFin(...) + create('cashflow', dupCF)         (duplicado, debe suprimirse)
+// Sin esto los CFs satélites quedan huérfanos (lote borrado pero CFs viven) o
+// duplican el monto en cashflow (MovFin + su CF mirror). Ventana corta para
+// no afectar inputs manuales del usuario en el panel ADJUSTE MANUAL CF.
+const _CF_LINK_TTL_MS = 8000;
+let _lastLote   = null;  // { loteIdNum, fecha, ts }
+let _lastMovFin = null;  // { movId, fecha, monto, ts }
+function _recordLote(loteIdNum, fecha)   { _lastLote   = { loteIdNum, fecha, ts: Date.now() }; }
+function _recordMovFin(movId, fecha, monto) { _lastMovFin = { movId, fecha, monto, ts: Date.now() }; }
+function _recentLote()   { return _lastLote   && (Date.now() - _lastLote.ts)   < _CF_LINK_TTL_MS ? _lastLote   : null; }
+function _recentMovFin() { return _lastMovFin && (Date.now() - _lastMovFin.ts) < _CF_LINK_TTL_MS ? _lastMovFin : null; }
+
 function HOY_ISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -990,6 +1005,11 @@ async function createLote(lote) {
     if (loteId) await sb.from('lotes').delete().eq('id', loteId);
     throw new Error(`createLote entradas: ${e1.message}`);
   }
+  // Trackea el lote recién creado para que los próximos create('cashflow')
+  // (CFs satélites del wizard: envío, courier, otros, compra) se linkeen
+  // automáticamente vía movimientos.lote_id. Esto permite que removeLote
+  // también los borre en cascada.
+  if (loteId) _recordLote(loteId, lote.fecha);
   await loadEntradas();
   const newLote = (window.__AIRTABLE_DATA__.lotes || []).find(
     (l) => loteCodigo ? l.id === loteCodigo : l.skus.some((s) => (created || []).some((c) => c.id === Number(String(s._airtableId).replace('e-', ''))))
@@ -1006,6 +1026,16 @@ async function removeLote(loteDashId) {
   const lote = (window.__AIRTABLE_DATA__?.lotes || []).find((l) => l.id === loteDashId);
   if (!lote) throw new Error(`lote no encontrado: ${loteDashId}`);
   const numIds = (lote.skus || []).map((s) => Number(String(s._airtableId).replace('e-', ''))).filter(Number.isFinite);
+  // ── Borra los CFs satélites linkeados via lote_id (envío, courier, otros,
+  //    compra) creados por el wizard al registrar este lote. Sin esto quedan
+  //    huérfanos en cashflow. (No-op si no hubo wizard CFs.)
+  let cfsBorrados = 0;
+  if (lote._loteIdNum) {
+    const { data: cfsDel, error: eCF } = await sb.from('movimientos')
+      .delete().eq('lote_id', lote._loteIdNum).select('id');
+    if (eCF) console.warn(`[SB/removeLote] cleanup CFs falló: ${eCF.message}`);
+    else cfsBorrados = (cfsDel || []).length;
+  }
   // Borra todas las entradas
   if (numIds.length > 0) {
     const { error } = await sb.from('entradas').delete().in('id', numIds);
@@ -1016,13 +1046,18 @@ async function removeLote(loteDashId) {
     const { error } = await sb.from('lotes').delete().eq('id', lote._loteIdNum);
     if (error) throw new Error(`removeLote header: ${error.message}`);
   }
-  // Sincroniza cache
+  // Sincroniza cache local
   if (window.__AIRTABLE_DATA__.lotes) {
     window.__AIRTABLE_DATA__.lotes       = window.__AIRTABLE_DATA__.lotes.filter((l) => l.id !== loteDashId);
     window.__AIRTABLE_DATA__.entradasRaw = (window.__AIRTABLE_DATA__.entradasRaw || []).filter((e) => !numIds.includes(Number(String(e._airtableId).replace('e-', ''))));
+    if (cfsBorrados > 0 && window.__AIRTABLE_DATA__.cashflow) {
+      // Refresca cashflow desde Supabase para que los CFs borrados desaparezcan
+      // del tail y los KPIs se recalculen.
+      loadCashflow();
+    }
     _dispatch('entradas', window.__AIRTABLE_DATA__.lotes.length);
   }
-  return { loteId: loteDashId, deletedCount: numIds.length };
+  return { loteId: loteDashId, deletedCount: numIds.length, cfsBorrados };
 }
 
 async function updateLoteHeader(loteDashId, patch) {
@@ -1105,6 +1140,11 @@ async function createMovFin(data) {
   const { data: ins, error } = await sb.from('movimientos').insert(row).select().single();
   if (error) throw new Error(`createMovFin: ${error.message}`);
 
+  // Trackea el movFin recién creado para que el próximo create('cashflow')
+  // (CF mirror del wizard) se SUPRIMA — el movimiento PAGO_PRESTAMO ya creado
+  // arriba representa ambos: la operación financiera Y el cash flow.
+  _recordMovFin(ins.id, ins.fecha, monto);
+
   // Actualiza cache movFin
   const mapped = {
     _airtableId: 'mf-' + ins.id,
@@ -1147,18 +1187,43 @@ async function removeMovFin(airtableId) {
 
 async function create(tableKey, fields) {
   if (tableKey === 'cashflow') {
+    const fecha   = fields.fecha;
+    const entrada = Number(fields.entrada) || 0;
+    const salida  = Number(fields.salida)  || 0;
+    const monto   = entrada || salida;
+
+    // ── Dedupe: el wizard de panel-fin-productos llama create('cashflow')
+    // después de createMovFin para mirror el cash flow. Pero en Supabase
+    // el movimiento PAGO_PRESTAMO/PAGO_INVERSOR/etc creado por createMovFin
+    // YA representa el cash flow. El CF del wizard sería un duplicado.
+    // Detectamos: misma fecha, mismo monto (±1 RD$), dentro de TTL.
+    const mf = _recentMovFin();
+    if (mf && mf.fecha === fecha && Math.abs(mf.monto - monto) < 1) {
+      console.log(`· [SB/create cashflow] suprimido (mirror de MovFin mf-${mf.movId})`);
+      return { id: 'cf-' + mf.movId, fields, _dedup: true };
+    }
+
     const row = {
-      fecha:          fields.fecha,
+      fecha,
       tipo:           TIPO_REV[fields.cuenta] || 'OTROS',
-      cuenta_id:      DEFAULT_CUENTA_ID,                                            // sin info del bank, asumimos BHD
+      cuenta_id:      DEFAULT_CUENTA_ID,
       contraparte_id: _findContraparteId(fields.auxiliar, DEFAULT_CONTRAPARTE_ID),
-      entrada:        Number(fields.entrada) || 0,
-      salida:         Number(fields.salida)  || 0,
+      entrada,
+      salida,
       notas:          fields.notas || `${fields.cuenta || ''} | ${fields.auxiliar || ''}`,
     };
+
+    // ── Auto-link: si hubo un createLote reciente, este CF es un satélite
+    // (envío, courier, otros, compra) del lote — linkear via lote_id para
+    // que removeLote pueda cascadear el cleanup.
+    const lt = _recentLote();
+    if (lt && lt.fecha === fecha) {
+      row.lote_id = lt.loteIdNum;
+    }
+
     const { data, error } = await sb.from('movimientos').insert(row).select().single();
     if (error) throw new Error(`create cashflow: ${error.message}`);
-    return { id: 'cf-' + data.id, fields }; // shape compat con airtable response
+    return { id: 'cf-' + data.id, fields };
   }
   throw new Error(`create(${tableKey}) no implementado en supabase-client`);
 }
