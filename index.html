@@ -2858,7 +2858,13 @@ function FormLote() {
   const [courier, setCourier] = useState(0);
   const [otros, setOtros] = useState(0);
   const [notas, setNotas] = useState('');
-  const [cuentaOrigen, setCuentaOrigen] = useState('BHD Debito');
+  // Cuenta de origen por cada tipo de costo. Default todos a BHD Debito;
+  // el usuario puede cambiar cada uno individualmente si pagaron con
+  // distintas cuentas/tarjetas (ej. mercancía en débito, envío en tarjeta).
+  const [cuentaMercancia, setCuentaMercancia] = useState('BHD Debito');
+  const [cuentaEnvio,     setCuentaEnvio]     = useState('BHD Debito');
+  const [cuentaCourier,   setCuentaCourier]   = useState('BHD Debito');
+  const [cuentaOtros,     setCuentaOtros]     = useState('BHD Debito');
   const [lineas, setLineas] = useState([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
   const [busy, setBusy] = useState(false);
 
@@ -2889,10 +2895,12 @@ function FormLote() {
       // el outflow real del lote. Los CFs creados con loteId se linkean al lote
       // vía movimientos.lote_id (gracias a _recordLote), así removeLote los
       // borra en cascada.
+      // Cada costo sale de su propia cuenta (mercancía puede ser débito,
+      // envío con tarjeta de crédito Scotia, courier en efectivo, etc.)
       const cfPromises = [];
       if (costoBase > 0) {
         cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaOrigen, auxiliar: proveedor,
+          fecha, cuenta: cuentaMercancia, auxiliar: proveedor,
           concepto: 'Compra de mercancia', tipo: 'COMPRA_MERCANCIA',
           entrada: 0, salida: costoBase,
           notas: `Lote ${res.loteId} · costo base`,
@@ -2900,7 +2908,7 @@ function FormLote() {
       }
       if (Number(envio) > 0) {
         cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaOrigen, auxiliar: proveedor,
+          fecha, cuenta: cuentaEnvio, auxiliar: proveedor,
           concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
           entrada: 0, salida: Number(envio),
           notas: `Lote ${res.loteId} · envío China→USA`,
@@ -2908,7 +2916,7 @@ function FormLote() {
       }
       if (Number(courier) > 0) {
         cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaOrigen, auxiliar: 'Courier',
+          fecha, cuenta: cuentaCourier, auxiliar: 'Courier',
           concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
           entrada: 0, salida: Number(courier),
           notas: `Lote ${res.loteId} · courier USA→DR`,
@@ -2916,14 +2924,21 @@ function FormLote() {
       }
       if (Number(otros) > 0) {
         cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaOrigen, auxiliar: 'Aduana',
+          fecha, cuenta: cuentaOtros, auxiliar: 'Aduana',
           concepto: 'Otro', tipo: 'OTROS',
           entrada: 0, salida: Number(otros),
           notas: `Lote ${res.loteId} · otros (aduana/comisión)`,
         }).catch(e => console.warn('CF otros falló:', e.message)));
       }
       await Promise.all(cfPromises);
-      window.toastOk('Lote registrado', `${res.loteId} · ${lineasValidas.length} SKU(s) · ${fmtCurrency(total)} desde ${cuentaOrigen}`);
+      // Resumen del desglose de cuentas usado en el toast
+      const cuentasUsadas = [...new Set([
+        costoBase > 0 ? cuentaMercancia : null,
+        Number(envio)   > 0 ? cuentaEnvio   : null,
+        Number(courier) > 0 ? cuentaCourier : null,
+        Number(otros)   > 0 ? cuentaOtros   : null,
+      ].filter(Boolean))];
+      window.toastOk('Lote registrado', `${res.loteId} · ${lineasValidas.length} SKU(s) · ${fmtCurrency(total)} desde ${cuentasUsadas.join(', ')}`);
       setEnvio(0); setCourier(0); setOtros(0); setNotas('');
       setLineas([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
     } catch (e) {
@@ -2991,32 +3006,54 @@ function FormLote() {
         <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
       </div>
 
+      {/* Costos del lote — cada costo con su propia cuenta de origen.
+          Útil cuando pagas mercancía con débito y envío con tarjeta de crédito,
+          o courier en efectivo, etc. */}
       <div>
-        <div className="field-label" style={{ marginBottom: 8 }}>Costos compartidos (se prorratean ponderados por valor base)</div>
-        <div className="row-3">
-          <div className="field">
-            <div className="field-label">Envío China → USA (RD$)</div>
-            <input className="input num" type="number" value={envio} onChange={e => setEnvio(e.target.value)} />
-          </div>
-          <div className="field">
-            <div className="field-label">Courier USA → DR (RD$)</div>
-            <input className="input num" type="number" value={courier} onChange={e => setCourier(e.target.value)} />
-          </div>
-          <div className="field">
-            <div className="field-label">Otros (aduana, comisión) (RD$)</div>
-            <input className="input num" type="number" value={otros} onChange={e => setOtros(e.target.value)} />
-          </div>
-        </div>
-      </div>
-
-      <div className="field">
-        <div className="field-label">¿De dónde salió el dinero? · cuenta de origen</div>
-        <select className="select" value={cuentaOrigen} onChange={e => setCuentaOrigen(e.target.value)}>
-          {cuentas.length > 0
-            ? cuentas.map(c => <option key={c.id} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
-            : <><option value="BHD Debito">BHD Debito (DEBITO)</option><option value="Efectivo">Efectivo</option><option value="Scotia RD">Scotia RD (CREDITO)</option><option value="Scotia USD">Scotia USD (CREDITO)</option><option value="Qik">Qik (CREDITO)</option></>}
-        </select>
-        <div className="field-hint">Se generarán {[costoBase > 0, Number(envio) > 0, Number(courier) > 0, Number(otros) > 0].filter(Boolean).length} movimiento(s) de salida desde esta cuenta</div>
+        <div className="field-label" style={{ marginBottom: 8 }}>Costos del lote · ¿de dónde salió cada uno?</div>
+        {(() => {
+          const cuentasOpts = cuentas.length > 0
+            ? cuentas.map(c => ({ value: c.nombre, label: `${c.nombre} (${c.tipo})` }))
+            : [
+                { value: 'BHD Debito',  label: 'BHD Debito (DEBITO)' },
+                { value: 'Efectivo',    label: 'Efectivo' },
+                { value: 'Scotia RD',   label: 'Scotia RD (CREDITO)' },
+                { value: 'Scotia USD',  label: 'Scotia USD (CREDITO)' },
+                { value: 'Qik',         label: 'Qik (CREDITO)' },
+              ];
+          const renderCostRow = (label, hint, value, setValue, cuenta, setCuenta, readonly) => (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 1.4fr', gap: 'var(--s-3)', alignItems: 'end', marginBottom: 8 }}>
+              <div className="field">
+                <div className="field-label">{label}</div>
+                {hint && <div className="field-hint">{hint}</div>}
+              </div>
+              <div className="field">
+                <div className="field-label">Monto (RD$)</div>
+                {readonly ? (
+                  <div className="input num" style={{ display: 'flex', alignItems: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                    {fmtCurrency(value)}
+                  </div>
+                ) : (
+                  <input className="input num" type="number" value={value} onChange={e => setValue(e.target.value)} placeholder="0" />
+                )}
+              </div>
+              <div className="field">
+                <div className="field-label">Cuenta origen</div>
+                <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)} disabled={!Number(value)}>
+                  {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+            </div>
+          );
+          return (
+            <>
+              {renderCostRow('Mercancía (costo base)',     'Auto-calculado desde los SKUs arriba',                  costoBase, null,        cuentaMercancia, setCuentaMercancia, true)}
+              {renderCostRow('Envío China → USA',          'Shipping de la mercancía al hub en USA',                envio,     setEnvio,    cuentaEnvio,    setCuentaEnvio)}
+              {renderCostRow('Courier USA → DR',           'Lo que paga el courier desde USA a DR',                 courier,   setCourier,  cuentaCourier,  setCuentaCourier)}
+              {renderCostRow('Otros (aduana, comisión)',   'Aduana, fee bancario, comisión de proveedor, etc.',     otros,     setOtros,    cuentaOtros,    setCuentaOtros)}
+            </>
+          );
+        })()}
       </div>
 
       <div className="summary">
