@@ -663,9 +663,14 @@ function _buildFinancieroProductos() {
       const tasaMensualPct = (r.tasaMensual && r.tasaMensual > 0)
         ? r.tasaMensual * 100   // decimal → percentage
         : 26 / 12;              // 2.17% mensual (default BHD)
+      // tipoSub correcto según r.tipo del backend: distingue línea vs tarjeta
+      // para que el frontend pueda separarlas en tabs distintos. Antes esto
+      // era hardcoded a 'Línea Revolvente' y todas las tarjetas terminaban
+      // en el tab Préstamos.
+      const isTarjeta = /tarjeta/i.test(r.tipo || '');
       productos['FIN-LC'].push({
         ...base,
-        tipoSub:     'Línea Revolvente',
+        tipoSub:     isTarjeta ? 'Tarjeta de Crédito' : 'Línea Revolvente',
         moneda:      'DOP',
         limite:      r.montoTotal,
         usado:       Math.max(0, usado),
