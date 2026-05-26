@@ -44,7 +44,11 @@
 
 <!-- Data layer -->
 <script src="src/data.js"></script>
-<script src="src/airtable-client.js"></script>
+<!-- ⚠ Migración Airtable → Supabase. Para rollback: descomenta airtable-client
+     y comenta las dos líneas de Supabase. -->
+<!-- <script src="src/airtable-client.js"></script> -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="src/supabase-client.js"></script>
 <script>
   Object.assign(window, {
     MES, MESES_LIST, SK_RAW, VENTAS_SKU, EN_CAMINO,
