@@ -668,8 +668,33 @@ function InventarioPage() {
   const data = useATData();
   const SK = window.buildSK ? window.buildSK() : (data.skus || []);
   const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [del, setDel] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
+  let filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(s =>
+      (s.id || '').toLowerCase().includes(q) ||
+      (s.nm || '').toLowerCase().includes(q) ||
+      (s.mk || '').toLowerCase().includes(q)
+    );
+  }
+
+  const refs = del ? (window.AT_CLIENT?.countSKURefs?.(del.id) || { ventas: 0, entradas: 0 }) : null;
+
+  const doDelete = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.removeSKU(del.id);
+      window.toastOk('SKU eliminado', `${del.id} · ${del.nm}`);
+      setDel(null);
+    } catch (e) {
+      window.toastErr('No se pudo eliminar', e.message?.slice(0, 120));
+    }
+    setBusy(false);
+  };
 
   return (
     <>
@@ -679,6 +704,7 @@ function InventarioPage() {
           <div className="sub">{SK.length} SKUs · {fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock</div>
         </div>
         <div className="topbar-actions">
+          <input className="input" style={{ width: 160 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
           {['all', 'critico', 'atencion', 'ok', 'sin_movimiento'].map(f => (
             <button key={f} className="pill" style={{
               background: filter === f ? 'var(--surface-3)' : 'var(--surface)',
@@ -696,7 +722,7 @@ function InventarioPage() {
             <th>SKU</th><th>Categoría</th><th>Marca</th>
             <th className="right">Stock</th><th className="right">En camino</th>
             <th className="right">CPP</th><th className="right">Precio</th>
-            <th className="right">Margen</th><th>Estado</th>
+            <th className="right">Margen</th><th>Estado</th><th></th>
           </tr></thead>
           <tbody>
             {filtered.map(s => {
@@ -713,12 +739,23 @@ function InventarioPage() {
                   <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
                   <td className="num right muted">{s.pv > 0 ? margen + '%' : '—'}</td>
                   <td><span className={`badge ${badgeCls}`}>{s.estado.replace('_', ' ')}</span></td>
+                  <td><button className="icon-btn danger" onClick={() => setDel(s)}>×</button></td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      <ConfirmModal open={!!del} danger busy={busy}
+        title={`¿Eliminar SKU ${del?.id}?`}
+        body={
+          refs && (refs.ventas > 0 || refs.entradas > 0)
+            ? `${del?.nm}. ATENCIÓN: este SKU tiene ${refs.ventas} venta(s) y ${refs.entradas} entrada(s) históricas referenciándolo. Borrarlo puede fallar por FK constraint. Mejor desactiva (campo activa=false) en lugar de borrar.`
+            : `${del?.nm}. Stock actual: ${del?.s || 0} ud. Sin ventas/entradas históricas — borrado seguro.`
+        }
+        onCancel={() => setDel(null)}
+        onConfirm={doDelete} />
     </>
   );
 }
@@ -1003,11 +1040,13 @@ function RegistrarPage() {
         <button className={`tab ${tab === 'venta' ? 'active' : ''}`} onClick={() => setTab('venta')}>Nueva venta</button>
         <button className={`tab ${tab === 'lote' ? 'active' : ''}`} onClick={() => setTab('lote')}>Nuevo lote</button>
         <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>Movimiento financiero</button>
+        <button className={`tab ${tab === 'sku' ? 'active' : ''}`} onClick={() => setTab('sku')}>Nuevo SKU</button>
       </div>
       <div className="section">
         {tab === 'venta'  && <FormVenta />}
         {tab === 'lote'   && <FormLote />}
         {tab === 'movfin' && <FormMovFin />}
+        {tab === 'sku'    && <FormSKU />}
       </div>
     </>
   );
@@ -1547,6 +1586,282 @@ function MovimientosPage({ period }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Alertas Page — critical inventory + próximas cuotas + sin movimiento
+// ════════════════════════════════════════════════════════════════
+function AlertasPage() {
+  const data = useATData();
+  const SK = window.buildSK ? window.buildSK() : (data.skus || []);
+  const criticos = SK.filter(s => s.estado === 'critico');
+  const atencion = SK.filter(s => s.estado === 'atencion');
+  const reposicion = SK.filter(s => s.estado === 'en_reposicion');
+  const sinMov = SK.filter(s => s.estado === 'sin_movimiento');
+
+  // Próximas cuotas (Coop)
+  const proxCuota = window.COOP?.pagos?.length || 0;
+  const cuotaMensual = window.COOP?.cuota || 0;
+
+  // BHD usage
+  const bhdUso = window.BHD?.limite > 0 ? (window.BHD.usado / window.BHD.limite) * 100 : 0;
+
+  const totalAlerts = criticos.length + atencion.length + reposicion.length + (bhdUso > 80 ? 1 : 0);
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Alertas</h1>
+          <div className="sub">{totalAlerts} alertas activas · revisa para acción</div>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <KPI label="Críticos" value={criticos.length}
+             delta={null} deltaLabel="< 60 días stock" />
+        <KPI label="Atención" value={atencion.length}
+             delta={null} deltaLabel="60-90 días" />
+        <KPI label="En reposición" value={reposicion.length}
+             delta={null} deltaLabel="con lote en camino" />
+        <KPI label="Sin movimiento" value={sinMov.length}
+             delta={null} deltaLabel="nunca vendidos" />
+      </div>
+
+      {criticos.length > 0 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title" style={{ color: 'var(--danger)' }}>
+                Críticos · pedir AHORA
+              </div>
+              <div className="section-desc">{criticos.length} SKUs agotan antes del lead time ({window.LEAD_TIME || 52}d)</div>
+            </div>
+            <span className="badge danger">{criticos.length}</span>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Stock</th><th>Agota en</th>
+              <th>VTS/MO</th><th className="right">CPP</th><th>Acción</th>
+            </tr></thead>
+            <tbody>
+              {criticos.map(s => (
+                <tr key={s.id}>
+                  <td>{s.nm} · <span className="num muted" style={{ fontSize: 11 }}>{s.id}</span></td>
+                  <td className="num neg">{s.s} ud</td>
+                  <td className="num">{s.diasStock != null ? `${s.diasStock}d` : 'agotado'}</td>
+                  <td className="num">{s.vtasMes?.toFixed?.(1) || '0'} /mes</td>
+                  <td className="num right">{fmtCurrency(s.cpp)}</td>
+                  <td><span className="badge danger">↗ Pedir lote</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {reposicion.length > 0 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title" style={{ color: 'var(--warning)' }}>En reposición</div>
+              <div className="section-desc">{reposicion.length} SKUs con lote en camino</div>
+            </div>
+            <span className="badge warning">{reposicion.length}</span>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Stock actual</th><th>En camino</th><th>Agota en</th><th>Nota</th>
+            </tr></thead>
+            <tbody>
+              {reposicion.map(s => (
+                <tr key={s.id}>
+                  <td>{s.nm} · <span className="num muted" style={{ fontSize: 11 }}>{s.id}</span></td>
+                  <td className="num">{s.s} ud</td>
+                  <td className="num" style={{ color: 'var(--warning)' }}>{s.enCamino} ud</td>
+                  <td className="num">{s.diasStock != null ? `${s.diasStock}d` : '—'}</td>
+                  <td className="muted">{s.notaEstado}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Próximas cuotas</div>
+              <div className="section-desc">Coop · cuota fija mensual</div>
+            </div>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Cuota mensual</div>
+              <div className="stat-value">{fmtCurrency(cuotaMensual)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Pagadas</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{proxCuota}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Saldo Coop</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(window.COOP?.saldo || 0)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Uso BHD Línea</div>
+              <div className="section-desc">Línea revolvente · {(window.BHD?.tasaMensual || 0).toFixed(2)}%/mes</div>
+            </div>
+            <span className={`badge ${bhdUso > 80 ? 'danger' : bhdUso > 50 ? 'warning' : 'success'}`}>
+              {bhdUso.toFixed(0)}% usado
+            </span>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Límite</div>
+              <div className="stat-value">{fmtCurrency(window.BHD?.limite || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Usado</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(window.BHD?.usado || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Disponible</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency((window.BHD?.limite || 0) - (window.BHD?.usado || 0))}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {sinMov.length > 0 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Sin movimiento</div>
+              <div className="section-desc">{sinMov.length} SKUs nunca vendidos · evaluar liquidación o promoción</div>
+            </div>
+            <span className="badge neutral">{sinMov.length}</span>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Categoría</th><th>Stock</th><th className="right">CPP</th><th className="right">Capital invertido</th>
+            </tr></thead>
+            <tbody>
+              {sinMov.map(s => (
+                <tr key={s.id}>
+                  <td>{s.nm} · <span className="num muted" style={{ fontSize: 11 }}>{s.id}</span></td>
+                  <td className="muted">{s.cat}</td>
+                  <td className="num">{s.s} ud</td>
+                  <td className="num right">{fmtCurrency(s.cpp)}</td>
+                  <td className="num right">{fmtCurrency(s.s * s.cpp)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Form Nuevo SKU
+// ════════════════════════════════════════════════════════════════
+function FormSKU() {
+  const [cat, setCat] = useState('Mouse');
+  const [mk, setMk] = useState('');
+  const [modelo, setModelo] = useState('');
+  const [color, setColor] = useState('');
+  const [pv, setPv] = useState('');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const cats = window.AT_CLIENT?.SKU_CATEGORIAS || ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'];
+  const CAT_CODE = { 'Mouse': 'MOU', 'Teclado': 'TEC', 'Headset': 'HEA', 'Stand': 'STA', 'Mouse Pad': 'PAD', 'Otro': 'OTR' };
+
+  const catCode  = CAT_CODE[cat] || 'OTR';
+  const mkCode   = (mk || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+  const modCode  = (modelo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const colCode  = (color || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  const skuId = [catCode, mkCode, modCode, colCode].filter(Boolean).join('-');
+  const autoNm = [mk, modelo, color].filter(Boolean).join(' ');
+
+  const valid = mkCode && modCode && colCode;
+
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      const res = await window.AT_CLIENT.createSKU({
+        id: skuId, nm: autoNm, mk, modelo, color, cat,
+        pv: Number(pv) || null, notas,
+      });
+      window.toastOk('SKU creado', `${res.id} · ${res.nm}`);
+      setMk(''); setModelo(''); setColor(''); setPv(''); setNotas('');
+    } catch (e) {
+      window.toastErr('No se pudo crear', e.message?.slice(0, 120));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
+      <div className="row-4">
+        <div className="field">
+          <div className="field-label">Categoría</div>
+          <select className="select" value={cat} onChange={e => setCat(e.target.value)}>
+            {cats.map(c => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <div className="field-label">Marca</div>
+          <input className="input" value={mk} onChange={e => setMk(e.target.value)} placeholder="HXSJ" />
+        </div>
+        <div className="field">
+          <div className="field-label">Modelo</div>
+          <input className="input" value={modelo} onChange={e => setModelo(e.target.value)} placeholder="T90 Pro" />
+        </div>
+        <div className="field">
+          <div className="field-label">Color</div>
+          <input className="input" value={color} onChange={e => setColor(e.target.value)} placeholder="Negro" />
+        </div>
+      </div>
+
+      <div className="row">
+        <div className="field">
+          <div className="field-label">Precio venta sugerido (RD$)</div>
+          <input className="input num" type="number" value={pv} onChange={e => setPv(e.target.value)} placeholder="opcional" />
+        </div>
+        <div className="field">
+          <div className="field-label">Notas</div>
+          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" />
+        </div>
+      </div>
+
+      {valid && (
+        <div className="summary">
+          <div className="summary-item"><span className="lbl">ID generado</span><span className="val num">{skuId}</span></div>
+          <div className="summary-item"><span className="lbl">Nombre</span><span className="val" style={{ fontSize: 13 }}>{autoNm}</span></div>
+          <div className="summary-item"><span className="lbl">Categoría</span><span className="val" style={{ fontSize: 13 }}>{cat}</span></div>
+          <div className="summary-item"><span className="lbl">Precio</span><span className="val">{pv ? fmtCurrency(pv) : '—'}</span></div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
+          {busy ? 'Creando…' : 'Crear SKU'}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={() => {
+          setMk(''); setModelo(''); setColor(''); setPv(''); setNotas('');
+        }}>Limpiar</button>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // App — sidebar nav + page switcher + global period filter + toasts
 // ════════════════════════════════════════════════════════════════
 function App() {
@@ -1554,8 +1869,15 @@ function App() {
   const [page, setPage] = useState('overview');
   const [period, setPeriod] = useState('todo');
 
+  // Computa # alertas para badge del sidebar
+  const SK = window.buildSK ? window.buildSK() : (data.skus || []);
+  const alertCount = SK.filter(s => s.estado === 'critico').length
+                   + SK.filter(s => s.estado === 'atencion').length
+                   + SK.filter(s => s.estado === 'en_reposicion').length;
+
   const pages = [
     { id: 'overview',    label: 'Resumen',     icon: '◉', badge: null },
+    { id: 'alertas',     label: 'Alertas',     icon: '!', badge: alertCount, badgeColor: 'var(--danger)' },
     { id: 'registrar',   label: 'Registrar',   icon: '+', badge: null },
     { id: 'ventas',      label: 'Ventas',      icon: '$', badge: (data.ventas || []).length },
     { id: 'inventario',  label: 'Inventario',  icon: '▤', badge: (data.skus || []).length },
@@ -1581,9 +1903,13 @@ function App() {
           <div key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`}
                style={{ position: 'relative' }}
                onClick={() => setPage(p.id)}>
-            <span className="nav-item-icon">{p.icon}</span>
+            <span className="nav-item-icon" style={p.badgeColor ? { color: p.badgeColor } : undefined}>{p.icon}</span>
             <span>{p.label}</span>
-            {p.badge != null && p.badge > 0 && <span className="nav-item-badge">{p.badge}</span>}
+            {p.badge != null && p.badge > 0 && (
+              <span className="nav-item-badge" style={p.badgeColor ? {
+                background: p.badgeColor + '22', color: p.badgeColor,
+              } : undefined}>{p.badge}</span>
+            )}
           </div>
         ))}
 
@@ -1610,6 +1936,7 @@ function App() {
           </div>
         )}
         {page === 'overview'    && <OverviewPage period={period} />}
+        {page === 'alertas'     && <AlertasPage />}
         {page === 'registrar'   && <RegistrarPage />}
         {page === 'ventas'      && <VentasPageExt period={period} />}
         {page === 'inventario'  && <InventarioPage />}
