@@ -38,18 +38,7 @@ function TerminalHeader({ activePanel, filter }) {
         <div style={{ fontSize: 10, color: T.t2 }}>
           <span style={{ color: T.t3 }}>SYNC</span> {(window.HOY || HOY).toUpperCase()} · {t}
         </div>
-        <button
-          onClick={async () => {
-            if (!window.AT_CLIENT?.refreshAll) return;
-            window.toastOk?.('Sincronizando', 'Re-cargando data desde Supabase...');
-            await window.AT_CLIENT.refreshAll();
-          }}
-          title="Refrescar data desde Supabase sin recargar página"
-          style={{
-            background: T.panel, color: T.t2, border: `1px solid ${T.bd}`,
-            padding: '4px 8px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer',
-            letterSpacing: '0.12em', lineHeight: 1,
-          }}>↻</button>
+        <RefreshButton T={T} />
         <button onClick={() => window.postMessage({ type: '__activate_edit_mode' }, '*')} style={{
           background: T.panel, color: T.t2, border: `1px solid ${T.bd}`,
           padding: '4px 10px', fontFamily: 'inherit', fontSize: 10, cursor: 'pointer',
@@ -65,6 +54,41 @@ function TerminalHeader({ activePanel, filter }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Pequeño botón ↻ en el header que invoca AT_CLIENT.refreshAll().
+// Muestra spin animado mientras espera, y un check verde brevemente
+// al terminar para que Julio vea que sí se sincronizó.
+function RefreshButton({ T }) {
+  const [state, setState] = React.useState('idle'); // 'idle' | 'spinning' | 'done'
+  const onClick = async () => {
+    if (state === 'spinning' || !window.AT_CLIENT?.refreshAll) return;
+    setState('spinning');
+    try {
+      await window.AT_CLIENT.refreshAll();
+      setState('done');
+      setTimeout(() => setState('idle'), 1200);
+    } catch (e) {
+      window.toastErr?.('Sync falló', e.message?.slice(0, 80) || 'error');
+      setState('idle');
+    }
+  };
+  const icon = state === 'spinning' ? '↻' : state === 'done' ? '✓' : '↻';
+  const color = state === 'done' ? T.gn : T.t2;
+  return (
+    <button
+      onClick={onClick}
+      disabled={state === 'spinning'}
+      title="Refrescar data desde Supabase sin recargar página"
+      style={{
+        background: T.panel, color, border: `1px solid ${T.bd}`,
+        padding: '4px 8px', fontFamily: 'inherit', fontSize: 11,
+        cursor: state === 'spinning' ? 'wait' : 'pointer',
+        letterSpacing: '0.12em', lineHeight: 1,
+        display: 'inline-block',
+        animation: state === 'spinning' ? 'spin 0.9s linear infinite' : 'none',
+      }}>{icon}</button>
   );
 }
 
