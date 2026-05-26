@@ -504,24 +504,29 @@ function Sparkline({ values, w = 200, h = 50, color = 'var(--accent)' }) {
 }
 
 // ─── Pages ───────────────────────────────────────────────────────
-function OverviewPage() {
+function OverviewPage({ period }) {
   const data = useATData();
-  const ventas = data.ventas || [];
-  const cf = data.cashflow || [];
+  const allVentas = data.ventas || [];
+  const allCf = data.cashflow || [];
   const SK = data.skus || [];
 
-  // KPIs principales
-  const totalVentas = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
-  const totalGanancia = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
-  const margenPct = totalVentas > 0 ? (totalGanancia / totalVentas) * 100 : 0;
+  // ── Filtrado por período ──────────────────────────────────────
+  const ventas = filterByPeriod(allVentas, period, 'fecha');
+  const cf = filterByPeriod(allCf, period, 'f');
 
-  // Balance acumulado
-  const balanceActual = cf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  // KPIs principales (sobre período)
+  const totalVentas   = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+  const totalGanancia = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+  const margenPct     = totalVentas > 0 ? (totalGanancia / totalVentas) * 100 : 0;
+
+  // Balance acumulado del PERÍODO + capital actual (todo histórico)
+  const balancePeriodo = cf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  const balanceActual  = allCf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
 
   // Deuda total = COOP saldo + ANDREA pendiente + BHD usado
   const deudaTotal = (window.COOP?.saldo || 0) + (window.ANDREA?.pendiente || 0) + (window.BHD?.usado || 0);
 
-  // Crecimiento mes a mes
+  // Crecimiento mes a mes (histórico siempre)
   const MES = window.MES || [];
   const lastMo = MES[MES.length - 1];
   const prevMo = MES[MES.length - 2];
@@ -529,15 +534,60 @@ function OverviewPage() {
 
   // Series para sparklines
   const ventasSeries = MES.map(m => m.v);
-  const gananciaSeries = MES.map(m => m.g);
 
   // SKU criticos
   const SKbuilt = window.buildSK ? window.buildSK() : SK;
   const criticos = SKbuilt.filter(s => s.estado === 'critico').length;
   const atencion = SKbuilt.filter(s => s.estado === 'atencion').length;
 
-  // Movimientos recientes
+  // Movimientos recientes del período
   const recientes = cf.slice(0, 10);
+
+  // ── Cash Flow breakdown — Op vs Fin ───────────────────────────
+  const opCats  = ['VENTA','ENVIO_COBRADO','COMPRA_MERCANCIA','COMPRA_OPERATIVA','ENVIO_LOTE','PAGO_ADS','PAGO_COMISION','PAGO_TRANSPORTE','REFUND_PROVEEDOR','REFUND_CLIENTE','OTROS'];
+  const finCats = ['APORTE_DUENO','APORTE_INVERSOR','PAGO_PRESTAMO','PAGO_LINEA_CREDITO','PAGO_TARJETA_CREDITO','PAGO_INTERESES','PAGO_INVERSOR','DRAWDOWN','FEE_BANCARIO','TRANSFERENCIA_INTERNA','AJUSTE'];
+  const isFin = (m) => {
+    // m.naturaleza puede venir como 'FINANCIERO' o 'CASHFLOW'.
+    if (m.naturaleza) return m.naturaleza === 'FINANCIERO';
+    // Fallback por categoría/concepto.
+    const c = (m.c || m.concepto || '').toLowerCase();
+    return /préstamo|prestamo|interés|interes|línea|linea|tarjeta|inversor|aporte|drawdown|fee|transferencia/i.test(c);
+  };
+  const opMovs  = cf.filter(m => !isFin(m));
+  const finMovs = cf.filter(m =>  isFin(m));
+  const opE  = opMovs.reduce((s, m) => s + (m.e || 0), 0);
+  const opS  = opMovs.reduce((s, m) => s + (m.s || 0), 0);
+  const finE = finMovs.reduce((s, m) => s + (m.e || 0), 0);
+  const finS = finMovs.reduce((s, m) => s + (m.s || 0), 0);
+  const ventasCF = opMovs.filter(m => /venta/i.test(m.c || '')).reduce((s, m) => s + (m.e || 0), 0);
+  const comprasMerc = opMovs.filter(m => /compra de mercanc/i.test(m.c || '')).reduce((s, m) => s + (m.s || 0), 0);
+  const gastosOp = opS - comprasMerc;
+  const pagosPrest = finMovs.filter(m => /préstamo|prestamo/i.test(m.c || '')).reduce((s, m) => s + (m.s || 0), 0);
+  const intereses  = finMovs.filter(m => /interés|interes/i.test(m.c || '')).reduce((s, m) => s + (m.s || 0), 0);
+  const aportes    = finMovs.filter(m => /aporte/i.test(m.c || '')).reduce((s, m) => s + (m.e || 0), 0);
+
+  // ── Top SKUs por revenue del período ──────────────────────────
+  const skuStats = {};
+  const skuLookup = {};
+  (data.skus || []).forEach(s => { skuLookup[s._airtableId || s.id_sku || s.id] = s.nm || s.nombre; });
+  ventas.forEach(v => {
+    (v.lineas || []).forEach(li => {
+      const k = li.skuLinked || li.skuRef || 'LEGACY';
+      const revenue = (li.baseCost || 0) + (li.ganancia || 0);
+      if (!skuStats[k]) skuStats[k] = { sku: k, nombre: skuLookup[k] || k, revenue: 0, uds: 0, ganancia: 0 };
+      skuStats[k].revenue  += revenue;
+      skuStats[k].uds      += li.qty || 1;
+      skuStats[k].ganancia += li.ganancia || 0;
+    });
+  });
+  const topSkus = Object.values(skuStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+
+  // ── Balance acumulado mes a mes (siempre histórico) ───────────
+  const balSeries = [];
+  let accBal = 0;
+  // CF_MES es {m, e, s} mensual; si no existe, lo computamos de MES (v=ventas como proxy).
+  const cfMes = window.CF_MES && window.CF_MES.length ? window.CF_MES : MES.map(m => ({ m: m.m, e: m.v, s: 0 }));
+  cfMes.forEach(m => { accBal += (m.e || 0) - (m.s || 0); balSeries.push(accBal); });
 
   return (
     <>
@@ -553,15 +603,116 @@ function OverviewPage() {
       </div>
 
       <div className="kpi-row">
-        <KPI label="Ventas histórico" value={fmtNum(totalVentas)} currency
-             delta={growthMoM} deltaLabel="MoM" />
+        <KPI label={period === 'todo' ? 'Ventas histórico' : 'Ventas en período'} value={fmtNum(totalVentas)} currency
+             delta={period === 'todo' ? growthMoM : null} deltaLabel={period === 'todo' ? 'MoM' : `${ventas.length} ventas`} />
         <KPI label="Ganancia bruta" value={fmtNum(totalGanancia)} currency
              delta={margenPct} deltaLabel="margen" />
         <KPI label="Capital actual" value={fmtNum(balanceActual)} currency
-             delta={null} deltaLabel="cash flow neto" />
+             delta={null} deltaLabel="cash flow neto histórico" />
         <KPI label="Deuda total" value={fmtNum(deudaTotal)} currency
              delta={null} deltaLabel="COOP + Andrea + BHD" />
       </div>
+
+      {/* Balance acumulado (curva de capital mes a mes) ──────────── */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Balance acumulado</div>
+            <div className="section-desc">Curva de capital · histórico completo</div>
+          </div>
+          <span className="badge neutral">Actual: {fmtCurrency(balanceActual)}</span>
+        </div>
+        <Sparkline values={balSeries} w={800} h={90} color="var(--success)" />
+      </div>
+
+      {/* Cash Flow breakdown — Op vs Fin ─────────────────────────── */}
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Cash Flow operacional</div>
+              <div className="section-desc">{opMovs.length} movimientos · {period === 'todo' ? 'histórico' : period}</div>
+            </div>
+            <span className={`badge ${(opE - opS) >= 0 ? 'success' : 'danger'}`}>
+              Neto {fmtCurrency(opE - opS)}
+            </span>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Ventas</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(ventasCF)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Compras mercancía</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(comprasMerc)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Otros gastos op</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(gastosOp)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Cash Flow financiero</div>
+              <div className="section-desc">{finMovs.length} movimientos · préstamos, líneas, inversores</div>
+            </div>
+            <span className={`badge ${(finE - finS) >= 0 ? 'success' : 'danger'}`}>
+              Neto {fmtCurrency(finE - finS)}
+            </span>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Aportes</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(aportes)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Pagos préstamo</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(pagosPrest)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Intereses</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(intereses)}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Top SKUs por revenue ────────────────────────────────────── */}
+      {topSkus.length > 0 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Top SKUs por revenue</div>
+              <div className="section-desc">{period === 'todo' ? 'Histórico' : `Últimos ${period}`} · {topSkus.length} de {Object.keys(skuStats).length} SKUs vendidos</div>
+            </div>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Nombre</th>
+              <th className="right">Uds</th><th className="right">Revenue</th>
+              <th className="right">Ganancia</th><th className="right">Margen</th>
+            </tr></thead>
+            <tbody>
+              {topSkus.map(s => {
+                const mg = s.revenue > 0 ? (s.ganancia / s.revenue) * 100 : 0;
+                return (
+                  <tr key={s.sku}>
+                    <td><span className="num" style={{ fontSize: 11 }}>{s.sku}</span></td>
+                    <td className="muted">{s.nombre}</td>
+                    <td className="num right">{s.uds}</td>
+                    <td className="num right">{fmtCurrency(s.revenue)}</td>
+                    <td className="num right pos">{fmtCurrency(s.ganancia)}</td>
+                    <td className="num right muted">{mg.toFixed(1)}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="grid-2">
         {/* Ventas mensuales */}
@@ -1055,6 +1206,250 @@ function FormPrestamo({ tipoFijo, onDone }) {
   );
 }
 
+// ─── Drilldown: detalle de un producto financiero ─────────────────
+// Muestra movimientos del producto (filtrados desde movFin) + form rápido
+// para registrar un nuevo movimiento scopeado a ese producto.
+function ProductDetailModal({ open, item, kind, onClose }) {
+  const data = useATData();
+  const movFin = data.movFin || [];
+  const [showForm, setShowForm] = useState(false);
+  const [showCfs, setShowCfs] = useState(false);  // mostrar también los CF asociados como fallback
+  const [delMov, setDelMov] = useState(null);
+  const [delBusy, setDelBusy] = useState(false);
+
+  if (!open || !item) return null;
+
+  const aid = item._airtableId;  // 'p-{id}' o 'i-{id}'
+  const movs = movFin.filter(m => m.productoFinAirtableId === aid)
+                     .sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+
+  // CFs como respaldo (movimientos del cashflow que pueden estar linkeados sin pasar por movFin)
+  const cfs = (data.cashflow || []).filter(c => {
+    const txt = ((c.a || '') + ' ' + (c.c || '') + ' ' + (c.notas || '')).toLowerCase();
+    return txt.includes((item.nombre || '').toLowerCase().slice(0, 8));
+  }).slice(0, 20);
+
+  const isPrestamo = kind === 'prestamo' || kind === 'linea';
+  const totalMovs   = movs.reduce((s, m) => s + (m.monto || 0), 0);
+  const totalCapital= movs.reduce((s, m) => s + (m.capital || 0), 0);
+  const totalInt    = movs.reduce((s, m) => s + (m.interes || 0), 0);
+  const totalSeg    = movs.reduce((s, m) => s + (m.seguro || 0), 0);
+
+  const doDelMov = async () => {
+    setDelBusy(true);
+    try {
+      await window.AT_CLIENT.removeMovFin(delMov._airtableId);
+      window.toastOk('Movimiento eliminado', `${delMov.tipo} · ${fmtCurrency(delMov.monto)}`);
+      setDelMov(null);
+    } catch (e) { window.toastErr('No se pudo eliminar', e.message?.slice(0, 120)); }
+    setDelBusy(false);
+  };
+
+  return (
+    <>
+      <div className="modal-backdrop" onClick={onClose}>
+        <div className="modal" style={{ minWidth: 780, maxWidth: '92vw', maxHeight: '88vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div className="modal-title" style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+            <span>{item.nombre}</span>
+            <span className="badge neutral" style={{ fontSize: 10 }}>{item.tipo || item.tipoSub || kind}</span>
+          </div>
+
+          {/* KPIs del producto */}
+          <div className="grid-3" style={{ marginBottom: 'var(--s-4)' }}>
+            <div className="stat-card">
+              <div className="stat-label">{isPrestamo ? 'Monto/Límite' : 'Capital invertido'}</div>
+              <div className="stat-value">{fmtCurrency(item.montoTotal || item.limite || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">{isPrestamo ? 'Capital pagado' : 'Pagado'}</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(item._capitalPagado || item.totalPagado || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">{isPrestamo ? 'Saldo' : 'Pendiente'}</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(item.balance || 0)}</div>
+            </div>
+          </div>
+
+          {/* Acciones */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 'var(--s-3)' }}>
+            <button className="btn" onClick={() => setShowForm(s => !s)}>
+              {showForm ? '× Cerrar form' : '+ Nuevo movimiento'}
+            </button>
+            <button className="btn ghost" onClick={() => setShowCfs(s => !s)}>
+              {showCfs ? 'Ocultar CFs' : 'Ver CFs vinculados'}
+            </button>
+            <span className="pill" style={{ marginLeft: 'auto' }}>{movs.length} mov · {fmtCurrency(totalMovs)}</span>
+          </div>
+
+          {/* Form inline para nuevo movimiento */}
+          {showForm && (
+            <div className="section" style={{ marginBottom: 'var(--s-3)' }}>
+              <FormMovFinScoped item={item} kind={kind} onDone={() => setShowForm(false)} />
+            </div>
+          )}
+
+          {/* Tabla movimientos (movFin) */}
+          <table className="data">
+            <thead><tr>
+              <th>Fecha</th><th>Tipo</th>
+              <th className="right">Capital</th><th className="right">Interés</th>
+              <th className="right">Seguro</th><th className="right">Monto</th>
+              <th>Cuenta</th><th></th>
+            </tr></thead>
+            <tbody>
+              {movs.length === 0 && (
+                <tr><td colSpan="8" className="empty" style={{ padding: 'var(--s-6)' }}>Sin movimientos · click "+ Nuevo movimiento" para registrar uno</td></tr>
+              )}
+              {movs.map(m => (
+                <tr key={m._airtableId}>
+                  <td>{fmtDate(m.fecha)}</td>
+                  <td className="muted">{m.tipo}</td>
+                  <td className="num right">{m.capital > 0 ? fmtCurrency(m.capital) : '—'}</td>
+                  <td className="num right">{m.interes > 0 ? fmtCurrency(m.interes) : '—'}</td>
+                  <td className="num right">{m.seguro > 0 ? fmtCurrency(m.seguro) : '—'}</td>
+                  <td className="num right neg">{fmtCurrency(m.monto)}</td>
+                  <td className="muted" style={{ fontSize: 11 }}>{m.cuentaBanco || '—'}</td>
+                  <td><button className="icon-btn danger" title="Eliminar" onClick={() => setDelMov(m)}>×</button></td>
+                </tr>
+              ))}
+              {movs.length > 0 && (
+                <tr style={{ fontWeight: 600 }}>
+                  <td colSpan="2" className="muted">Totales</td>
+                  <td className="num right">{fmtCurrency(totalCapital)}</td>
+                  <td className="num right">{fmtCurrency(totalInt)}</td>
+                  <td className="num right">{fmtCurrency(totalSeg)}</td>
+                  <td className="num right">{fmtCurrency(totalMovs)}</td>
+                  <td colSpan="2"></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          {/* CFs respaldo (movimientos cashflow que mencionan el nombre del producto) */}
+          {showCfs && (
+            <div className="section" style={{ marginTop: 'var(--s-3)' }}>
+              <div className="section-head">
+                <div className="section-title">CFs vinculados por contraparte</div>
+                <div className="section-desc">{cfs.length} movimientos de cashflow que mencionan "{(item.nombre || '').slice(0, 20)}…"</div>
+              </div>
+              <table className="data">
+                <thead><tr><th>Fecha</th><th>Concepto</th><th>Contraparte</th><th className="right">Entrada</th><th className="right">Salida</th></tr></thead>
+                <tbody>
+                  {cfs.map((c, i) => (
+                    <tr key={i}>
+                      <td>{fmtDate(c.f)}</td>
+                      <td className="muted">{c.c}</td>
+                      <td>{c.a || '—'}</td>
+                      <td className="num right pos">{c.e > 0 ? fmtCurrency(c.e) : '—'}</td>
+                      <td className="num right neg">{c.s > 0 ? fmtCurrency(c.s) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="modal-actions">
+            <button className="btn ghost" onClick={onClose}>Cerrar</button>
+          </div>
+        </div>
+      </div>
+
+      <ConfirmModal open={!!delMov} danger busy={delBusy}
+        title="¿Eliminar movimiento?"
+        body={`${delMov?.tipo} · ${fmtCurrency(delMov?.monto || 0)} · ${fmtDate(delMov?.fecha || '')}. Esto también borra el cashflow vinculado.`}
+        onCancel={() => setDelMov(null)}
+        onConfirm={doDelMov} />
+    </>
+  );
+}
+
+// Versión scopeada del FormMovFin que pre-rellena producto y elige tipo razonable.
+function FormMovFinScoped({ item, kind, onDone }) {
+  const data = useATData();
+  const tipoDefault = kind === 'inversor' ? 'Retorno Inversor'
+                    : kind === 'linea'    ? 'Pago Línea'
+                    :                       'Cuota Préstamo';
+  const [tipo, setTipo] = useState(tipoDefault);
+  const [fecha, setFecha] = useState(window.HOY || HOY);
+  const [monto, setMonto] = useState('');
+  const [capital, setCapital] = useState('');
+  const [interes, setInteres] = useState('');
+  const [seguro, setSeguro] = useState('');
+  const [cuentaBanco, setCuentaBanco] = useState('BHD Debito');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const MOVFIN_TIPOS = ['Cuota Préstamo', 'Abono Préstamo', 'Disposición Línea', 'Pago Línea', 'Cargo Línea', 'Depósito Inversor', 'Retorno Inversor', 'Otro'];
+
+  useEffect(() => {
+    if (tipo === 'Cuota Préstamo' && (capital || interes || seguro)) {
+      setMonto((Number(capital || 0) + Number(interes || 0) + Number(seguro || 0)).toString());
+    }
+  }, [tipo, capital, interes, seguro]);
+
+  const cuentas = (data._cuentas || []).map(c => c.nombre);
+  const valid = tipo && Number(monto) > 0;
+
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.createMovFin({
+        tipo, fecha,
+        monto: Number(monto),
+        productoFinAirtableId: item._airtableId,
+        productoFinId: item.idFin || item.id,
+        cuentaBanco,
+        capital: Number(capital) || 0,
+        interes: Number(interes) || 0,
+        seguro:  Number(seguro)  || 0,
+        notas,
+      });
+      window.toastOk('Movimiento registrado', `${tipo} · ${fmtCurrency(monto)} · ${item.nombre}`);
+      setMonto(''); setCapital(''); setInteres(''); setSeguro(''); setNotas('');
+      onDone?.();
+    } catch (e) { window.toastErr('No se pudo registrar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+      <div className="row-3">
+        <div className="field"><div className="field-label">Tipo</div>
+          <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
+            {MOVFIN_TIPOS.map(t => <option key={t}>{t}</option>)}
+          </select></div>
+        <div className="field"><div className="field-label">Fecha</div>
+          <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
+        <div className="field"><div className="field-label">Cuenta origen</div>
+          <select className="select" value={cuentaBanco} onChange={e => setCuentaBanco(e.target.value)}>
+            {cuentas.length > 0 ? cuentas.map(c => <option key={c}>{c}</option>) : <><option>BHD Debito</option><option>Efectivo</option></>}
+          </select></div>
+      </div>
+      {tipo === 'Cuota Préstamo' && (
+        <div className="row-3">
+          <div className="field"><div className="field-label">Capital</div>
+            <input className="input num" type="number" value={capital} onChange={e => setCapital(e.target.value)} placeholder="0" /></div>
+          <div className="field"><div className="field-label">Interés</div>
+            <input className="input num" type="number" value={interes} onChange={e => setInteres(e.target.value)} placeholder="0" /></div>
+          <div className="field"><div className="field-label">Seguro</div>
+            <input className="input num" type="number" value={seguro} onChange={e => setSeguro(e.target.value)} placeholder="0" /></div>
+        </div>
+      )}
+      <div className="row">
+        <div className="field"><div className="field-label">Monto total</div>
+          <input className="input num" type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" /></div>
+        <div className="field"><div className="field-label">Notas</div>
+          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Guardando…' : 'Guardar movimiento'}</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Form Crear Inversor ─────────────────────────────────────────
 function FormInversor({ onDone }) {
   const data = useATData();
@@ -1133,6 +1528,7 @@ function FinanzasPage() {
   const [delBusy, setDelBusy] = useState(false);
   const [edit, setEdit] = useState(null); // { kind, id, title, fields }
   const [editBusy, setEditBusy] = useState(false);
+  const [detail, setDetail] = useState(null); // { item, kind }
 
   const doDelete = async () => {
     setDelBusy(true);
@@ -1303,6 +1699,9 @@ function FinanzasPage() {
         onCancel={() => setEdit(null)}
         onSave={doSaveEdit} />
 
+      <ProductDetailModal open={!!detail} item={detail?.item} kind={detail?.kind}
+        onClose={() => setDetail(null)} />
+
       {/* RESUMEN — vista original */}
       {subtab === 'resumen' && (<>
       <div className="kpi-row">
@@ -1411,7 +1810,7 @@ function FinanzasPage() {
             </tr></thead>
             <tbody>
               {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).map(p => (
-                <tr key={p._airtableId}>
+                <tr key={p._airtableId} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: p, kind: 'prestamo' })}>
                   <td>{p.nombre}</td>
                   <td className="muted">{p.tipo}</td>
                   <td className="num right">{fmtCurrency(p.montoTotal)}</td>
@@ -1419,7 +1818,7 @@ function FinanzasPage() {
                   <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
                   <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%</td>
                   <td className="muted">RD$</td>
-                  <td style={{ display: 'flex', gap: 4 }}>
+                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
                     <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, false)}>✎</button>
                     <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
                   </td>
@@ -1443,14 +1842,14 @@ function FinanzasPage() {
             </tr></thead>
             <tbody>
               {lcs.map(l => (
-                <tr key={l.id}>
+                <tr key={l.id} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: l, kind: 'linea' })}>
                   <td>{l.nombre}</td>
                   <td className="muted">{l.tipoSub}</td>
                   <td className="num right">{fmtCurrency(l.limite)}</td>
                   <td className="num right">{fmtCurrency(l.usado)}</td>
                   <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
                   <td className="muted">{l.moneda}</td>
-                  <td style={{ display: 'flex', gap: 4 }}>
+                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
                     <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
                     <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
                   </td>
@@ -1475,13 +1874,13 @@ function FinanzasPage() {
             </tr></thead>
             <tbody>
               {fin.filter(f => /inversor/i.test(f.tipo)).map(i => (
-                <tr key={i._airtableId}>
+                <tr key={i._airtableId} style={{ cursor: 'pointer' }} onClick={() => setDetail({ item: i, kind: 'inversor' })}>
                   <td>{i.nombre}</td>
                   <td className="num right">{fmtCurrency(i.montoTotal)}</td>
                   <td className="num right">{fmtCurrency(i.balance)}</td>
                   <td className="num right pos">{fmtCurrency(i.totalPagado)}</td>
                   <td className="num right neg">{fmtCurrency((i.balance || 0) - (i.totalPagado || 0))}</td>
-                  <td style={{ display: 'flex', gap: 4 }}>
+                  <td style={{ display: 'flex', gap: 4 }} onClick={e => e.stopPropagation()}>
                     <button className="icon-btn" title="Editar" onClick={() => openEditInversor(i)}>✎</button>
                     <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button>
                   </td>
