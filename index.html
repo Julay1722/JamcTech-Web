@@ -664,7 +664,91 @@ function OverviewPage() {
   );
 }
 
+function LotesTab() {
+  const data = useATData();
+  const lotes = data.lotes || [];
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [del, setDel] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  let filtered = lotes;
+  if (filterStatus !== 'all') {
+    filtered = filtered.filter(l => l.status === filterStatus);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(l =>
+      (l.id || '').toLowerCase().includes(q) ||
+      (l.proveedor || '').toLowerCase().includes(q) ||
+      (l.skus || []).some(s => (s.id || '').toLowerCase().includes(q))
+    );
+  }
+  filtered = filtered.slice(0, 100);
+
+  const doDelete = async () => {
+    setBusy(true);
+    try {
+      const res = await window.AT_CLIENT.removeLote(del.id);
+      window.toastOk('Lote eliminado', `${del.id} · ${res.deletedCount || 0} entradas · ${res.cfsBorrados || 0} CFs`);
+      setDel(null);
+    } catch (e) {
+      window.toastErr('No se pudo eliminar', e.message?.slice(0, 120));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--s-3)' }}>
+        <input className="input" style={{ width: 200 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+        {['all', 'En Camino', 'Recibido', 'Perdido'].map(s => (
+          <button key={s} className="pill" style={{
+            background: filterStatus === s ? 'var(--surface-3)' : 'var(--surface)',
+            color: filterStatus === s ? 'var(--text)' : 'var(--text-2)',
+          }} onClick={() => setFilterStatus(s)}>{s === 'all' ? 'Todos' : s}</button>
+        ))}
+        <span className="pill" style={{ marginLeft: 'auto' }}>{filtered.length} de {lotes.length}</span>
+      </div>
+
+      <table className="data">
+        <thead><tr>
+          <th>Lote</th><th>Fecha</th><th>Status</th><th>Proveedor</th>
+          <th className="right">SKUs</th><th className="right">Envío</th>
+          <th className="right">Courier</th><th className="right">Otros</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          {filtered.map(l => {
+            const statusCls = l.status === 'Recibido' ? 'success' : l.status === 'Perdido' ? 'danger' : 'warning';
+            return (
+              <tr key={l.id}>
+                <td><span className="num" style={{ fontSize: 11 }}>{l.id}</span></td>
+                <td>{fmtDate(l.fecha)}</td>
+                <td><span className={`badge ${statusCls}`}>{l.status}</span></td>
+                <td className="muted">{l.proveedor || '—'}</td>
+                <td className="num right">{(l.skus || []).length}</td>
+                <td className="num right">{l.envio > 0 ? fmtCurrency(l.envio) : '—'}</td>
+                <td className="num right">{l.courier > 0 ? fmtCurrency(l.courier) : '—'}</td>
+                <td className="num right">{l.otros > 0 ? fmtCurrency(l.otros) : '—'}</td>
+                <td><button className="icon-btn danger" onClick={() => setDel(l)}>×</button></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <ConfirmModal open={!!del} danger busy={busy}
+        title={`¿Eliminar lote ${del?.id}?`}
+        body={`${del?.skus?.length || 0} entrada(s) · ${del?.proveedor || ''} · ${fmtDate(del?.fecha || '')}. Borra entradas, lote header y CFs satélites linkeados (envío/courier/otros) en cascada. No reversible.`}
+        onCancel={() => setDel(null)}
+        onConfirm={doDelete} />
+    </>
+  );
+}
+
 function InventarioPage() {
+  const [subtab, setSubtab] = useState('skus');
   const data = useATData();
   const SK = window.buildSK ? window.buildSK() : (data.skus || []);
   const [filter, setFilter] = useState('all');
@@ -701,22 +785,30 @@ function InventarioPage() {
       <div className="topbar">
         <div>
           <h1>Inventario</h1>
-          <div className="sub">{SK.length} SKUs · {fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock</div>
+          <div className="sub">{SK.length} SKUs · {fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
         </div>
-        <div className="topbar-actions">
-          <input className="input" style={{ width: 160 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
-          {['all', 'critico', 'atencion', 'ok', 'sin_movimiento'].map(f => (
-            <button key={f} className="pill" style={{
-              background: filter === f ? 'var(--surface-3)' : 'var(--surface)',
-              color: filter === f ? 'var(--text)' : 'var(--text-2)',
-            }} onClick={() => setFilter(f)}>
-              {f === 'all' ? 'Todos' : f === 'sin_movimiento' ? 'Sin movim' : f}
-            </button>
-          ))}
-        </div>
+        {subtab === 'skus' && (
+          <div className="topbar-actions">
+            <input className="input" style={{ width: 160 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+            {['all', 'critico', 'atencion', 'ok', 'sin_movimiento'].map(f => (
+              <button key={f} className="pill" style={{
+                background: filter === f ? 'var(--surface-3)' : 'var(--surface)',
+                color: filter === f ? 'var(--text)' : 'var(--text-2)',
+              }} onClick={() => setFilter(f)}>
+                {f === 'all' ? 'Todos' : f === 'sin_movimiento' ? 'Sin movim' : f}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="tabs">
+        <button className={`tab ${subtab === 'skus' ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
+        <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
       </div>
 
       <div className="section">
+        {subtab === 'lotes' ? <LotesTab /> : (
         <table className="data">
           <thead><tr>
             <th>SKU</th><th>Categoría</th><th>Marca</th>
@@ -745,6 +837,7 @@ function InventarioPage() {
             })}
           </tbody>
         </table>
+        )}
       </div>
 
       <ConfirmModal open={!!del} danger busy={busy}
@@ -1041,12 +1134,14 @@ function RegistrarPage() {
         <button className={`tab ${tab === 'lote' ? 'active' : ''}`} onClick={() => setTab('lote')}>Nuevo lote</button>
         <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>Movimiento financiero</button>
         <button className={`tab ${tab === 'sku' ? 'active' : ''}`} onClick={() => setTab('sku')}>Nuevo SKU</button>
+        <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>Ajuste CF</button>
       </div>
       <div className="section">
         {tab === 'venta'  && <FormVenta />}
         {tab === 'lote'   && <FormLote />}
         {tab === 'movfin' && <FormMovFin />}
         {tab === 'sku'    && <FormSKU />}
+        {tab === 'ajuste' && <FormAjusteCF />}
       </div>
     </>
   );
@@ -1312,6 +1407,103 @@ function FormLote() {
         <button className="btn ghost" disabled={busy} onClick={() => {
           setEnvio(0); setCourier(0); setOtros(0); setNotas('');
           setLineas([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
+        }}>Limpiar</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Form Ajuste Manual CF ───────────────────────────────────────
+// Para excepciones: descuadres, hallazgos, comisiones automáticas
+// sin fuente, fees bancarios, etc. NO usar para registrar venta/lote
+// normal (esos usan sus forms específicos).
+function FormAjusteCF() {
+  const data = useATData();
+  const [fecha, setFecha] = useState(window.HOY || HOY);
+  const [tipo, setTipo] = useState('Otro');
+  const [contraparte, setContraparte] = useState('');
+  const [entrada, setEntrada] = useState('');
+  const [salida, setSalida] = useState('');
+  const [notas, setNotas] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const CF_TIPOS = [
+    'Otro', 'Fee bancario', 'Pago Comision', 'Aportes para negocio',
+    'Pago ADS', 'Pago Envio', 'Cuentas por pagar',
+    'Compra operativa', 'Refund',
+  ];
+
+  const valid = (Number(entrada) > 0 || Number(salida) > 0);
+
+  const onSubmit = async () => {
+    setBusy(true);
+    try {
+      const F = window.AT?.fields?.cashflow || { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar', entrada: 'entrada', salida: 'salida', notas: 'notas' };
+      await window.AT_CLIENT.create('cashflow', {
+        [F.fecha]:    fecha,
+        [F.cuenta]:   tipo,
+        [F.auxiliar]: contraparte,
+        [F.entrada]:  Number(entrada) || 0,
+        [F.salida]:   Number(salida)  || 0,
+        [F.notas]:    notas,
+      });
+      window.toastOk('Ajuste registrado', `${tipo} · ${entrada ? '+' + fmtCurrency(entrada) : '-' + fmtCurrency(salida)}`);
+      setEntrada(''); setSalida(''); setNotas(''); setContraparte('');
+    } catch (e) {
+      window.toastErr('No se pudo registrar', e.message?.slice(0, 120));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
+      <div style={{
+        background: 'rgba(240, 182, 88, 0.08)', border: '1px solid rgba(240, 182, 88, 0.3)',
+        borderRadius: 'var(--r-sm)', padding: 'var(--s-3) var(--s-4)', fontSize: 12, color: 'var(--text-2)',
+      }}>
+        ⚠ <strong>Ajuste manual</strong> es solo para excepciones: descuadres, hallazgos,
+        fees sin fuente. Las ventas, lotes, cuotas y disposiciones usan sus
+        propios forms (donde generan automaticamente el CF vinculado).
+      </div>
+
+      <div className="row-3">
+        <div className="field">
+          <div className="field-label">Fecha</div>
+          <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
+        </div>
+        <div className="field">
+          <div className="field-label">Tipo</div>
+          <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
+            {CF_TIPOS.map(t => <option key={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <div className="field-label">Contraparte</div>
+          <input className="input" value={contraparte} onChange={e => setContraparte(e.target.value)} placeholder="ej. BHD · Facebook · Teo" />
+        </div>
+      </div>
+
+      <div className="row-3">
+        <div className="field">
+          <div className="field-label">Entrada (RD$)</div>
+          <input className="input num" type="number" value={entrada} onChange={e => setEntrada(e.target.value)} placeholder="0" />
+        </div>
+        <div className="field">
+          <div className="field-label">Salida (RD$)</div>
+          <input className="input num" type="number" value={salida} onChange={e => setSalida(e.target.value)} placeholder="0" />
+        </div>
+        <div className="field">
+          <div className="field-label">Notas</div>
+          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="descripción libre" />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
+          {busy ? 'Registrando…' : 'Registrar ajuste'}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={() => {
+          setEntrada(''); setSalida(''); setNotas(''); setContraparte('');
         }}>Limpiar</button>
       </div>
     </div>
