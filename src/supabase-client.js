@@ -1114,6 +1114,32 @@ async function updateLoteHeader(loteDashId, patch) {
       const { error } = await sb.from('lotes').update(lhRow).eq('id', lote._loteIdNum);
       if (error) throw new Error(`updateLoteHeader lote: ${error.message}`);
     }
+    // ── Sincroniza los CFs satélites linkeados a este lote:
+    // si se cambió envío/courier/otros, actualiza la salida del CF
+    // correspondiente para que el balance de la cuenta refleje el nuevo monto.
+    // Los CFs se identifican por concepto/notas porque createLote crea uno por costo.
+    if (patch.envio != null || patch.courier != null || patch.otros != null) {
+      const { data: cfsLote } = await sb.from('movimientos')
+        .select('id, notas, salida')
+        .eq('lote_id', lote._loteIdNum);
+      if (Array.isArray(cfsLote)) {
+        const updates = [];
+        cfsLote.forEach((cf) => {
+          const n = (cf.notas || '').toLowerCase();
+          let newSalida = null;
+          if      (patch.envio   != null && n.includes('envío china') ) newSalida = Number(patch.envio)   || 0;
+          else if (patch.courier != null && n.includes('courier usa') ) newSalida = Number(patch.courier) || 0;
+          else if (patch.otros   != null && n.includes('aduana')      ) newSalida = Number(patch.otros)   || 0;
+          if (newSalida != null && newSalida !== cf.salida) {
+            updates.push(sb.from('movimientos').update({ salida: newSalida }).eq('id', cf.id));
+          }
+        });
+        if (updates.length > 0) {
+          await Promise.all(updates);
+          await loadCashflow();
+        }
+      }
+    }
   } else {
     // Lote "suelto" (sin lotes header) — los shared costs no se pueden guardar.
     // Avisamos en consola, no rompemos.
@@ -1381,14 +1407,38 @@ async function create(tableKey, fields) {
       return { id: 'cf-' + mf.movId, fields, _dedup: true };
     }
 
+    // Si vino `fields.cuenta` (nombre de cuenta como "BHD Debito" o
+    // "Scotia USD"), resolverlo al cuenta_id real. Si no, usar default.
+    // Importante: el `tipo` enum del movimiento es ortogonal a la cuenta —
+    // NO se deriva del nombre de la cuenta sino del concepto/tipo.
+    const cuentaIdResolved = fields.cuenta
+      ? _findCuentaId(fields.cuenta, DEFAULT_CUENTA_ID)
+      : DEFAULT_CUENTA_ID;
+
+    // Manejo de USD: si el caller pasa montoUsd + tasaCambio, registramos el
+    // valor RD$ en entrada/salida pero anotamos el USD en notas para trazabilidad.
+    let extraNotas = '';
+    if (Number(fields.montoUsd) && Number(fields.tasaCambio)) {
+      extraNotas = ` · USD$${Number(fields.montoUsd).toFixed(2)} @ ${Number(fields.tasaCambio).toFixed(2)}`;
+    }
+
+    // El `tipo` enum del movimiento se determina por el concepto/tipo del
+    // gasto, NO por el nombre de la cuenta. Si el caller pasa fields.tipo
+    // úsalo directo; si no, intenta mapear desde fields.concepto (más
+    // semántico que fields.cuenta).
+    const tipoEnum = fields.tipo
+      || TIPO_REV[fields.concepto]
+      || TIPO_REV[fields.cuenta]
+      || 'OTROS';
+
     const row = {
       fecha,
-      tipo:           TIPO_REV[fields.cuenta] || 'OTROS',
-      cuenta_id:      DEFAULT_CUENTA_ID,
+      tipo:           tipoEnum,
+      cuenta_id:      cuentaIdResolved,
       contraparte_id: _findContraparteId(fields.auxiliar, DEFAULT_CONTRAPARTE_ID),
       entrada,
       salida,
-      notas:          fields.notas || `${fields.cuenta || ''} | ${fields.auxiliar || ''}`,
+      notas:          (fields.notas || `${fields.cuenta || ''} | ${fields.auxiliar || ''}`) + extraNotas,
     };
 
     // ── Auto-link: si hubo un createLote reciente, este CF es un satélite

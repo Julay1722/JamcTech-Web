@@ -1330,9 +1330,9 @@ function LotesTab() {
           { name: 'status',    label: 'Status',           type: 'select', value: edit.status,
             options: [{value:'En Camino',label:'En Camino'},{value:'Recibido',label:'Recibido'},{value:'Perdido',label:'Perdido'}] },
           { name: 'proveedor', label: 'Proveedor',        type: 'text',   value: edit.proveedor || '' },
-          { name: 'envio',     label: 'Envío (RD$)',      type: 'number', value: edit.envio || 0 },
-          { name: 'courier',   label: 'Courier (RD$)',    type: 'number', value: edit.courier || 0 },
-          { name: 'otros',     label: 'Otros (RD$)',      type: 'number', value: edit.otros || 0 },
+          { name: 'envio',     label: 'Envío (RD$)',      type: 'number', value: edit.envio || 0,     hint: 'Actualiza header lote + CFs linkeados' },
+          { name: 'courier',   label: 'Courier (RD$)',    type: 'number', value: edit.courier || 0,   hint: 'Actualiza header lote + CFs linkeados' },
+          { name: 'otros',     label: 'Otros (RD$)',      type: 'number', value: edit.otros || 0,     hint: 'Actualiza header lote + CFs linkeados' },
           { name: 'impuestos', label: 'Impuestos (RD$)',  type: 'number', value: edit.impuestos || 0 },
           { name: 'notas',     label: 'Notas',            type: 'text',   value: edit.notas || '', span: 2 },
         ] : []}
@@ -2865,6 +2865,14 @@ function FormLote() {
   const [cuentaEnvio,     setCuentaEnvio]     = useState('BHD Debito');
   const [cuentaCourier,   setCuentaCourier]   = useState('BHD Debito');
   const [cuentaOtros,     setCuentaOtros]     = useState('BHD Debito');
+  const [tasaCambio,      setTasaCambio]      = useState(60);  // RD$ por 1 USD
+
+  // Helper: cuenta es USD? (busca en cuentas reales primero, fallback name)
+  const isUSDCuenta = (name) => {
+    const c = cuentas.find(x => x.nombre === name);
+    if (c) return c.moneda === 'USD';
+    return /usd/i.test(name);
+  };
   const [lineas, setLineas] = useState([{ id: 1, skuId: '', qty: 1, costoUd: 0 }]);
   const [busy, setBusy] = useState(false);
 
@@ -2895,40 +2903,43 @@ function FormLote() {
       // el outflow real del lote. Los CFs creados con loteId se linkean al lote
       // vía movimientos.lote_id (gracias a _recordLote), así removeLote los
       // borra en cascada.
-      // Cada costo sale de su propia cuenta (mercancía puede ser débito,
-      // envío con tarjeta de crédito Scotia, courier en efectivo, etc.)
+      // Cada costo sale de su propia cuenta. Si la cuenta es USD, el monto
+      // que el usuario tipea se interpreta como USD y se convierte a RD$ al
+      // guardar (multiplicando por la tasa de cambio). Se anota el USD
+      // original en el campo notas para trazabilidad.
+      const buildCfArgs = (cuenta, montoTipeado, concepto, tipo, auxiliar, notaSufijo) => {
+        const usd = isUSDCuenta(cuenta);
+        const tasa = Number(tasaCambio) || 60;
+        const salidaRD = usd ? (Number(montoTipeado) || 0) * tasa : (Number(montoTipeado) || 0);
+        return {
+          fecha, cuenta, auxiliar,
+          concepto, tipo,
+          entrada: 0, salida: salidaRD,
+          montoUsd: usd ? Number(montoTipeado) : undefined,
+          tasaCambio: usd ? tasa : undefined,
+          notas: `Lote ${res.loteId} · ${notaSufijo}`,
+        };
+      };
       const cfPromises = [];
       if (costoBase > 0) {
-        cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaMercancia, auxiliar: proveedor,
-          concepto: 'Compra de mercancia', tipo: 'COMPRA_MERCANCIA',
-          entrada: 0, salida: costoBase,
-          notas: `Lote ${res.loteId} · costo base`,
-        }).catch(e => console.warn('CF compra falló:', e.message)));
+        cfPromises.push(window.AT_CLIENT.create('cashflow',
+          buildCfArgs(cuentaMercancia, costoBase, 'Compra de mercancia', 'COMPRA_MERCANCIA', proveedor, 'costo base')
+        ).catch(e => console.warn('CF compra falló:', e.message)));
       }
       if (Number(envio) > 0) {
-        cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaEnvio, auxiliar: proveedor,
-          concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
-          entrada: 0, salida: Number(envio),
-          notas: `Lote ${res.loteId} · envío China→USA`,
-        }).catch(e => console.warn('CF envío falló:', e.message)));
+        cfPromises.push(window.AT_CLIENT.create('cashflow',
+          buildCfArgs(cuentaEnvio, envio, 'Pago Envio', 'ENVIO_LOTE', proveedor, 'envío China→USA')
+        ).catch(e => console.warn('CF envío falló:', e.message)));
       }
       if (Number(courier) > 0) {
-        cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaCourier, auxiliar: 'Courier',
-          concepto: 'Pago Envio', tipo: 'ENVIO_LOTE',
-          entrada: 0, salida: Number(courier),
-          notas: `Lote ${res.loteId} · courier USA→DR`,
-        }).catch(e => console.warn('CF courier falló:', e.message)));
+        cfPromises.push(window.AT_CLIENT.create('cashflow',
+          buildCfArgs(cuentaCourier, courier, 'Pago Envio', 'ENVIO_LOTE', 'Courier', 'courier USA→DR')
+        ).catch(e => console.warn('CF courier falló:', e.message)));
       }
       if (Number(otros) > 0) {
-        cfPromises.push(window.AT_CLIENT.create('cashflow', {
-          fecha, cuenta: cuentaOtros, auxiliar: 'Aduana',
-          concepto: 'Otro', tipo: 'OTROS',
-          entrada: 0, salida: Number(otros),
-          notas: `Lote ${res.loteId} · otros (aduana/comisión)`,
-        }).catch(e => console.warn('CF otros falló:', e.message)));
+        cfPromises.push(window.AT_CLIENT.create('cashflow',
+          buildCfArgs(cuentaOtros, otros, 'Otro', 'OTROS', 'Aduana', 'otros (aduana/comisión)')
+        ).catch(e => console.warn('CF otros falló:', e.message)));
       }
       await Promise.all(cfPromises);
       // Resumen del desglose de cuentas usado en el toast
@@ -3021,36 +3032,58 @@ function FormLote() {
                 { value: 'Scotia USD',  label: 'Scotia USD (CREDITO)' },
                 { value: 'Qik',         label: 'Qik (CREDITO)' },
               ];
-          const renderCostRow = (label, hint, value, setValue, cuenta, setCuenta, readonly) => (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 1.4fr', gap: 'var(--s-3)', alignItems: 'end', marginBottom: 8 }}>
-              <div className="field">
-                <div className="field-label">{label}</div>
-                {hint && <div className="field-hint">{hint}</div>}
-              </div>
-              <div className="field">
-                <div className="field-label">Monto (RD$)</div>
-                {readonly ? (
-                  <div className="input num" style={{ display: 'flex', alignItems: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
-                    {fmtCurrency(value)}
+          const renderCostRow = (label, hint, value, setValue, cuenta, setCuenta, readonly) => {
+            const usd = isUSDCuenta(cuenta);
+            const tasa = Number(tasaCambio) || 60;
+            const equivRD = usd && Number(value) ? (Number(value) * tasa) : null;
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 1.4fr', gap: 'var(--s-3)', alignItems: 'end', marginBottom: 8 }}>
+                <div className="field">
+                  <div className="field-label">{label}</div>
+                  {hint && <div className="field-hint">{hint}</div>}
+                </div>
+                <div className="field">
+                  <div className="field-label" style={{ color: usd ? 'var(--accent)' : undefined }}>
+                    {usd ? 'Monto (USD$)' : 'Monto (RD$)'}
                   </div>
-                ) : (
-                  <input className="input num" type="number" value={value} onChange={e => setValue(e.target.value)} placeholder="0" />
-                )}
+                  {readonly ? (
+                    <div className="input num" style={{ display: 'flex', alignItems: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+                      {fmtCurrency(value)}
+                    </div>
+                  ) : (
+                    <input className="input num" type="number" value={value} onChange={e => setValue(e.target.value)} placeholder="0" />
+                  )}
+                  {equivRD != null && <div className="field-hint" style={{ color: 'var(--accent)' }}>≈ RD${fmtNum(equivRD)} a tasa {tasa}</div>}
+                </div>
+                <div className="field">
+                  <div className="field-label">Cuenta origen</div>
+                  <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)} disabled={!Number(value)}>
+                    {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
               </div>
-              <div className="field">
-                <div className="field-label">Cuenta origen</div>
-                <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)} disabled={!Number(value)}>
-                  {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </div>
-            </div>
-          );
+            );
+          };
+          const anyUsd = [cuentaMercancia, cuentaEnvio, cuentaCourier, cuentaOtros]
+            .some((cn, i) => [costoBase, envio, courier, otros][i] > 0 && isUSDCuenta(cn));
           return (
             <>
               {renderCostRow('Mercancía (costo base)',     'Auto-calculado desde los SKUs arriba',                  costoBase, null,        cuentaMercancia, setCuentaMercancia, true)}
               {renderCostRow('Envío China → USA',          'Shipping de la mercancía al hub en USA',                envio,     setEnvio,    cuentaEnvio,    setCuentaEnvio)}
               {renderCostRow('Courier USA → DR',           'Lo que paga el courier desde USA a DR',                 courier,   setCourier,  cuentaCourier,  setCuentaCourier)}
               {renderCostRow('Otros (aduana, comisión)',   'Aduana, fee bancario, comisión de proveedor, etc.',     otros,     setOtros,    cuentaOtros,    setCuentaOtros)}
+              {anyUsd && (
+                <div style={{ marginTop: 8, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>USD detectado</div>
+                  <div style={{ flex: 1, fontSize: 12, color: 'var(--text-3)' }}>
+                    Los montos en cuentas USD se convertirán a RD$ con esta tasa para registrar en cashflow:
+                  </div>
+                  <input className="input num" type="number" step="0.01" value={tasaCambio}
+                    onChange={e => setTasaCambio(e.target.value)}
+                    style={{ width: 100 }} />
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>RD$/USD</span>
+                </div>
+              )}
             </>
           );
         })()}
