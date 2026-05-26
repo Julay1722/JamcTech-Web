@@ -71,7 +71,25 @@
   ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 
   /* ────────── Layout shell ────────── */
-  .app { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+  .app { display: flex; min-height: 100vh; }
+  .app > aside.nav { transition: width 220ms ease, flex-basis 220ms ease; box-sizing: border-box; }
+  .app > main { flex: 1 1 auto; min-width: 0; }
+  .app.collapsed .brand > div:not(.brand-mark) { display: none; }
+  .app.collapsed .nav-section-label { opacity: 0; height: 0; padding: 0; overflow: hidden; }
+  .app.collapsed .nav-item > span:not(.nav-item-icon) { display: none; }
+  .app.collapsed .nav-item-badge { position: absolute; top: 2px; right: 2px; padding: 0 4px; font-size: 9px; }
+  .app.collapsed .nav-item { justify-content: center; padding: 8px 4px; position: relative; }
+  .app.collapsed .nav { padding: var(--s-3) var(--s-2); }
+  .app.collapsed .brand { justify-content: center; padding: 0 0 var(--s-3) 0; }
+  .app.collapsed aside > div[style*="margin-top: auto"] { display: none; }
+  .nav-toggle {
+    position: absolute; right: -10px; top: 22px; z-index: 10;
+    width: 20px; height: 20px; border-radius: 50%; background: var(--surface);
+    border: 1px solid var(--border); display: grid; place-items: center;
+    cursor: pointer; font-size: 11px; color: var(--text-2);
+    transition: all 120ms ease;
+  }
+  .nav-toggle:hover { background: var(--surface-2); color: var(--text); border-color: var(--accent); }
 
   /* Sidebar */
   .nav {
@@ -373,7 +391,6 @@
     .row, .row-3, .row-4 { grid-template-columns: 1fr; }
   }
   @media (max-width: 768px) {
-    .app { grid-template-columns: 1fr; }
     .nav { display: none; }
     .main { padding: var(--s-4); }
     .kpi-row { grid-template-columns: 1fr 1fr; gap: var(--s-3); }
@@ -503,6 +520,116 @@ function Sparkline({ values, w = 200, h = 50, color = 'var(--accent)' }) {
   );
 }
 
+// LineChart con etiquetas X/Y, valores numéricos en los ejes y tooltips por punto.
+// Ideal para series mensuales (ventas, ganancia, balance, etc).
+function LineChart({ values, labels = [], w = 800, h = 180, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '', yTicks = 4 }) {
+  if (!values || values.length < 2) return <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos suficientes</div>;
+  const PAD_L = 56, PAD_R = 12, PAD_T = 8, PAD_B = 22;
+  const cw = w - PAD_L - PAD_R, ch = h - PAD_T - PAD_B;
+  const max = Math.max(...values);
+  const min = Math.min(0, Math.min(...values));
+  const range = (max - min) || 1;
+  const x = (i) => PAD_L + (i / (values.length - 1)) * cw;
+  const y = (v) => PAD_T + ch - ((v - min) / range) * ch;
+  const points = values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+  const areaPoints = `${PAD_L},${PAD_T + ch} ${points} ${PAD_L + cw},${PAD_T + ch}`;
+  const ticks = Array.from({ length: yTicks + 1 }, (_, i) => min + (range * i / yTicks));
+  return (
+    <div style={{ position: 'relative' }}>
+      {title && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>}
+      <svg width={w} height={h} style={{ overflow: 'visible', display: 'block' }}>
+        {/* Y-axis gridlines + labels */}
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={PAD_L} y1={y(t)} x2={PAD_L + cw} y2={y(t)} stroke="var(--border)" strokeDasharray="2 4" strokeWidth={0.5} />
+            <text x={PAD_L - 6} y={y(t) + 3} fontSize={10} fill="var(--text-3)" textAnchor="end" fontFamily="var(--font-mono)">{fmt(t)}</text>
+          </g>
+        ))}
+        <polygon points={areaPoints} fill={color} opacity={0.12} />
+        <polyline points={points} fill="none" stroke={color} strokeWidth={1.8} />
+        {/* Data points */}
+        {values.map((v, i) => (
+          <g key={i}>
+            <circle cx={x(i)} cy={y(v)} r={3} fill={color}>
+              <title>{(labels[i] || `#${i+1}`) + ': ' + fmt(v)}</title>
+            </circle>
+          </g>
+        ))}
+        {/* X-axis labels (each one, no skipping) */}
+        {labels.map((l, i) => (
+          <text key={i} x={x(i)} y={h - 6} fontSize={10} fill="var(--text-3)" textAnchor="middle" fontFamily="var(--font-mono)">{l}</text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// BarChart simple comparativo: dataset de {label, value}. Útil para top N o categorías.
+function BarChart({ data, w = 800, h = 180, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '' }) {
+  if (!data || data.length === 0) return null;
+  const PAD_L = 92, PAD_R = 56, PAD_T = 4, PAD_B = 4;
+  const max = Math.max(...data.map(d => d.value));
+  const barH = Math.max(18, (h - PAD_T - PAD_B) / data.length - 6);
+  const cw = w - PAD_L - PAD_R;
+  return (
+    <div>
+      {title && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>}
+      <svg width={w} height={(barH + 6) * data.length} style={{ display: 'block' }}>
+        {data.map((d, i) => {
+          const yPos = i * (barH + 6) + PAD_T;
+          const bw = max > 0 ? (Math.abs(d.value) / max) * cw : 0;
+          return (
+            <g key={i}>
+              <text x={PAD_L - 6} y={yPos + barH/2 + 4} fontSize={11} fill="var(--text-2)" textAnchor="end">{d.label}</text>
+              <rect x={PAD_L} y={yPos} width={bw} height={barH} fill={d.color || color} opacity={0.85} rx={2} />
+              <text x={PAD_L + bw + 6} y={yPos + barH/2 + 4} fontSize={11} fill="var(--text)" fontFamily="var(--font-mono)">{fmt(d.value)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// Donut chart pequeño con leyenda — ideal para mix categórico (estados SKU, métodos pago, etc).
+function DonutChart({ data, size = 140, strokeW = 22, fmt = (n, p) => `${n.toLocaleString('en-US')} (${p.toFixed(1)}%)`, title = '' }) {
+  if (!data || data.length === 0) return null;
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const cx = size / 2, cy = size / 2, r = size / 2 - strokeW / 2;
+  const circumference = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <svg width={size} height={size}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border)" strokeWidth={strokeW} />
+        {data.map((d, i) => {
+          const len = (d.value / total) * circumference;
+          const seg = (
+            <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+              stroke={d.color} strokeWidth={strokeW}
+              strokeDasharray={`${len} ${circumference - len}`}
+              strokeDashoffset={-offset}
+              transform={`rotate(-90 ${cx} ${cy})`} />
+          );
+          offset += len;
+          return seg;
+        })}
+        <text x={cx} y={cy - 2} textAnchor="middle" fontSize={14} fontWeight={600} fontFamily="var(--font-mono)" fill="var(--text)">{total.toLocaleString('en-US')}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" fontSize={9} fill="var(--text-3)" textTransform="uppercase" letterSpacing={0.6}>{title || 'TOTAL'}</text>
+      </svg>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }}>
+        {data.map((d, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 10, height: 10, background: d.color, borderRadius: 2, flexShrink: 0 }} />
+            <span style={{ color: 'var(--text-2)' }}>{d.label}</span>
+            <span style={{ color: 'var(--text-3)', marginLeft: 'auto', fontFamily: 'var(--font-mono)' }}>{fmt(d.value, (d.value / total) * 100)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Pages ───────────────────────────────────────────────────────
 function OverviewPage({ period }) {
   const data = useATData();
@@ -584,10 +711,63 @@ function OverviewPage({ period }) {
 
   // ── Balance acumulado mes a mes (siempre histórico) ───────────
   const balSeries = [];
+  const balLabels = [];
   let accBal = 0;
-  // CF_MES es {m, e, s} mensual; si no existe, lo computamos de MES (v=ventas como proxy).
   const cfMes = window.CF_MES && window.CF_MES.length ? window.CF_MES : MES.map(m => ({ m: m.m, e: m.v, s: 0 }));
-  cfMes.forEach(m => { accBal += (m.e || 0) - (m.s || 0); balSeries.push(accBal); });
+  cfMes.forEach(m => { accBal += (m.e || 0) - (m.s || 0); balSeries.push(accBal); balLabels.push(m.m); });
+
+  // ── KPIs adicionales ──────────────────────────────────────────
+  const ticketProm    = ventas.length > 0 ? totalVentas / ventas.length : 0;
+  const ganxVenta     = ventas.length > 0 ? totalGanancia / ventas.length : 0;
+  const totalUds      = ventas.reduce((s, v) => s + (v.cantidadTotal || 0), 0);
+  const udsxVenta     = ventas.length > 0 ? totalUds / ventas.length : 0;
+  const stockTotal    = SKbuilt.reduce((s, x) => s + (x.s || 0), 0);
+  const enCaminoTotal = SKbuilt.reduce((s, x) => s + (x.enCamino || 0), 0);
+  const capitalStock  = SKbuilt.reduce((s, x) => s + ((x.s || 0) * (x.cpp || 0)), 0);
+  const skusActivos   = SKbuilt.filter(s => s.estado !== 'sin_movimiento').length;
+  const numLotes      = (data.lotes || []).length;
+  const lotesEnCamino = (data.lotes || []).filter(l => l.status === 'En Camino').length;
+
+  // Series mensuales para charts (etiquetadas)
+  const mesLabels       = MES.map(m => m.m);
+  const ventasSerie     = MES.map(m => m.v || 0);
+  const gananciaSerie   = MES.map(m => m.g || 0);
+  const margenSerie     = MES.map(m => m.p || 0);
+
+  // Canales (top channels)
+  const canalStats = {};
+  ventas.forEach(v => {
+    const c = v.canal || 'Sin canal';
+    if (!canalStats[c]) canalStats[c] = { label: c, value: 0, ventas: 0 };
+    canalStats[c].value += v.precioFacturadoTotal || 0;
+    canalStats[c].ventas += 1;
+  });
+  const canalPalette = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+  const topCanales = Object.values(canalStats).sort((a, b) => b.value - a.value).slice(0, 6)
+                     .map((c, i) => ({ ...c, color: canalPalette[i % canalPalette.length] }));
+
+  // Estados SKU para donut
+  const estadoSKU = [
+    { label: 'Saludable',      value: SKbuilt.filter(s => s.estado === 'ok').length,             color: '#10b981' },
+    { label: 'Atención',       value: atencion,                                                   color: '#f59e0b' },
+    { label: 'Crítico',        value: criticos,                                                   color: '#ef4444' },
+    { label: 'Sin movimiento', value: SKbuilt.filter(s => s.estado === 'sin_movimiento').length, color: '#6b7280' },
+    { label: 'En reposición',  value: SKbuilt.filter(s => s.estado === 'en_reposicion').length,  color: '#3b82f6' },
+  ].filter(d => d.value > 0);
+
+  // Categorías de gasto (period) — para BarChart
+  const gastosByConcepto = {};
+  cf.forEach(m => {
+    if (!m.s || m.s === 0) return;
+    const k = m.c || 'Otros';
+    gastosByConcepto[k] = (gastosByConcepto[k] || 0) + m.s;
+  });
+  const topGastos = Object.entries(gastosByConcepto)
+                          .sort((a, b) => b[1] - a[1]).slice(0, 6)
+                          .map(([label, value]) => ({ label, value }));
+
+  // Format helpers
+  const fmtK = (n) => Math.abs(n) >= 1000 ? (n/1000).toFixed(n >= 100000 ? 0 : 1) + 'K' : Math.round(n).toString();
 
   return (
     <>
@@ -613,16 +793,91 @@ function OverviewPage({ period }) {
              delta={null} deltaLabel="COOP + Andrea + BHD" />
       </div>
 
-      {/* Balance acumulado (curva de capital mes a mes) ──────────── */}
+      {/* ═══════════════════ APARTADO: COMERCIAL ═══════════════════ */}
+      <div className="nav-section-label" style={{ padding: 'var(--s-4) 0 var(--s-2)', fontSize: 12 }}>COMERCIAL · VENTAS · MARGEN</div>
+
+      <div className="kpi-row">
+        <KPI label="Ticket promedio" value={fmtNum(ticketProm)} currency
+             delta={null} deltaLabel={`${ventas.length} ventas · ${period}`} />
+        <KPI label="Ganancia x venta" value={fmtNum(ganxVenta)} currency
+             delta={margenPct} deltaLabel="margen %" />
+        <KPI label="Unidades vendidas" value={fmtNum(totalUds)}
+             delta={null} deltaLabel={`${udsxVenta.toFixed(1)} ud/venta`} />
+        <KPI label="SKUs vendidos" value={fmtNum(Object.keys(skuStats).length)}
+             delta={null} deltaLabel={`${skusActivos}/${SK.length} activos`} />
+      </div>
+
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Ventas mensuales (RD$)</div>
+              <div className="section-desc">Tendencia · {MES.length} meses · prom RD${fmtNum(totalVentas / Math.max(1, MES.length))}</div>
+            </div>
+          </div>
+          <LineChart values={ventasSerie} labels={mesLabels} w={520} h={200} color="var(--accent)"
+            fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE MENSUAL · RD$" />
+        </div>
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Ganancia mensual (RD$)</div>
+              <div className="section-desc">Margen prom {(MES.reduce((s, m) => s + m.p, 0) / Math.max(1, MES.length)).toFixed(1)}%</div>
+            </div>
+          </div>
+          <LineChart values={gananciaSerie} labels={mesLabels} w={520} h={200} color="var(--success)"
+            fmt={(n) => 'RD$' + fmtK(n)} title="GANANCIA MENSUAL · RD$" />
+        </div>
+      </div>
+
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Margen % mensual</div>
+              <div className="section-desc">Ganancia ÷ Revenue por mes</div>
+            </div>
+          </div>
+          <LineChart values={margenSerie} labels={mesLabels} w={520} h={180} color="var(--warning)"
+            fmt={(n) => n.toFixed(1) + '%'} title="MARGEN %" />
+        </div>
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Top canales por revenue</div>
+              <div className="section-desc">{topCanales.length} canales · {period === 'todo' ? 'histórico' : period}</div>
+            </div>
+          </div>
+          {topCanales.length > 0 ? (
+            <BarChart data={topCanales} w={520} fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE POR CANAL · RD$" />
+          ) : <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin datos en el período</div>}
+        </div>
+      </div>
+
+      {/* ═══════════════════ APARTADO: FINANZAS · CAPITAL ═══════════════════ */}
+      <div className="nav-section-label" style={{ padding: 'var(--s-4) 0 var(--s-2)', fontSize: 12 }}>FINANZAS · CAPITAL · DEUDA</div>
+
+      <div className="kpi-row">
+        <KPI label="Saldo Coop" value={fmtNum(window.COOP?.saldo || 0)} currency
+             delta={null} deltaLabel={`pagado ${fmtCurrency(window.COOP?.pagado || 0)}`} />
+        <KPI label="Pendiente Andrea" value={fmtNum(window.ANDREA?.pendiente || 0)} currency
+             delta={null} deltaLabel={`pagado ${fmtCurrency(window.ANDREA?.pagado || 0)}`} />
+        <KPI label="BHD Línea usada" value={fmtNum(window.BHD?.usado || 0)} currency
+             delta={window.BHD?.limite > 0 ? (window.BHD.usado / window.BHD.limite) * 100 : null} deltaLabel="% uso" />
+        <KPI label="Próxima cuota Coop" value={fmtNum(window.COOP?.cuota || 0)} currency
+             delta={null} deltaLabel={(window.COOP?.pagos || []).length + ' cuotas restantes'} />
+      </div>
+
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Balance acumulado</div>
-            <div className="section-desc">Curva de capital · histórico completo</div>
+            <div className="section-title">Balance acumulado de cuentas (RD$)</div>
+            <div className="section-desc">Capital total mes a mes · suma de entradas menos salidas · histórico completo</div>
           </div>
           <span className="badge neutral">Actual: {fmtCurrency(balanceActual)}</span>
         </div>
-        <Sparkline values={balSeries} w={800} h={90} color="var(--success)" />
+        <LineChart values={balSeries} labels={balLabels} w={1080} h={210} color="var(--success)"
+          fmt={(n) => 'RD$' + fmtK(n)} title="CAPITAL ACUMULADO · RD$" yTicks={5} />
       </div>
 
       {/* Cash Flow breakdown — Op vs Fin ─────────────────────────── */}
@@ -680,13 +935,63 @@ function OverviewPage({ period }) {
         </div>
       </div>
 
-      {/* Top SKUs por revenue ────────────────────────────────────── */}
+      {/* Gastos por concepto ─────────────────────────────────────── */}
+      {topGastos.length > 0 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Gastos por concepto (RD$)</div>
+              <div className="section-desc">{topGastos.length} categorías · {period === 'todo' ? 'histórico' : period} · total {fmtCurrency(topGastos.reduce((s, g) => s + g.value, 0))}</div>
+            </div>
+          </div>
+          <BarChart data={topGastos} w={1060} fmt={(n) => 'RD$' + fmtK(n)} color="var(--danger)" title="GASTO ACUMULADO · RD$" />
+        </div>
+      )}
+
+      {/* ═══════════════════ APARTADO: INVENTARIO · STOCK ═══════════════════ */}
+      <div className="nav-section-label" style={{ padding: 'var(--s-4) 0 var(--s-2)', fontSize: 12 }}>INVENTARIO · STOCK · LOTES</div>
+
+      <div className="kpi-row">
+        <KPI label="Stock total" value={fmtNum(stockTotal)} deltaLabel="unidades" delta={null} />
+        <KPI label="En camino" value={fmtNum(enCaminoTotal)} deltaLabel={`${lotesEnCamino}/${numLotes} lotes`} delta={null} />
+        <KPI label="Capital en stock" value={fmtNum(capitalStock)} currency
+             delta={null} deltaLabel="cpp × stock" />
+        <KPI label="SKUs críticos" value={fmtNum(criticos)}
+             delta={null} deltaLabel={`${atencion} en atención`} />
+      </div>
+
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Estado de SKUs</div>
+              <div className="section-desc">Distribución por nivel de stock</div>
+            </div>
+          </div>
+          {estadoSKU.length > 0 ? (
+            <DonutChart data={estadoSKU} size={160} fmt={(n, p) => `${n} (${p.toFixed(0)}%)`} title="SKUS" />
+          ) : <div className="muted">Sin datos</div>}
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Top 5 SKUs por revenue</div>
+              <div className="section-desc">{period === 'todo' ? 'Histórico' : period} · {topSkus.length} de {Object.keys(skuStats).length}</div>
+            </div>
+          </div>
+          {topSkus.length > 0 ? (
+            <BarChart data={topSkus.map((s, i) => ({ label: s.nombre.slice(0, 22), value: s.revenue, color: canalPalette[i % canalPalette.length] }))} w={520} fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE POR SKU · RD$" />
+          ) : <div className="muted" style={{ fontSize: 12, padding: 16 }}>Sin ventas en el período</div>}
+        </div>
+      </div>
+
       {topSkus.length > 0 && (
         <div className="section">
           <div className="section-head">
             <div>
-              <div className="section-title">Top SKUs por revenue</div>
-              <div className="section-desc">{period === 'todo' ? 'Histórico' : `Últimos ${period}`} · {topSkus.length} de {Object.keys(skuStats).length} SKUs vendidos</div>
+              <div className="section-title">Detalle Top SKUs</div>
+              <div className="section-desc">Unidades · revenue · ganancia · margen %</div>
             </div>
           </div>
           <table className="data">
@@ -714,76 +1019,14 @@ function OverviewPage({ period }) {
         </div>
       )}
 
-      <div className="grid-2">
-        {/* Ventas mensuales */}
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Ventas mensuales</div>
-              <div className="section-desc">Tendencia últimos {MES.length} meses</div>
-            </div>
-            <span className="badge neutral">RD${fmtNum(totalVentas / Math.max(1, MES.length))} prom/mes</span>
-          </div>
-          <Sparkline values={ventasSeries} w={500} h={80} color="var(--accent)" />
-          <table className="data" style={{ marginTop: 'var(--s-4)' }}>
-            <thead><tr>
-              <th>Mes</th><th className="right">Ventas</th><th className="right">Ganancia</th><th className="right">Margen</th>
-            </tr></thead>
-            <tbody>
-              {MES.slice(-6).reverse().map(m => (
-                <tr key={m.m}>
-                  <td>{m.m}</td>
-                  <td className="num right">{fmtCurrency(m.v)}</td>
-                  <td className="num right pos">{fmtCurrency(m.g)}</td>
-                  <td className="num right muted">{m.p.toFixed(1)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Estado de inventario */}
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Inventario</div>
-              <div className="section-desc">{SK.length} SKUs activos</div>
-            </div>
-            {criticos > 0 && <span className="badge danger">{criticos} críticos</span>}
-          </div>
-          <div className="grid-3">
-            <div className="stat-card">
-              <div className="stat-label">Stock físico</div>
-              <div className="stat-value">{fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">En camino</div>
-              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtNum(SK.reduce((s, x) => s + (x.enCamino || 0), 0))} ud</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Capital invertido</div>
-              <div className="stat-value">{fmtCurrency(SK.reduce((s, x) => s + ((x.s || 0) * (x.cpp || 0)), 0))}</div>
-            </div>
-          </div>
-          <table className="data" style={{ marginTop: 'var(--s-4)' }}>
-            <thead><tr>
-              <th>Estado</th><th className="right">SKUs</th>
-            </tr></thead>
-            <tbody>
-              <tr><td><span className="badge danger">Crítico</span></td><td className="num right">{criticos}</td></tr>
-              <tr><td><span className="badge warning">Atención</span></td><td className="num right">{atencion}</td></tr>
-              <tr><td><span className="badge success">Saludable</span></td><td className="num right">{SKbuilt.filter(s => s.estado === 'ok').length}</td></tr>
-              <tr><td><span className="badge neutral">Sin movimiento</span></td><td className="num right">{SKbuilt.filter(s => s.estado === 'sin_movimiento').length}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* ═══════════════════ APARTADO: TRANSACCIONES RECIENTES ═══════════════════ */}
+      <div className="nav-section-label" style={{ padding: 'var(--s-4) 0 var(--s-2)', fontSize: 12 }}>ACTIVIDAD · TRANSACCIONES RECIENTES</div>
 
       <div className="section">
         <div className="section-head">
           <div>
             <div className="section-title">Movimientos recientes</div>
-            <div className="section-desc">Últimos {recientes.length} de {cf.length}</div>
+            <div className="section-desc">Últimos {recientes.length} de {cf.length} en {period === 'todo' ? 'histórico' : period}</div>
           </div>
           <button className="btn ghost" onClick={() => window.AT_CLIENT?.refreshAll?.()}>Ver todos →</button>
         </div>
@@ -3077,6 +3320,8 @@ function App() {
   const data = useATData();
   const [page, setPage] = useState('overview');
   const [period, setPeriod] = useState('todo');
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem('nav-collapsed') === '1');
+  useEffect(() => { localStorage.setItem('nav-collapsed', navCollapsed ? '1' : '0'); }, [navCollapsed]);
 
   // Computa # alertas para badge del sidebar
   const SK = window.buildSK ? window.buildSK() : (data.skus || []);
@@ -3097,10 +3342,20 @@ function App() {
   const showPeriod = ['overview', 'ventas', 'movimientos'].includes(page);
 
   return (
-    <div className="app">
-      <aside className="nav">
+    <div className={`app ${navCollapsed ? 'collapsed' : ''}`}>
+      <aside className="nav" style={{
+        position: 'relative', overflow: 'visible',
+        width: navCollapsed ? 56 : 224,
+        minWidth: navCollapsed ? 56 : 224,
+        maxWidth: navCollapsed ? 56 : 224,
+        flex: `0 0 ${navCollapsed ? 56 : 224}px`,
+      }}>
+        <button className="nav-toggle" title={navCollapsed ? 'Expandir' : 'Colapsar'}
+                onClick={() => setNavCollapsed(c => !c)}>
+          {navCollapsed ? '›' : '‹'}
+        </button>
         <div className="brand">
-          <div className="brand-mark">J</div>
+          <div className="brand-mark" title={navCollapsed ? 'JAMC.TECH · v3' : ''}>J</div>
           <div>
             <div className="brand-text">JAMC.TECH</div>
             <div className="brand-sub">v3 · Supabase</div>
