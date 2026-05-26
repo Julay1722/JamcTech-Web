@@ -3119,6 +3119,48 @@ function VentasPageExt({ period }) {
     return (v.idVenta || '').toLowerCase().includes(q) || (v.canal || '').toLowerCase().includes(q);
   }).slice(0, 100);
 
+  // ── KPIs del período ─────────────────────────────────────────
+  const totalRevenue   = filteredPeriod.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+  const totalGanancia  = filteredPeriod.reduce((s, v) => s + (v.gananciaTotal       || 0), 0);
+  const totalUds       = filteredPeriod.reduce((s, v) => s + (v.cantidadTotal       || 0), 0);
+  const ticketProm     = filteredPeriod.length > 0 ? totalRevenue / filteredPeriod.length : 0;
+  const udsxVenta      = filteredPeriod.length > 0 ? totalUds / filteredPeriod.length : 0;
+  const ganxVenta      = filteredPeriod.length > 0 ? totalGanancia / filteredPeriod.length : 0;
+  const margenProm     = totalRevenue > 0 ? (totalGanancia / totalRevenue) * 100 : 0;
+
+  // Meses únicos cubiertos por las ventas filtradas
+  const monthsSet = new Set(filteredPeriod.map(v => (v.fecha || '').slice(0, 7)).filter(Boolean));
+  const nMeses = Math.max(1, monthsSet.size);
+  const ventasxMes   = filteredPeriod.length / nMeses;
+  const revenuexMes  = totalRevenue / nMeses;
+  const gananciaxMes = totalGanancia / nMeses;
+  const udsxMes      = totalUds / nMeses;
+
+  // Día con más ventas (count) y día más rentable (revenue)
+  const ventasByDate = {};
+  filteredPeriod.forEach(v => {
+    if (!v.fecha) return;
+    if (!ventasByDate[v.fecha]) ventasByDate[v.fecha] = { count: 0, revenue: 0 };
+    ventasByDate[v.fecha].count   += 1;
+    ventasByDate[v.fecha].revenue += v.precioFacturadoTotal || 0;
+  });
+  const diasConVenta = Object.keys(ventasByDate).length;
+  const bestDayCount = Object.entries(ventasByDate).sort((a, b) => b[1].count   - a[1].count  )[0];
+  const bestDayRev   = Object.entries(ventasByDate).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+
+  // Top canal por revenue
+  const canalStats = {};
+  filteredPeriod.forEach(v => {
+    const c = v.canal || 'Sin canal';
+    if (!canalStats[c]) canalStats[c] = { revenue: 0, count: 0 };
+    canalStats[c].revenue += v.precioFacturadoTotal || 0;
+    canalStats[c].count   += 1;
+  });
+  const topCanal = Object.entries(canalStats).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+
+  // Helper para fmtK (RD$XK)
+  const fmtKLocal = (n) => Math.abs(n) >= 1000 ? (n/1000).toFixed(n >= 100000 ? 0 : 1) + 'K' : Math.round(n).toString();
+
   const doDelete = async () => {
     setBusy(true);
     try {
@@ -3171,6 +3213,85 @@ function VentasPageExt({ period }) {
       )}
 
       {tab === 'lista' && (
+      <>
+      <div className="nav-section-label" style={{ padding: 'var(--s-3) 0 var(--s-2)', fontSize: 12 }}>RESUMEN DEL PERÍODO</div>
+      <div className="kpi-row">
+        <KPI label="Ventas en período" value={fmtNum(filteredPeriod.length)}
+             delta={null} deltaLabel={`en ${nMeses} mes${nMeses>1?'es':''} · ${diasConVenta} días con venta`} />
+        <KPI label="Revenue total" value={fmtNum(totalRevenue)} currency
+             delta={margenProm} deltaLabel="margen prom" />
+        <KPI label="Ganancia total" value={fmtNum(totalGanancia)} currency
+             delta={null} deltaLabel={`${fmtCurrency(ganxVenta)}/venta`} />
+        <KPI label="Unidades vendidas" value={fmtNum(totalUds)}
+             delta={null} deltaLabel={`${udsxVenta.toFixed(1)} ud/venta`} />
+      </div>
+
+      <div className="kpi-row">
+        <KPI label="Ventas / mes" value={ventasxMes.toFixed(1)}
+             delta={null} deltaLabel={`promedio en ${nMeses} mes${nMeses>1?'es':''}`} />
+        <KPI label="Revenue / mes" value={fmtNum(revenuexMes)} currency
+             delta={null} deltaLabel={`prom · ${fmtCurrency(ticketProm)} ticket`} />
+        <KPI label="Ganancia / mes" value={fmtNum(gananciaxMes)} currency
+             delta={null} deltaLabel="promedio" />
+        <KPI label="Unidades / mes" value={fmtNum(udsxMes)}
+             delta={null} deltaLabel="promedio" />
+      </div>
+
+      <div className="grid-2" style={{ marginBottom: 'var(--s-5)' }}>
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Mejor día</div>
+              <div className="section-desc">Por revenue · por cantidad de ventas</div>
+            </div>
+          </div>
+          <div className="grid-2">
+            <div className="stat-card">
+              <div className="stat-label">Día con más revenue</div>
+              <div className="stat-value">{bestDayRev ? fmtDate(bestDayRev[0]) : '—'}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                {bestDayRev ? `${fmtCurrency(bestDayRev[1].revenue)} · ${bestDayRev[1].count} venta${bestDayRev[1].count > 1 ? 's' : ''}` : 'Sin datos'}
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Día con más ventas</div>
+              <div className="stat-value">{bestDayCount ? fmtDate(bestDayCount[0]) : '—'}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                {bestDayCount ? `${bestDayCount[1].count} venta${bestDayCount[1].count > 1 ? 's' : ''} · ${fmtCurrency(bestDayCount[1].revenue)}` : 'Sin datos'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Top canal</div>
+              <div className="section-desc">{Object.keys(canalStats).length} canales activos</div>
+            </div>
+          </div>
+          {topCanal ? (
+            <div className="grid-2">
+              <div className="stat-card">
+                <div className="stat-label">Líder</div>
+                <div className="stat-value">{topCanal[0]}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                  {topCanal[1].count} venta{topCanal[1].count > 1 ? 's' : ''} · {fmtCurrency(topCanal[1].revenue)}
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Share</div>
+                <div className="stat-value" style={{ color: 'var(--accent)' }}>
+                  {totalRevenue > 0 ? ((topCanal[1].revenue / totalRevenue) * 100).toFixed(1) : '0'}%
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>del revenue total</div>
+              </div>
+            </div>
+          ) : <div className="muted">Sin canales</div>}
+        </div>
+      </div>
+
+      <div className="nav-section-label" style={{ padding: 'var(--s-3) 0 var(--s-2)', fontSize: 12 }}>LISTA · {filtered.length} de {filteredPeriod.length}</div>
       <div className="section">
         <table className="data">
           <thead><tr>
@@ -3199,6 +3320,7 @@ function VentasPageExt({ period }) {
           </tbody>
         </table>
       </div>
+      </>
       )}
 
       <ConfirmModal open={!!del} danger busy={busy}
