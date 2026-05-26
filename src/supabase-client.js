@@ -448,15 +448,63 @@ async function loadFinanciero() {
 }
 
 // ── Resumen mensual ─────────────────────────────────────────────
-// No hay tabla resumen_mensual en Supabase. El dashboard ya tiene un
-// fallback al array MES hardcodeado en data.js para el bloque "Detalle
-// Mensual P&L". Aquí solo emitimos el evento con count=0 para no
-// bloquear la UI.
+// No hay tabla resumen_mensual en Supabase. Calculamos el resumen mensual
+// desde ventas + cashflow (mismo cálculo que _overrideGlobals para
+// window.MES) y lo guardamos en el shape que esperan los paneles:
+//   { m: 'Jul-25', v, g, p, c, _ci }
+// Importante: NO devolver array vacío — panel-mando.jsx hace
+//   const baseMES = atResumen.loaded ? (window.__AIRTABLE_DATA__?.resumen || MES) : MES;
+// Si el resumen es [] (truthy), MES nunca cae como fallback y el panel
+// se queda en blanco. Esto se ejecuta una vez que ventas + cashflow ya
+// están cargados (loop espera o re-corre cuando llegue el evento).
 async function loadResumen() {
-  window.__AIRTABLE_DATA__.resumen = [];
-  _dispatch('resumen', 0);
-  console.log('· [SB/resumen] sin tabla resumen_mensual — usando MES hardcoded de data.js');
-  return [];
+  // Espera a que ventas + cashflow estén cargados
+  const D = window.__AIRTABLE_DATA__;
+  if (!Array.isArray(D?.ventas) || !Array.isArray(D?.cashflow)) {
+    // Reintenta una vez que esos eventos lleguen
+    const tryBuild = () => {
+      if (Array.isArray(D?.ventas) && Array.isArray(D?.cashflow)) {
+        window.removeEventListener('airtable-loaded', tryBuild);
+        loadResumen();
+      }
+    };
+    window.addEventListener('airtable-loaded', tryBuild);
+    return [];
+  }
+  // Agregado por mes
+  const vmap = {};
+  D.ventas.forEach((v) => {
+    const ym = (v.fecha || '').slice(0, 7);
+    if (!ym) return;
+    if (!vmap[ym]) vmap[ym] = { v: 0, g: 0 };
+    vmap[ym].v += v.precioFacturadoTotal || 0;
+    vmap[ym].g += v.gananciaTotal        || 0;
+  });
+  const sorted = D.cashflow.slice().sort((a, b) => (a.f < b.f ? -1 : 1));
+  let running = 0;
+  const cmap = {};
+  sorted.forEach((r) => {
+    running += (r.e || 0) - (r.s || 0);
+    const ym = (r.f || '').slice(0, 7);
+    if (ym) cmap[ym] = running;
+  });
+  const months = Array.from(new Set([...Object.keys(vmap), ...Object.keys(cmap)])).sort();
+  const resumen = months.map((ym) => {
+    const v = vmap[ym]?.v || 0;
+    const g = vmap[ym]?.g || 0;
+    return {
+      m:   _ymToLabel(ym),
+      v,
+      g,
+      p:   v > 0 ? Number(((g / v) * 100).toFixed(2)) : 0,
+      c:   cmap[ym] || 0,
+      _ci: 0,
+    };
+  });
+  D.resumen = resumen;
+  _dispatch('resumen', resumen.length);
+  console.log(`✓ [SB/resumen] ${resumen.length} meses computados desde ventas + cashflow`);
+  return resumen;
 }
 
 // ── MovFin (movimientos financieros) ─────────────────────────────
@@ -1164,13 +1212,40 @@ function _ymToLabel(ym) {
   return `${_MES_LABELS[mm] || mm}-${yy}`;
 }
 
+// Mutar array in-place (vacía y rellena). Necesario porque data.js define
+// los globals como `const MES = [...]`, que crea un binding en el Script
+// Lexical Environment. Asignar window.MES = nuevo SOLO cambia la propiedad
+// de window pero NO el binding lexical, así que los paneles que usan `MES`
+// (sin window.) siguen viendo el array hardcoded original.
+function _replaceArray(arr, newItems) {
+  if (!Array.isArray(arr)) return false;
+  arr.length = 0;
+  for (const it of newItems) arr.push(it);
+  return true;
+}
+function _replaceObject(obj, newProps) {
+  if (!obj || typeof obj !== 'object') return false;
+  for (const k of Object.keys(obj)) delete obj[k];
+  Object.assign(obj, newProps);
+  return true;
+}
+
 function _overrideGlobals() {
   const D = window.__AIRTABLE_DATA__;
   if (!D) return;
 
-  // ── CF_ALL: lista plana de cashflow ──
-  if (Array.isArray(D.cashflow)) {
-    window.CF_ALL = D.cashflow.slice();
+  // ── HOY: actualizar al día real (data.js hardcodea 2026-05-20) ──
+  // Asignación a window.HOY sí afecta porque el chequeo en shell.jsx usa
+  // `HOY` que cae al window scope cuando no hay binding lexical (HOY es
+  // declarado const en data.js — esto NO se actualizará, pero sólo afecta
+  // un display string).
+  const today = new Date().toISOString().slice(0, 10);
+  if (today >= (window.HOY || '0')) window.HOY = today;
+
+  // ── CF_ALL: vaciar (paneles hacen merge con airtableCF; CF_ALL hardcoded
+  //    causa duplicados). Mutate in-place. ──
+  if (Array.isArray(window.CF_ALL) && Array.isArray(D.cashflow) && D.cashflow.length > 0) {
+    _replaceArray(window.CF_ALL, []);
   }
 
   // ── CF_MES: cashflow agregado por mes ──
@@ -1183,9 +1258,10 @@ function _overrideGlobals() {
       buckets[ym].e += r.e || 0;
       buckets[ym].s += r.s || 0;
     });
-    window.CF_MES = Object.keys(buckets)
+    const newCfMes = Object.keys(buckets)
       .sort()
       .map((ym) => ({ m: _ymToLabel(ym), e: buckets[ym].e, s: buckets[ym].s }));
+    _replaceArray(window.CF_MES, newCfMes);
   }
 
   // ── MES: P&L mensual real (reemplaza el array hardcoded) ──
@@ -1208,7 +1284,7 @@ function _overrideGlobals() {
       if (ym) cmap[ym] = running;
     });
     const allMonths = Array.from(new Set([...Object.keys(vmap), ...Object.keys(cmap)])).sort();
-    window.MES = allMonths.map((ym) => {
+    const newMES = allMonths.map((ym) => {
       const v = vmap[ym]?.v || 0;
       const g = vmap[ym]?.g || 0;
       return {
@@ -1220,6 +1296,7 @@ function _overrideGlobals() {
         f: `${ym}-01`,
       };
     });
+    _replaceArray(window.MES, newMES);
   }
 
   // ── COOP (préstamo Cooperativa) ──
@@ -1230,7 +1307,7 @@ function _overrideGlobals() {
     if (coop) {
       const pagosCF = D.cashflow.filter((m) => m.c === 'Pago Prestamo');
       const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
-      window.COOP = {
+      _replaceObject(window.COOP, {
         nombre:       'Préstamo Cooperativa',
         inicio:       coop.fechaInicio || '2026-02-14',
         monto:        coop.montoTotal || 115000,
@@ -1247,7 +1324,7 @@ function _overrideGlobals() {
           capital: 0, interes: 0, seguro: 0, abono: 0,
           nota:    m.a || `Cuota ${i + 1}`,
         })),
-      };
+      });
     }
   }
 
@@ -1257,7 +1334,7 @@ function _overrideGlobals() {
     if (inv) {
       const pagosCF = D.cashflow.filter((m) => m.c === 'Pago a Inversores');
       const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
-      window.ANDREA = {
+      _replaceObject(window.ANDREA, {
         nombre:    inv.nombre || 'Andrea Correa',
         inicio:    inv.fechaInicio || '2026-02-14',
         aporte:    inv.montoTotal || 50000,
@@ -1268,7 +1345,7 @@ function _overrideGlobals() {
           mes:   _ymToLabel(m.f.slice(0, 7)),
           monto: m.s,
         })),
-      };
+      });
     }
   }
 
@@ -1287,7 +1364,7 @@ function _overrideGlobals() {
       const pagosLinea = D.cashflow.filter((m) => m.c === 'Pago Linea de Credito');
       const usado  = drawdowns.reduce((s, m) => s + (m.e || 0), 0)
                    - pagosLinea.reduce((s, m) => s + (m.s || 0), 0);
-      window.BHD = {
+      _replaceObject(window.BHD, {
         id:          bhd.idFin || 'FIN-003',
         nombre:      'Línea de Crédito BHD',
         limite:      bhd.montoTotal || 112000,
@@ -1297,22 +1374,38 @@ function _overrideGlobals() {
         pagado:      pagosLinea.reduce((s, m) => s + (m.s || 0), 0),
         pagos:       pagosLinea.map((m) => ({ mes: _ymToLabel(m.f.slice(0, 7)), monto: m.s })),
         nota:        bhd.notas || `Línea BHD · 26% anual (~2.17% mensual).`,
-      };
+      });
     }
   }
 
-  // Notificar a paneles que escuchan
+  console.log('· [SB/override] globals mutados (CF_ALL=' + (window.CF_ALL||[]).length +
+              ' MES.totalV=' + (window.MES||[]).reduce((s,x)=>s+x.v,0).toFixed(0) +
+              ' COOP.pagado=' + (window.COOP?.pagado || 0) + ')');
+  // Re-dispatch eventos por tabla para que panels re-rendereen con los
+  // globals recién mutados. El guard _overrideInFlight evita re-entrar al
+  // override (loop infinito).
   _dispatch('globals', 0);
+  for (const t of ['cashflow', 'ventas', 'financiero', 'resumen']) {
+    const arr = D[t];
+    if (Array.isArray(arr)) _dispatch(t, arr.length);
+  }
 }
 
 // Auto-run el override cuando cargan las tablas relevantes. Idempotente.
+// Guard `_overrideInFlight` evita loop infinito: el override re-dispara
+// 'airtable-loaded' para que paneles re-rendereen con los globals mutados;
+// el listener debe ignorar esos eventos para no re-correrse.
 let _overrideTimer = null;
+let _overrideInFlight = false;
 window.addEventListener('airtable-loaded', (e) => {
+  if (_overrideInFlight) return;
   const t = e.detail?.table;
   if (t === 'cashflow' || t === 'ventas' || t === 'financiero' || t === 'productos') {
-    // Debounce: evita correr 5 veces en el burst de loaders iniciales
     if (_overrideTimer) clearTimeout(_overrideTimer);
-    _overrideTimer = setTimeout(_overrideGlobals, 80);
+    _overrideTimer = setTimeout(() => {
+      _overrideInFlight = true;
+      try { _overrideGlobals(); } finally { _overrideInFlight = false; }
+    }, 80);
   }
 });
 
@@ -1362,3 +1455,19 @@ setTimeout(loadEntradas,                                          250);
 setTimeout(loadCashflow,                                          300);
 setTimeout(async () => { await loadFinanciero(); loadMovFin(); }, 350);
 setTimeout(loadResumen,                                           400);
+
+// Fallback: re-correr override + re-dispatchear eventos a 1.5s, 3s, 5s para
+// cubrir paneles que monten tarde (React + babel-standalone tarda) o que
+// hayan rendereado antes de que el override mutara los globals.
+function _scheduledOverride(label) {
+  _overrideInFlight = true;
+  try {
+    console.log('· [SB/override@' + label + ']');
+    _overrideGlobals();
+  } finally {
+    _overrideInFlight = false;
+  }
+}
+setTimeout(() => _scheduledOverride('1.5s'), 1500);
+setTimeout(() => _scheduledOverride('3s'),   3000);
+setTimeout(() => _scheduledOverride('5s'),   5000);

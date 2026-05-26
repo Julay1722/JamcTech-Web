@@ -170,13 +170,25 @@ function useAirtableTable(table) {
     };
   });
   React.useEffect(() => {
+    let tick = 0;
     const onLoad = (e) => {
-      if (e.detail?.table !== table) return;
-      setState({ loaded: true, count: e.detail.count, error: null });
+      // 'globals' = override de supabase-client mutó CF_ALL/MES/COOP/etc.
+      // Re-renderiza CUALQUIER panel suscrito sin importar la tabla.
+      const t = e.detail?.table;
+      if (t !== table && t !== 'globals') return;
+      const data = window.__AIRTABLE_DATA__ || {};
+      tick++;
+      setState({
+        loaded: t === 'globals' ? !!data[table] : true,
+        count:  e.detail?.count ?? (data[table]?.length || 0),
+        error:  null,
+        _tick:  tick,  // garantiza setState con valor distinto cada vez
+      });
     };
     const onErr = (e) => {
       if (e.detail?.table !== table) return;
-      setState({ loaded: false, count: 0, error: e.detail.error });
+      tick++;
+      setState({ loaded: false, count: 0, error: e.detail.error, _tick: tick });
     };
     window.addEventListener('airtable-loaded', onLoad);
     window.addEventListener('airtable-error', onErr);
