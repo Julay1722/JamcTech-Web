@@ -1458,7 +1458,7 @@ function _overrideGlobals() {
       id:         'BNK-' + String(c.id).padStart(3, '0'),
       _cuentaId:  c.id,
       nombre:     c.nombre,
-      tipoSub:    `${tipoSubMap[c.tipo] || c.tipo} ${c.moneda}`,
+      tipoSub:    tipoSubMap[c.tipo] || c.tipo,
       fechaInicio: '',
       saldo:      saldoPorCuenta[c.id] || 0,
       moneda:     c.moneda === 'RD' ? 'DOP' : c.moneda,
