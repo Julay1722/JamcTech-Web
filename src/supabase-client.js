@@ -1542,10 +1542,27 @@ window.addEventListener('airtable-loaded', (e) => {
 
 /* ════════════════════════ Exports + boot ════════════════════════ */
 
+// Refresh manual sin recargar la página. Útil cuando Julio cambia data
+// directamente en Supabase Studio o desde otra sesión y quiere ver
+// los cambios en el dashboard sin perder el estado de la UI.
+async function refreshAll() {
+  console.log('[SB] refreshAll() iniciando...');
+  await _loadLookups();
+  await Promise.all([loadSKUs(), loadVentas(), loadEntradas(), loadCashflow(), loadFinanciero()]);
+  await loadMovFin();
+  await loadResumen();
+  console.log('[SB] refreshAll() completo · ' +
+              `${(window.__AIRTABLE_DATA__?.skus||[]).length} skus · ` +
+              `${(window.__AIRTABLE_DATA__?.ventas||[]).length} ventas · ` +
+              `${(window.__AIRTABLE_DATA__?.cashflow||[]).length} movs`);
+  window.toastOk?.('Sincronizado', 'Datos refrescados desde Supabase');
+  return { ok: true };
+}
+
 window.AT_CLIENT = window.AT_CLIENT || {};
 Object.assign(window.AT_CLIENT, {
   loadSKUs, loadVentas, loadEntradas, loadCashflow,
-  loadFinanciero, loadResumen, loadMovFin,
+  loadFinanciero, loadResumen, loadMovFin, refreshAll,
   // Writers específicos
   createSKU, updateSKU, removeSKU, countSKURefs,
   createVenta, removeVenta, updateVentaHeader,
