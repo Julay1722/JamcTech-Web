@@ -71,9 +71,9 @@
   ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 
   /* ────────── Layout shell ────────── */
-  .app { display: flex; min-height: 100vh; }
-  .app > aside.nav { transition: width 220ms ease, flex-basis 220ms ease; box-sizing: border-box; }
-  .app > main { flex: 1 1 auto; min-width: 0; }
+  .app { display: flex; height: 100vh; overflow: hidden; }
+  .app > aside.nav { transition: width 220ms ease, flex-basis 220ms ease; box-sizing: border-box; height: 100vh; overflow: visible; }
+  .app > main { flex: 1 1 auto; min-width: 0; height: 100vh; overflow-y: auto; overflow-x: hidden; }
   .app.collapsed .brand > div:not(.brand-mark) { display: none; }
   .app.collapsed .nav-section-label { opacity: 0; height: 0; padding: 0; overflow: hidden; }
   .app.collapsed .nav-item > span:not(.nav-item-icon) { display: none; }
@@ -2239,30 +2239,101 @@ const PERIOD_PRESETS = [
   { id: 'd:7',   l: '7D'   },
   { id: 'd:30',  l: '30D'  },
   { id: 'd:90',  l: '90D'  },
+  { id: 'mes-pasado', l: 'MES PASADO' },
   { id: 'd:180', l: '6M'   },
   { id: 'd:365', l: '1A'   },
+  { id: 'custom', l: 'RANGO…' },
 ];
 function PeriodFilter({ value, onChange }) {
+  // Para "custom", value puede venir como objeto { kind: 'custom', from, to }
+  // serializado como 'custom:YYYY-MM-DD:YYYY-MM-DD'. El botón abre un popover
+  // con dos date pickers.
+  const [showPicker, setShowPicker] = useState(false);
+  const isCustom = typeof value === 'string' && value.startsWith('custom');
+  const customParts = isCustom ? value.split(':') : [];
+  const [from, setFrom] = useState(customParts[1] || (window.HOY || new Date().toISOString().slice(0,10)));
+  const [to,   setTo]   = useState(customParts[2] || (window.HOY || new Date().toISOString().slice(0,10)));
+
+  const apply = () => {
+    if (from && to && from <= to) {
+      onChange(`custom:${from}:${to}`);
+      setShowPicker(false);
+    }
+  };
+
   return (
-    <div className="period-bar">
-      {PERIOD_PRESETS.map(p => (
-        <button key={p.id} className={value === p.id ? 'active' : ''} onClick={() => onChange(p.id)}>{p.l}</button>
-      ))}
+    <div style={{ position: 'relative' }}>
+      <div className="period-bar">
+        {PERIOD_PRESETS.map(p => {
+          const active = (p.id === 'custom' && isCustom) || value === p.id;
+          if (p.id === 'custom') {
+            return (
+              <button key={p.id} className={active ? 'active' : ''}
+                onClick={() => setShowPicker(s => !s)}>
+                {isCustom ? `${customParts[1]} → ${customParts[2]}` : p.l}
+              </button>
+            );
+          }
+          return (
+            <button key={p.id} className={active ? 'active' : ''} onClick={() => { onChange(p.id); setShowPicker(false); }}>{p.l}</button>
+          );
+        })}
+      </div>
+      {showPicker && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 60,
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--r-md)', padding: 'var(--s-3)',
+          boxShadow: '0 4px 16px rgba(0,0,0,.15)',
+          display: 'flex', gap: 8, alignItems: 'flex-end',
+        }}>
+          <div className="field">
+            <div className="field-label">Desde</div>
+            <input className="input num" type="date" value={from} onChange={e => setFrom(e.target.value)} />
+          </div>
+          <div className="field">
+            <div className="field-label">Hasta</div>
+            <input className="input num" type="date" value={to} onChange={e => setTo(e.target.value)} />
+          </div>
+          <button className="btn" disabled={!(from && to && from <= to)} onClick={apply}>Aplicar</button>
+          <button className="btn ghost" onClick={() => setShowPicker(false)}>×</button>
+        </div>
+      )}
     </div>
   );
 }
 function periodToRange(p) {
-  if (p === 'todo') return null;
-  // window.HOY se actualiza al día real durante el boot del cliente Supabase
-  // (data.js lo hardcodea a 2026-05-20). Usar window.HOY garantiza que el
-  // filtro "7D" hasta hoy realmente incluya las ventas de HOY.
+  if (!p || p === 'todo') return null;
   const todayReal = window.HOY || new Date().toISOString().slice(0, 10);
+
+  // d:N → últimos N días incluyendo hoy
   if (p.startsWith('d:')) {
     const dias = parseInt(p.slice(2));
     const desde = new Date(todayReal);
-    desde.setDate(desde.getDate() - (dias - 1));  // 7D incluye HOY + 6 días previos
+    desde.setDate(desde.getDate() - (dias - 1));
     return { from: desde.toISOString().slice(0, 10), to: todayReal };
   }
+
+  // mes-pasado → primer al último día del mes calendario anterior
+  if (p === 'mes-pasado') {
+    const t = new Date(todayReal);
+    const firstThisMonth = new Date(t.getFullYear(), t.getMonth(), 1);
+    const firstLastMonth = new Date(firstThisMonth);
+    firstLastMonth.setMonth(firstLastMonth.getMonth() - 1);
+    const lastLastMonth = new Date(firstThisMonth);
+    lastLastMonth.setDate(lastLastMonth.getDate() - 1);
+    return {
+      from: firstLastMonth.toISOString().slice(0, 10),
+      to:   lastLastMonth.toISOString().slice(0, 10),
+    };
+  }
+
+  // custom:YYYY-MM-DD:YYYY-MM-DD
+  if (p.startsWith('custom:')) {
+    const [, from, to] = p.split(':');
+    if (from && to) return { from, to };
+  }
+
   return null;
 }
 function filterByPeriod(arr, period, dateKey = 'f') {
@@ -3376,7 +3447,7 @@ function App() {
   return (
     <div className={`app ${navCollapsed ? 'collapsed' : ''}`}>
       <aside className="nav" style={{
-        position: 'relative', overflow: 'visible',
+        position: 'relative',
         width: navCollapsed ? 56 : 224,
         minWidth: navCollapsed ? 56 : 224,
         maxWidth: navCollapsed ? 56 : 224,
