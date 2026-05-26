@@ -1131,6 +1131,8 @@ function FinanzasPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [del, setDel] = useState(null);
   const [delBusy, setDelBusy] = useState(false);
+  const [edit, setEdit] = useState(null); // { kind, id, title, fields }
+  const [editBusy, setEditBusy] = useState(false);
 
   const doDelete = async () => {
     setDelBusy(true);
@@ -1143,6 +1145,107 @@ function FinanzasPage() {
       setDel(null);
     } catch (e) { window.toastErr('No se pudo eliminar', e.message?.slice(0, 120)); }
     setDelBusy(false);
+  };
+
+  // ── Editar Cuenta ─────────────────────────────────
+  const openEditCuenta = (c) => setEdit({
+    kind: 'cuenta', id: c.id, title: `Editar cuenta · ${c.nombre}`,
+    fields: [
+      { name: 'nombre', label: 'Nombre', value: c.nombre, span: 2 },
+      { name: 'tipo', label: 'Tipo', type: 'select', value: c.tipo,
+        options: [{value:'DEBITO',label:'Débito'},{value:'CREDITO',label:'Crédito (tarjeta)'},{value:'EFECTIVO',label:'Efectivo'}] },
+      { name: 'moneda', label: 'Moneda', type: 'select', value: c.moneda,
+        options: [{value:'RD',label:'RD$'},{value:'USD',label:'USD'}] },
+      { name: 'limite', label: 'Límite crédito', type: 'number', value: c.limite_credito ?? '' },
+      { name: 'activa', label: 'Activa', type: 'select', value: String(c.activa ?? true),
+        options: [{value:'true',label:'Sí'},{value:'false',label:'No'}] },
+      { name: 'notas', label: 'Notas', value: c.notas || '', span: 2 },
+    ],
+  });
+
+  // ── Editar Préstamo o Línea/Tarjeta ───────────────
+  // Para PRESTAMO se edita monto_inicial; para LINEA/TARJETA se edita limite_credito.
+  const openEditPrestamo = (p, isLinea) => {
+    // p viene de `fin` (resumido) — tasaMensual en decimal, sin plazo ni fecha_primer_pago.
+    const tipoEnum = isLinea ? (p.tipoSub?.toLowerCase().includes('tarjeta') ? 'TARJETA_CREDITO' : 'LINEA_CREDITO') : 'PRESTAMO';
+    setEdit({
+      kind: 'prestamo', id: String(p._airtableId).slice(2),
+      title: `Editar ${isLinea ? 'línea/tarjeta' : 'préstamo'} · ${p.nombre}`,
+      fields: [
+        { name: 'nombre', label: 'Nombre', value: p.nombre, span: 2 },
+        { name: 'tipo', label: 'Tipo', type: 'select', value: tipoEnum,
+          options: [{value:'PRESTAMO',label:'Préstamo amortizado'},{value:'LINEA_CREDITO',label:'Línea de crédito'},{value:'TARJETA_CREDITO',label:'Tarjeta de crédito'}] },
+        { name: 'moneda', label: 'Moneda', type: 'select', value: 'RD',
+          options: [{value:'RD',label:'RD$'},{value:'USD',label:'USD'}] },
+        isLinea
+          ? { name: 'limiteCredito', label: 'Límite de crédito', type: 'number', value: p.limite ?? p.montoTotal ?? '' }
+          : { name: 'montoInicial', label: 'Monto inicial', type: 'number', value: p.montoTotal ?? '' },
+        { name: 'tasaMensualPct', label: 'Tasa mensual (%)', type: 'number',
+          value: ((p.tasaMensual || 0) * (isLinea ? 1 : 100)).toFixed(2),
+          hint: isLinea ? 'Decimal mensual (ej. 2.17)' : 'Porcentaje mensual (ej. 1.67)' },
+        !isLinea && { name: 'seguroMensual', label: 'Seguro mensual', type: 'number', value: p.seguro ?? p.seguroMensual ?? '' },
+        { name: 'fechaInicio', label: 'Fecha inicio', type: 'date', value: p.fechaInicio || '' },
+        { name: 'notas', label: 'Notas', value: p.notas || p.nota || '', span: 2 },
+      ].filter(Boolean),
+    });
+  };
+
+  // ── Editar Inversor ───────────────────────────────
+  const openEditInversor = (i) => setEdit({
+    kind: 'inversor', id: String(i._airtableId).slice(2),
+    title: `Editar inversor · ${i.nombre}`,
+    fields: [
+      { name: 'nombre', label: 'Nombre', value: i.nombre, span: 2 },
+      { name: 'capitalInvertido', label: 'Capital invertido', type: 'number', value: i.montoTotal ?? '' },
+      { name: 'montoPactadoDevolver', label: 'Monto a devolver', type: 'number', value: i.balance ?? '' },
+      { name: 'fechaInicio', label: 'Fecha inicio', type: 'date', value: i.fechaInicio || '' },
+      { name: 'notas', label: 'Notas', value: i.notas || i.nota || '', span: 2 },
+    ],
+  });
+
+  const doSaveEdit = async (values) => {
+    setEditBusy(true);
+    try {
+      const { kind, id } = edit;
+      if (kind === 'cuenta') {
+        await window.AT_CLIENT.updateCuenta(Number(id), {
+          nombre: values.nombre,
+          tipo: values.tipo,
+          moneda: values.moneda,
+          limite: values.limite === '' ? null : Number(values.limite),
+          notas: values.notas,
+          activa: values.activa === 'true',
+        });
+      } else if (kind === 'prestamo') {
+        // tasaMensualPct viene en %  → convertir a decimal
+        const tasaDec = values.tasaMensualPct === '' || values.tasaMensualPct == null
+          ? null
+          : Number(values.tasaMensualPct) / 100;
+        const patch = {
+          nombre: values.nombre,
+          tipo: values.tipo,
+          moneda: values.moneda,
+          tasaMensual: tasaDec,
+          fechaInicio: values.fechaInicio || null,
+          notas: values.notas,
+        };
+        if (values.montoInicial !== undefined)  patch.montoInicial = values.montoInicial === '' ? null : Number(values.montoInicial);
+        if (values.limiteCredito !== undefined) patch.limiteCredito = values.limiteCredito === '' ? null : Number(values.limiteCredito);
+        if (values.seguroMensual !== undefined) patch.seguroMensual = values.seguroMensual === '' ? null : Number(values.seguroMensual);
+        await window.AT_CLIENT.updatePrestamo(Number(id), patch);
+      } else if (kind === 'inversor') {
+        await window.AT_CLIENT.updateInversor(Number(id), {
+          nombre: values.nombre,
+          capitalInvertido: Number(values.capitalInvertido) || 0,
+          montoPactadoDevolver: Number(values.montoPactadoDevolver) || 0,
+          fechaInicio: values.fechaInicio || null,
+          notas: values.notas,
+        });
+      }
+      window.toastOk('Cambios guardados', edit.title.replace(/^Editar /, ''));
+      setEdit(null);
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
+    setEditBusy(false);
   };
 
   return (
@@ -1193,6 +1296,12 @@ function FinanzasPage() {
         body={`${del?.label}. Esta acción es permanente. Si hay movimientos linkeados, puede fallar por constraint FK.`}
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
+
+      <EditModal open={!!edit} busy={editBusy}
+        title={edit?.title}
+        fields={edit?.fields || []}
+        onCancel={() => setEdit(null)}
+        onSave={doSaveEdit} />
 
       {/* RESUMEN — vista original */}
       {subtab === 'resumen' && (<>
@@ -1310,7 +1419,10 @@ function FinanzasPage() {
                   <td className="num right neg">{fmtCurrency(p.balance || 0)}</td>
                   <td className="num right">{((p.tasaMensual || 0) * 100).toFixed(2)}%</td>
                   <td className="muted">RD$</td>
-                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button></td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(p, false)}>✎</button>
+                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: p._airtableId.slice(2), label: p.nombre })}>×</button>
+                  </td>
                 </tr>
               ))}
               {fin.filter(f => /préstamo|prestamo/i.test(f.tipo)).length === 0 && (
@@ -1338,7 +1450,10 @@ function FinanzasPage() {
                   <td className="num right">{fmtCurrency(l.usado)}</td>
                   <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
                   <td className="muted">{l.moneda}</td>
-                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button></td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="icon-btn" title="Editar" onClick={() => openEditPrestamo(l, true)}>✎</button>
+                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'prestamo', id: l._airtableId.slice(2), label: l.nombre })}>×</button>
+                  </td>
                 </tr>
               ))}
               {lcs.length === 0 && (
@@ -1366,7 +1481,10 @@ function FinanzasPage() {
                   <td className="num right">{fmtCurrency(i.balance)}</td>
                   <td className="num right pos">{fmtCurrency(i.totalPagado)}</td>
                   <td className="num right neg">{fmtCurrency((i.balance || 0) - (i.totalPagado || 0))}</td>
-                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button></td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="icon-btn" title="Editar" onClick={() => openEditInversor(i)}>✎</button>
+                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'inversor', id: i._airtableId.slice(2), label: i.nombre })}>×</button>
+                  </td>
                 </tr>
               ))}
               {fin.filter(f => /inversor/i.test(f.tipo)).length === 0 && (
@@ -1393,7 +1511,10 @@ function FinanzasPage() {
                   <td className="muted">{c.moneda}</td>
                   <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
                   <td className="muted" style={{ fontSize: 11 }}>{c.notas || '—'}</td>
-                  <td><button className="icon-btn danger" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button></td>
+                  <td style={{ display: 'flex', gap: 4 }}>
+                    <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
+                    <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button>
+                  </td>
                 </tr>
               ))}
               {cuentas.length === 0 && (

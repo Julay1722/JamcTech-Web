@@ -1263,6 +1263,7 @@ async function createPrestamo(data) {
   const { data: ins, error } = await sb.from('prestamos').insert(row).select().single();
   if (error) throw new Error(`createPrestamo: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();
   return ins;
 }
 
@@ -1286,6 +1287,7 @@ async function updatePrestamo(id, patch) {
   const { data, error } = await sb.from('prestamos').update(row).eq('id', id).select().single();
   if (error) throw new Error(`updatePrestamo: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();  // refresca productos['FIN-LC']/['FIN-P'] para que la tabla refleje límite/tasa nuevos
   return data;
 }
 
@@ -1293,6 +1295,7 @@ async function removePrestamo(id) {
   const { error } = await sb.from('prestamos').delete().eq('id', id);
   if (error) throw new Error(`removePrestamo: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();
   return { deleted: true, id };
 }
 
@@ -1315,6 +1318,7 @@ async function createInversor(data) {
   const { data: ins, error } = await sb.from('inversores').insert(row).select().single();
   if (error) throw new Error(`createInversor: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();
   return ins;
 }
 
@@ -1331,6 +1335,7 @@ async function updateInversor(id, patch) {
   const { data, error } = await sb.from('inversores').update(row).eq('id', id).select().single();
   if (error) throw new Error(`updateInversor: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();
   return data;
 }
 
@@ -1338,6 +1343,7 @@ async function removeInversor(id) {
   const { error } = await sb.from('inversores').delete().eq('id', id);
   if (error) throw new Error(`removeInversor: ${error.message}`);
   await loadFinanciero();
+  _buildFinancieroProductos();
   return { deleted: true, id };
 }
 
