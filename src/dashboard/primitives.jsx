@@ -10,7 +10,10 @@ const TERMINAL_THEMES = {
 
 function buildTerminalTheme(accent, density) {
   const A = TERMINAL_THEMES[accent] || TERMINAL_THEMES.lime;
-  const d = density === 'dense' ? 1 : density === 'roomy' ? 1.3 : 1.12;
+  // Densidad ajustada 2026-05-26: reducido base scale para menos overload
+  // visual. dense=0.85x, cozy=1.0x, roomy=1.2x. Bloomberg pero más
+  // respiración entre cards.
+  const d = density === 'dense' ? 0.85 : density === 'roomy' ? 1.2 : 1.0;
   return {
     bg: '#070708',
     panel: '#0c0c0e',
@@ -30,9 +33,9 @@ function buildTerminalTheme(accent, density) {
     bl: 'oklch(0.78 0.11 230)',
     pu: 'oklch(0.75 0.13 295)',
     or: 'oklch(0.76 0.13 50)',
-    pad: 14 * d, gap: 10 * d, padCell: 13 * d,
+    pad: 12 * d, gap: 8 * d, padCell: 11 * d,
     fz: density === 'dense' ? 10 : 11,
-    fzKpi: density === 'dense' ? 20 : 22
+    fzKpi: density === 'dense' ? 17 : 19
   };
 }
 
@@ -55,16 +58,18 @@ function TPill({ children, color, dim, size = 'sm' }) {
 }
 
 // ─── Section header (the ┌─ panel start) ─────────────────────
+// 2026-05-26: reducido padding/margin + borderTop más sutil para menos
+// peso visual entre secciones (Bloomberg con respiración).
 function TSectionHead({ ix, name, count, right }) {
   const T = useTheme();
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '14px 14px 9px', borderTop: `1px solid ${T.bdHi}`,
-      marginTop: 14
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '10px 14px 6px',
+      marginTop: 10,
     }}>
-      <div style={{ fontSize: 9, color: T.hot, letterSpacing: '0.18em' }}>┌─ {ix}</div>
-      <div style={{ fontSize: 11, color: T.t, letterSpacing: '0.14em', fontWeight: 600 }}>
+      <div style={{ fontSize: 9, color: T.hot, letterSpacing: '0.18em' }}>{ix}</div>
+      <div style={{ fontSize: 10, color: T.t2, letterSpacing: '0.12em', fontWeight: 500 }}>
         {name.toUpperCase()}
       </div>
       <div style={{ flex: 1, height: 1, background: T.bd }} />
@@ -95,34 +100,35 @@ function TCell({ label, value, color, sub, spark, sparkColor, span = 1, accent, 
     <div style={{
       gridColumn: `span ${span}`,
       background: T.panel, border: `1px solid ${T.bd}`,
-      padding: `${T.padCell - 8}px ${T.padCell}px ${T.padCell - 7}px`, position: 'relative',
-      display: 'flex', flexDirection: 'column', gap: 4,
-      minHeight: big ? 70 : 58, justifyContent: "flex-start"
+      padding: '10px 12px 9px', position: 'relative',
+      display: 'flex', flexDirection: 'column', gap: 3,
+      minHeight: big ? 60 : 48, justifyContent: "flex-start"
     }}>
       <div style={{
         position: 'absolute', left: 0, top: 0, bottom: 0, width: 2,
-        background: accent || T.bd
+        background: accent || T.bd, opacity: accent ? 0.6 : 1
       }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
         <div style={{
-          fontSize: 9, letterSpacing: '0.14em', color: T.t3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
-        }}>▸ {label.toUpperCase()}</div>
+          fontSize: 9, letterSpacing: '0.12em', color: T.t3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+        }}>{label.toUpperCase()}</div>
         {spark &&
         <div style={{ color: sparkColor || T.hotDim, flexShrink: 0 }}>
-            <MiniBars values={spark} w={56} h={14} color="currentColor" dim={T.t4} />
+            <MiniBars values={spark} w={48} h={12} color="currentColor" dim={T.t4} />
           </div>
         }
       </div>
       <div className={valueClass} style={{
-        fontSize: big ? T.fzKpi + 2 : T.fzKpi - 2,
-        fontWeight: 500, color: color || T.t, lineHeight: 1, letterSpacing: '-0.01em',
+        fontSize: big ? T.fzKpi + 2 : T.fzKpi,
+        fontWeight: 500, color: color || T.t, lineHeight: 1.05, letterSpacing: '-0.01em',
         fontStyle: italic ? 'italic' : 'normal',
         textAlign: centered ? 'center' : 'left'
       }}>{renderTCellValue(value)}</div>
-      <div style={{
-        fontSize: 10, color: T.t2, lineHeight: 1.25, marginTop: 'auto',
-        textAlign: centered ? 'center' : 'left'
-      }}>{sub}</div>
+      {sub && <div style={{
+        fontSize: 9, color: T.t3, lineHeight: 1.25, marginTop: 'auto',
+        textAlign: centered ? 'center' : 'left',
+        letterSpacing: '0.02em',
+      }}>{sub}</div>}
     </div>);
 
 }
