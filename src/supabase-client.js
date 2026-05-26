@@ -1408,17 +1408,21 @@ function _overrideGlobals() {
     );
     if (coop) {
       const pagosCF = D.cashflow.filter((m) => m.c === 'Pago Prestamo');
-      const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
+      // Saldo y pagado desde vw_saldo_prestamo (oficial: solo capital).
+      // Fallback al cálculo de cashflow si la vista no tiene la data.
+      const saldoOficial = coop.balance > 0 ? coop.balance : null;
+      const capitalPagado = coop._capitalPagado || 0;
+      const pagadoCF = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
       _replaceObject(window.COOP, {
         nombre:       'Préstamo Cooperativa',
         inicio:       coop.fechaInicio || '2026-02-14',
         monto:        coop.montoTotal || 115000,
-        saldo:        Math.max(0, (coop.montoTotal || 115000) - pagado),
-        pagado,
+        saldo:        saldoOficial ?? Math.max(0, (coop.montoTotal || 115000) - pagadoCF),
+        pagado:       capitalPagado || pagadoCF,  // capital pagado (oficial)
         tasa:         (coop.tasaMensual || 0.0167) * 100,
         seguro:       coop.seguroMensual || 66.7,
         cuota:        3568.64,
-        abonoMin5pct: Math.max(0, (coop.montoTotal || 115000) - pagado) * 0.05,
+        abonoMin5pct: (saldoOficial ?? (coop.montoTotal - pagadoCF)) * 0.05,
         abonoAcum:    0,
         pagos: pagosCF.map((m, i) => ({
           mes:     _ymToLabel(m.f.slice(0, 7)),
