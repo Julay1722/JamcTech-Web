@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>JAMC's Tech · v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+  /* ════════════════════════════════════════════════════════════════
+     Design tokens — Modern data dashboard (inspired by Linear/Stripe)
+     Mantiene oscuro pero con grises más sofisticados, menos contraste
+     duro, tipografía Inter (system) + mono solo para números/IDs.
+     ════════════════════════════════════════════════════════════════ */
+  :root {
+    /* Surfaces — niveles de elevación sutiles */
+    --bg:        #0a0a0c;          /* page background */
+    --surface:   #111114;          /* card background */
+    --surface-2: #15151a;          /* hover / nested */
+    --surface-3: #1c1c22;          /* dropdown / popover */
+    --border:    #1f1f25;          /* subtle borders */
+    --border-2:  #2a2a32;          /* stronger borders */
+
+    /* Text */
+    --text:      #ededf0;          /* primary */
+    --text-2:    #a8a8b3;          /* secondary */
+    --text-3:    #6b6b78;          /* tertiary / labels */
+    --text-4:    #3f3f4a;          /* disabled / placeholder */
+
+    /* Brand & semantic */
+    --accent:    #7c9aff;          /* primary action (cool blue, calm) */
+    --accent-2:  #5e7fea;
+    --success:   #5fce8d;          /* positive, gains */
+    --warning:   #f0b658;          /* warnings, attention */
+    --danger:    #ef6b7e;          /* losses, critical */
+    --muted-pos: #4a8b6c;          /* desaturated positive */
+    --muted-neg: #8b4a5a;
+
+    /* Typography */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    /* Spacing scale (4pt system) */
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+    --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+    /* Radius */
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; overflow-x: hidden; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'tnum', 'cv11';
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Number formatting — tabular figures */
+  .num { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
+
+  /* ────────── Layout shell ────────── */
+  .app { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+
+  /* Sidebar */
+  .nav {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: var(--s-5) var(--s-3);
+    display: flex; flex-direction: column; gap: var(--s-1);
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand {
+    display: flex; align-items: center; gap: var(--s-3);
+    padding: 0 var(--s-3) var(--s-4) var(--s-3);
+    margin-bottom: var(--s-4);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand-mark {
+    width: 28px; height: 28px; border-radius: var(--r-sm);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center;
+    font-weight: 700; color: white; font-size: 13px;
+  }
+  .brand-text { font-weight: 600; font-size: 13px; letter-spacing: -0.01em; }
+  .brand-sub { font-size: 11px; color: var(--text-3); margin-top: -2px; }
+
+  .nav-section-label {
+    font-size: 10px; color: var(--text-3); text-transform: uppercase;
+    letter-spacing: 0.08em; padding: var(--s-4) var(--s-3) var(--s-2);
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: var(--s-3);
+    padding: 8px var(--s-3); border-radius: var(--r-sm);
+    color: var(--text-2); cursor: pointer; user-select: none;
+    font-size: 13px; font-weight: 500;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--surface-2); color: var(--text); }
+  .nav-item.active::before {
+    content: ''; position: absolute; left: 0; width: 3px; height: 18px;
+    background: var(--accent); border-radius: 0 2px 2px 0;
+  }
+  .nav-item-icon { font-size: 14px; opacity: 0.7; width: 16px; text-align: center; }
+  .nav-item-badge {
+    margin-left: auto; font-size: 10px;
+    background: var(--surface-3); color: var(--text-3);
+    padding: 1px 6px; border-radius: 4px;
+    font-family: var(--font-mono);
+  }
+
+  /* Main content */
+  .main { padding: var(--s-5) var(--s-6); max-width: 1400px; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: var(--s-6);
+  }
+  .topbar h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+  .topbar .sub { font-size: 13px; color: var(--text-3); margin-top: 2px; }
+  .topbar-actions { display: flex; align-items: center; gap: var(--s-2); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 10px; border-radius: var(--r-sm);
+    font-size: 12px; color: var(--text-2); cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .pill:hover { background: var(--surface-2); border-color: var(--border-2); }
+  .pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+  /* ────────── KPI hero row ────────── */
+  .kpi-row {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4);
+    margin-bottom: var(--s-6);
+  }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: var(--s-4) var(--s-5);
+    position: relative;
+  }
+  .kpi-label {
+    font-size: 11px; color: var(--text-3); text-transform: uppercase;
+    letter-spacing: 0.06em; font-weight: 500;
+  }
+  .kpi-value {
+    font-family: var(--font-mono); font-size: 26px; font-weight: 600;
+    letter-spacing: -0.02em; line-height: 1.1; margin-top: var(--s-2);
+    color: var(--text);
+  }
+  .kpi-value .currency { font-size: 0.55em; opacity: 0.5; vertical-align: 0.3em; margin-right: 2px; }
+  .kpi-delta {
+    font-size: 12px; margin-top: var(--s-2); display: flex; align-items: center; gap: 4px;
+    font-weight: 500;
+  }
+  .kpi-delta.pos { color: var(--success); }
+  .kpi-delta.neg { color: var(--danger); }
+  .kpi-delta.neutral { color: var(--text-3); }
+
+  /* ────────── Section cards ────────── */
+  .section {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: var(--s-5);
+    margin-bottom: var(--s-5);
+  }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: var(--s-4);
+  }
+  .section-title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .section-desc { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+  /* Two-column grid for content */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-5); }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--s-4); }
+
+  /* ────────── Table ────────── */
+  table.data {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  table.data th {
+    text-align: left; padding: 10px 12px; color: var(--text-3);
+    font-size: 11px; text-transform: uppercase; font-weight: 500; letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+  }
+  table.data td {
+    padding: 12px 12px; border-bottom: 1px solid var(--border);
+    color: var(--text-2);
+  }
+  table.data tr:hover td { background: var(--surface-2); }
+  table.data td.num { font-family: var(--font-mono); color: var(--text); }
+  table.data td.right { text-align: right; }
+  table.data td.pos { color: var(--success); }
+  table.data td.neg { color: var(--danger); }
+  table.data td.muted { color: var(--text-3); }
+
+  /* Inline badge inside table */
+  .badge {
+    display: inline-block; padding: 2px 8px; font-size: 10px; font-weight: 500;
+    border-radius: 4px; letter-spacing: 0.02em;
+  }
+  .badge.success { background: rgba(95, 206, 141, 0.12); color: var(--success); }
+  .badge.warning { background: rgba(240, 182, 88, 0.12); color: var(--warning); }
+  .badge.danger  { background: rgba(239, 107, 126, 0.12); color: var(--danger); }
+  .badge.neutral { background: var(--surface-3); color: var(--text-2); }
+
+  /* Status indicators */
+  .stat-card {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--r-sm); padding: var(--s-4);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 600; }
+  .stat-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* Charts */
+  .chart-wrap { padding: var(--s-2); }
+
+  /* Loader / empty */
+  .empty {
+    padding: var(--s-7); text-align: center; color: var(--text-3); font-size: 13px;
+  }
+  .loader {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--border-2); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Button */
+  .btn {
+    background: var(--accent); color: white; border: none;
+    padding: 8px 14px; border-radius: var(--r-sm); cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    transition: background 120ms ease;
+  }
+  .btn:hover { background: var(--accent-2); }
+  .btn:disabled { background: var(--surface-3); color: var(--text-3); cursor: not-allowed; }
+  .btn.ghost {
+    background: transparent; border: 1px solid var(--border-2); color: var(--text-2);
+  }
+  .btn.ghost:hover { background: var(--surface-2); }
+
+  /* Responsive — basic */
+  @media (max-width: 1024px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 768px) {
+    .app { grid-template-columns: 1fr; }
+    .nav { display: none; }
+    .main { padding: var(--s-4); }
+    .kpi-row { grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+    .topbar h1 { font-size: 18px; }
+  }
+</style>
+
+<!-- Data layer (mismo que index.html — reusa supabase-client) -->
+<script src="src/data.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="src/supabase-client.js"></script>
+<script>
+  Object.assign(window, {
+    MES, MESES_LIST, SK_RAW, VENTAS_SKU, EN_CAMINO,
+    CF_ALL, CF_MES, COOP, ANDREA, BHD,
+    HOY, PRIMERA_VENTA, LEAD_TIME, F,
+    applyF, applyFOrLatest, buildSK,
+  });
+</script>
+
+<!-- React + Babel -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+// ════════════════════════════════════════════════════════════════
+// Dashboard v3 — Modern data dashboard, mantiene funcionalidades
+// del sistema (supabase-client.js + AT_CLIENT writers). Layout
+// inspirado en Linear/Stripe: sidebar navegación, KPI hero row,
+// cards modulares con jerarquía clara. Diseño basado en guidelines
+// del skill ui-ux-pro-max (Minimalism, whitespace-balance, etc.)
+// ════════════════════════════════════════════════════════════════
+
+const { useState, useEffect, useMemo } = React;
+
+// ─── Format helpers ─────────────────────────────────────────────
+const fmtCurrency = (n, opts = {}) => {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  const formatted = abs.toLocaleString('es-DO', { maximumFractionDigits: 0 });
+  return (n < 0 ? '-' : '') + 'RD$' + formatted;
+};
+const fmtNum = (n, dec = 0) => {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('es-DO', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+};
+const fmtPct = (n) => (n == null || isNaN(n)) ? '—' : (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+const fmtDate = (s) => {
+  if (!s) return '—';
+  const [y, m, d] = s.split('-');
+  return `${d}/${m}/${y.slice(2)}`;
+};
+
+// Hook: re-render cuando supabase actualiza una tabla
+function useATData() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onLoad = () => setTick((t) => t + 1);
+    window.addEventListener('airtable-loaded', onLoad);
+    return () => window.removeEventListener('airtable-loaded', onLoad);
+  }, []);
+  return window.__AIRTABLE_DATA__ || {};
+}
+
+// ─── KPI card ───────────────────────────────────────────────────
+function KPI({ label, value, delta, deltaLabel, currency }) {
+  const cls = delta == null ? 'neutral' : (delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'neutral');
+  const arrow = delta == null ? '' : (delta > 0 ? '↗' : delta < 0 ? '↘' : '→');
+  return (
+    <div className="kpi">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value">
+        {currency && <span className="currency">RD$</span>}
+        {value}
+      </div>
+      {delta != null && (
+        <div className={`kpi-delta ${cls}`}>
+          <span>{arrow}</span>
+          <span>{fmtPct(delta)}</span>
+          {deltaLabel && <span style={{ color: 'var(--text-3)', marginLeft: 2 }}>{deltaLabel}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Mini bar chart inline ──────────────────────────────────────
+function MiniBars({ values, w = 80, h = 28, color = 'var(--accent)' }) {
+  if (!values || values.length === 0) return null;
+  const max = Math.max(...values, 1);
+  const bw = w / values.length;
+  return (
+    <svg width={w} height={h}>
+      {values.map((v, i) => {
+        const bh = (v / max) * h;
+        return <rect key={i} x={i * bw + 0.5} y={h - bh} width={bw - 1} height={bh} fill={color} opacity={0.7} />;
+      })}
+    </svg>
+  );
+}
+
+// ─── Sparkline ──────────────────────────────────────────────────
+function Sparkline({ values, w = 200, h = 50, color = 'var(--accent)' }) {
+  if (!values || values.length < 2) return null;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = max - min || 1;
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * w;
+    const y = h - ((v - min) / range) * (h - 6) - 3;
+    return `${x},${y}`;
+  }).join(' ');
+  const areaPoints = `0,${h} ${points} ${w},${h}`;
+  return (
+    <svg width={w} height={h}>
+      <polygon points={areaPoints} fill={color} opacity={0.1} />
+      <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+// ─── Pages ───────────────────────────────────────────────────────
+function OverviewPage() {
+  const data = useATData();
+  const ventas = data.ventas || [];
+  const cf = data.cashflow || [];
+  const SK = data.skus || [];
+
+  // KPIs principales
+  const totalVentas = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+  const totalGanancia = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+  const margenPct = totalVentas > 0 ? (totalGanancia / totalVentas) * 100 : 0;
+
+  // Balance acumulado
+  const balanceActual = cf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+
+  // Deuda total = COOP saldo + ANDREA pendiente + BHD usado
+  const deudaTotal = (window.COOP?.saldo || 0) + (window.ANDREA?.pendiente || 0) + (window.BHD?.usado || 0);
+
+  // Crecimiento mes a mes
+  const MES = window.MES || [];
+  const lastMo = MES[MES.length - 1];
+  const prevMo = MES[MES.length - 2];
+  const growthMoM = (lastMo && prevMo && prevMo.v) ? ((lastMo.v - prevMo.v) / prevMo.v) * 100 : null;
+
+  // Series para sparklines
+  const ventasSeries = MES.map(m => m.v);
+  const gananciaSeries = MES.map(m => m.g);
+
+  // SKU criticos
+  const SKbuilt = window.buildSK ? window.buildSK() : SK;
+  const criticos = SKbuilt.filter(s => s.estado === 'critico').length;
+  const atencion = SKbuilt.filter(s => s.estado === 'atencion').length;
+
+  // Movimientos recientes
+  const recientes = cf.slice(0, 10);
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Resumen</h1>
+          <div className="sub">{ventas.length} ventas · {SK.length} SKUs · {cf.length} movimientos · {fmtDate(HOY)}</div>
+        </div>
+        <div className="topbar-actions">
+          <span className="pill"><span className="pill-dot" /> Live · Supabase</span>
+          <button className="pill" onClick={() => window.AT_CLIENT?.refreshAll?.()}>↻ Refrescar</button>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <KPI label="Ventas histórico" value={fmtNum(totalVentas)} currency
+             delta={growthMoM} deltaLabel="MoM" />
+        <KPI label="Ganancia bruta" value={fmtNum(totalGanancia)} currency
+             delta={margenPct} deltaLabel="margen" />
+        <KPI label="Capital actual" value={fmtNum(balanceActual)} currency
+             delta={null} deltaLabel="cash flow neto" />
+        <KPI label="Deuda total" value={fmtNum(deudaTotal)} currency
+             delta={null} deltaLabel="COOP + Andrea + BHD" />
+      </div>
+
+      <div className="grid-2">
+        {/* Ventas mensuales */}
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Ventas mensuales</div>
+              <div className="section-desc">Tendencia últimos {MES.length} meses</div>
+            </div>
+            <span className="badge neutral">RD${fmtNum(totalVentas / Math.max(1, MES.length))} prom/mes</span>
+          </div>
+          <Sparkline values={ventasSeries} w={500} h={80} color="var(--accent)" />
+          <table className="data" style={{ marginTop: 'var(--s-4)' }}>
+            <thead><tr>
+              <th>Mes</th><th className="right">Ventas</th><th className="right">Ganancia</th><th className="right">Margen</th>
+            </tr></thead>
+            <tbody>
+              {MES.slice(-6).reverse().map(m => (
+                <tr key={m.m}>
+                  <td>{m.m}</td>
+                  <td className="num right">{fmtCurrency(m.v)}</td>
+                  <td className="num right pos">{fmtCurrency(m.g)}</td>
+                  <td className="num right muted">{m.p.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Estado de inventario */}
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Inventario</div>
+              <div className="section-desc">{SK.length} SKUs activos</div>
+            </div>
+            {criticos > 0 && <span className="badge danger">{criticos} críticos</span>}
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Stock físico</div>
+              <div className="stat-value">{fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">En camino</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtNum(SK.reduce((s, x) => s + (x.enCamino || 0), 0))} ud</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Capital invertido</div>
+              <div className="stat-value">{fmtCurrency(SK.reduce((s, x) => s + ((x.s || 0) * (x.cpp || 0)), 0))}</div>
+            </div>
+          </div>
+          <table className="data" style={{ marginTop: 'var(--s-4)' }}>
+            <thead><tr>
+              <th>Estado</th><th className="right">SKUs</th>
+            </tr></thead>
+            <tbody>
+              <tr><td><span className="badge danger">Crítico</span></td><td className="num right">{criticos}</td></tr>
+              <tr><td><span className="badge warning">Atención</span></td><td className="num right">{atencion}</td></tr>
+              <tr><td><span className="badge success">Saludable</span></td><td className="num right">{SKbuilt.filter(s => s.estado === 'ok').length}</td></tr>
+              <tr><td><span className="badge neutral">Sin movimiento</span></td><td className="num right">{SKbuilt.filter(s => s.estado === 'sin_movimiento').length}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Movimientos recientes</div>
+            <div className="section-desc">Últimos {recientes.length} de {cf.length}</div>
+          </div>
+          <button className="btn ghost" onClick={() => window.AT_CLIENT?.refreshAll?.()}>Ver todos →</button>
+        </div>
+        <table className="data">
+          <thead><tr>
+            <th>Fecha</th><th>Tipo</th><th>Contraparte</th>
+            <th className="right">Entrada</th><th className="right">Salida</th><th className="right">Neto</th>
+          </tr></thead>
+          <tbody>
+            {recientes.map((m, i) => {
+              const neto = (m.e || 0) - (m.s || 0);
+              return (
+                <tr key={i}>
+                  <td>{fmtDate(m.f)}</td>
+                  <td>{m.c}</td>
+                  <td className="muted">{m.a || '—'}</td>
+                  <td className="num right pos">{m.e > 0 ? fmtCurrency(m.e) : '—'}</td>
+                  <td className="num right neg">{m.s > 0 ? '-' + fmtCurrency(m.s) : '—'}</td>
+                  <td className={`num right ${neto > 0 ? 'pos' : neto < 0 ? 'neg' : 'muted'}`}>
+                    {neto > 0 ? '+' : ''}{fmtCurrency(neto)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function InventarioPage() {
+  const data = useATData();
+  const SK = window.buildSK ? window.buildSK() : (data.skus || []);
+  const [filter, setFilter] = useState('all');
+
+  const filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Inventario</h1>
+          <div className="sub">{SK.length} SKUs · {fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock</div>
+        </div>
+        <div className="topbar-actions">
+          {['all', 'critico', 'atencion', 'ok', 'sin_movimiento'].map(f => (
+            <button key={f} className="pill" style={{
+              background: filter === f ? 'var(--surface-3)' : 'var(--surface)',
+              color: filter === f ? 'var(--text)' : 'var(--text-2)',
+            }} onClick={() => setFilter(f)}>
+              {f === 'all' ? 'Todos' : f === 'sin_movimiento' ? 'Sin movim' : f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="section">
+        <table className="data">
+          <thead><tr>
+            <th>SKU</th><th>Categoría</th><th>Marca</th>
+            <th className="right">Stock</th><th className="right">En camino</th>
+            <th className="right">CPP</th><th className="right">Precio</th>
+            <th className="right">Margen</th><th>Estado</th>
+          </tr></thead>
+          <tbody>
+            {filtered.map(s => {
+              const margen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
+              const badgeCls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+              return (
+                <tr key={s.id}>
+                  <td><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></td>
+                  <td>{s.cat}</td>
+                  <td>{s.mk}</td>
+                  <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
+                  <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
+                  <td className="num right">{fmtCurrency(s.cpp)}</td>
+                  <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
+                  <td className="num right muted">{s.pv > 0 ? margen + '%' : '—'}</td>
+                  <td><span className={`badge ${badgeCls}`}>{s.estado.replace('_', ' ')}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function VentasPage() {
+  const data = useATData();
+  const ventas = data.ventas || [];
+  const [search, setSearch] = useState('');
+
+  const filtered = ventas.filter(v => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (v.idVenta || '').toLowerCase().includes(q) || (v.canal || '').toLowerCase().includes(q);
+  }).slice(0, 50);
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Ventas</h1>
+          <div className="sub">{ventas.length} ventas totales</div>
+        </div>
+        <div className="topbar-actions">
+          <input type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)}
+            style={{
+              background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)',
+              padding: '6px 10px', borderRadius: 'var(--r-sm)', fontFamily: 'inherit', fontSize: 12,
+            }} />
+          <span className="pill">{filtered.length} mostrando</span>
+        </div>
+      </div>
+
+      <div className="section">
+        <table className="data">
+          <thead><tr>
+            <th>Código</th><th>Fecha</th><th>Canal</th>
+            <th className="right">SKUs</th><th className="right">Uds</th>
+            <th className="right">Total</th><th className="right">Ganancia</th><th className="right">Margen</th>
+          </tr></thead>
+          <tbody>
+            {filtered.map(v => (
+              <tr key={v.idVenta}>
+                <td><span className="num" style={{ fontSize: 11 }}>{v.idVenta}</span></td>
+                <td>{fmtDate(v.fecha)}</td>
+                <td className="muted">{v.canal || '—'}</td>
+                <td className="num right">{(v.lineas || []).length}</td>
+                <td className="num right">{v.cantidadTotal || 0}</td>
+                <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
+                <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
+                <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function FinanzasPage() {
+  const data = useATData();
+  const productos = data.productos || { 'FIN-P': [], 'FIN-I': [], 'FIN-LC': [] };
+  const coop = productos['FIN-P'][0];
+  const andrea = productos['FIN-I'][0];
+  const lcs = productos['FIN-LC'] || [];
+  const cuentas = data._cuentas || [];
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Finanzas</h1>
+          <div className="sub">Préstamos · Inversores · Líneas de crédito · Cuentas</div>
+        </div>
+      </div>
+
+      <div className="kpi-row">
+        <KPI label="Saldo Coop" value={fmtNum(coop?.saldo || 0)} currency
+          delta={null} deltaLabel={`${coop?.tasa?.toFixed?.(2) || 0}%/mes`} />
+        <KPI label="Pendiente Andrea" value={fmtNum(andrea?.pendiente || 0)} currency
+          delta={null} deltaLabel={`pagado ${fmtCurrency(andrea?.pagado || 0)}`} />
+        <KPI label="BHD usado" value={fmtNum(lcs.find(l => /bhd/i.test(l.nombre))?.usado || 0)} currency
+          delta={null} deltaLabel={`límite ${fmtCurrency(112000)}`} />
+        <KPI label="Cuenta operativa" value={fmtNum(data._cuentas?.[0] ? cuentas.reduce((s, c) => s, 0) : 0)} currency
+          delta={null} deltaLabel="BHD Débito" />
+      </div>
+
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Préstamo Cooperativa</div>
+              <div className="section-desc">{coop?.movimientos?.length || 0} pagos registrados</div>
+            </div>
+            <span className="badge neutral">{coop?.tasa?.toFixed?.(2) || 0}% / mes</span>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Monto inicial</div>
+              <div className="stat-value">{fmtCurrency(coop?.monto || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Capital pagado</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(coop?.pagado || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Saldo</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(coop?.saldo || 0)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Inversora · Andrea Correa</div>
+              <div className="section-desc">Retorno 2× · {andrea?.movimientos?.length || 0} pagos</div>
+            </div>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Aporte</div>
+              <div className="stat-value">{fmtCurrency(andrea?.aporte || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Pagado</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(andrea?.pagado || 0)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Pendiente</div>
+              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(andrea?.pendiente || 0)}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Líneas de crédito · Tarjetas</div>
+            <div className="section-desc">{lcs.length} productos</div>
+          </div>
+        </div>
+        <table className="data">
+          <thead><tr>
+            <th>Producto</th><th>Tipo</th>
+            <th className="right">Límite</th><th className="right">Usado</th>
+            <th className="right">Disponible</th><th className="right">% uso</th>
+            <th className="right">Tasa</th>
+          </tr></thead>
+          <tbody>
+            {lcs.map(l => {
+              const usoPct = l.limite > 0 ? (l.usado / l.limite) * 100 : 0;
+              const cls = usoPct > 80 ? 'danger' : usoPct > 50 ? 'warning' : 'success';
+              return (
+                <tr key={l.id}>
+                  <td>{l.nombre}</td>
+                  <td className="muted">{l.tipoSub}</td>
+                  <td className="num right">{fmtCurrency(l.limite)}</td>
+                  <td className="num right">{fmtCurrency(l.usado)}</td>
+                  <td className="num right pos">{fmtCurrency(l.limite - l.usado)}</td>
+                  <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
+                  <td className="num right muted">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ─── Sidebar nav ────────────────────────────────────────────────
+function App() {
+  const data = useATData();
+  const [page, setPage] = useState('overview');
+
+  const pages = [
+    { id: 'overview',  label: 'Resumen',     icon: '◉', badge: null },
+    { id: 'ventas',    label: 'Ventas',      icon: '$', badge: (data.ventas || []).length },
+    { id: 'inventario',label: 'Inventario',  icon: '▤', badge: (data.skus || []).length },
+    { id: 'finanzas',  label: 'Finanzas',    icon: '∮', badge: null },
+  ];
+
+  return (
+    <div className="app">
+      <aside className="nav">
+        <div className="brand">
+          <div className="brand-mark">J</div>
+          <div>
+            <div className="brand-text">JAMC.TECH</div>
+            <div className="brand-sub">Dashboard v3</div>
+          </div>
+        </div>
+
+        <div className="nav-section-label">General</div>
+        {pages.map(p => (
+          <div key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`}
+               style={{ position: 'relative' }}
+               onClick={() => setPage(p.id)}>
+            <span className="nav-item-icon">{p.icon}</span>
+            <span>{p.label}</span>
+            {p.badge != null && p.badge > 0 && <span className="nav-item-badge">{p.badge}</span>}
+          </div>
+        ))}
+
+        <div className="nav-section-label">Sistema</div>
+        <div className="nav-item" onClick={() => window.location.href = '/'}>
+          <span className="nav-item-icon">←</span>
+          <span>Dashboard v2</span>
+        </div>
+        <div className="nav-item" onClick={() => window.AT_CLIENT?.refreshAll?.()}>
+          <span className="nav-item-icon">↻</span>
+          <span>Sincronizar</span>
+        </div>
+
+        <div style={{ marginTop: 'auto', padding: 'var(--s-3)', fontSize: 11, color: 'var(--text-4)' }}>
+          <div>Build v3.0 · 2026-05-26</div>
+          <div>Supabase ✓</div>
+        </div>
+      </aside>
+
+      <main className="main">
+        {page === 'overview'   && <OverviewPage />}
+        {page === 'ventas'     && <VentasPage />}
+        {page === 'inventario' && <InventarioPage />}
+        {page === 'finanzas'   && <FinanzasPage />}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+</body>
+</html>
