@@ -5,7 +5,7 @@
 //   · Líneas de Crédito   (currently: BHD)
 //   · Préstamos           (currently: Cooperativa)
 //   · Inversores          (currently: Andrea Correa)
-//   · Cuentas de Banco    (mock 3 items — extend with Airtable)
+//   · Cuentas de Banco    (mock 3 items — extend with Supabase)
 //
 // All four share the same pattern, driven by a config:
 //   §01 LISTA       — selectable rows + KPIs + CREAR NUEVO
@@ -15,7 +15,7 @@
 //                       c) PARÁMETROS  · editar propiedades base + eliminar item
 //
 // Session-only state: edits don't persist past reload.
-// Replace mutations with Airtable writes once the wiring is live.
+// Replace mutations with Supabase writes once the wiring is live.
 // ════════════════════════════════════════════════════════════════
 
 // ── Seed data: derive arrays from singletons in data.js, plus new banks ──
@@ -281,7 +281,7 @@ function FinProductoPanel({ cfg }) {
   const [items, setItems] = React.useState(cfg.items);
   const sessionEvents = useSessionEvents();
 
-  // Subscribe to Airtable productos: when window.__AIRTABLE_DATA__.productos[idPrefix]
+  // Subscribe to Supabase productos: when window.__AIRTABLE_DATA__.productos[idPrefix]
   // is available, replace mock seeds with real records.
   React.useEffect(() => {
     const tryLoad = () => {
@@ -325,7 +325,7 @@ function FinProductoPanel({ cfg }) {
   const patchItem = (id, patch) => {
     setItems((arr) => arr.map((i) => i.id === id ? { ...i, ...patch } : i));
   };
-  // Mapping cfg.idPrefix + mov.tipo → MovFin Airtable singleSelect.
+  // Mapping cfg.idPrefix + mov.tipo → MovFin Supabase singleSelect.
   // §8.2 · cuando hay match, el movimiento se persiste en MovimientosFinancieros
   // además del cashflow + update del producto.
   const MOVFIN_TIPO_MAP = {
@@ -387,7 +387,7 @@ function FinProductoPanel({ cfg }) {
             src: `sesión · ${cfg.label.toLowerCase()}`,
             ...row,
           });
-          // ─── Persist a Airtable en paralelo (no bloquea la UI) ───
+          // ─── Persist a Supabase en paralelo (no bloquea la UI) ───
           if (window.AT_CLIENT?.create && window.AT?.fields?.cashflow) {
             const F = window.AT.fields.cashflow;
             window.AT_CLIENT.create('cashflow', {
@@ -397,12 +397,12 @@ function FinProductoPanel({ cfg }) {
               [F.entrada]:  row.entrada || 0,
               [F.salida]:   row.salida || 0,
             }).catch((e) => {
-              console.warn(`[FINANC·${cfg.label}] Airtable CF falló:`, e.message);
+              console.warn(`[FINANC·${cfg.label}] Supabase CF falló:`, e.message);
               window.toastErr?.(`${cfg.label} · CF`, `No se sincronizó: ${e.message.slice(0, 80)}`);
             });
           }
         });
-        // ─── Persist balance update a Airtable (financiero) ───
+        // ─── Persist balance update a Supabase (financiero) ───
         if (window.AT_CLIENT?.update && it._airtableId) {
           const next = cfg.applyMov ? cfg.applyMov({ ...it }, { ...mov, id: movId }, +1) : it;
           if (next && window.AT?.fields?.financiero) {

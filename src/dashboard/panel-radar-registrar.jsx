@@ -385,7 +385,7 @@ function PanelRegistrar() {
 }
 
 // ── Histórico Ventas · §8.5 + §8.1 ──────────────────────────────
-// Lista las ventas históricas de Airtable como tabla paginada, con
+// Lista las ventas históricas de Supabase como tabla paginada, con
 // botones de delete per row (borra TODAS las líneas asociadas al ID_Venta)
 // y export CSV. Edit per row queda diferido a una iteración futura porque
 // edit de venta multi-SKU requiere UX más rica (re-prorrata, etc.).
@@ -421,10 +421,10 @@ function HistoricoVentas() {
   const tail = filtered.slice(0, pageSize);
 
   const handleDelete = async (v) => {
-    if (!confirm(`¿Eliminar venta ${v.idVenta} de Airtable?\n\n` +
+    if (!confirm(`¿Eliminar venta ${v.idVenta} de Supabase?\n\n` +
       `${v.fecha} · ${v.canal || '—'}\n` +
       `${(v.lineas || []).length} línea(s) · ${v.cantidadTotal} ud · ${fmt(v.precioFacturadoTotal || 0)}\n\n` +
-      `Borra ${(v.lineas || []).length} record(s) de Airtable. Acción permanente.`)) return;
+      `Borra ${(v.lineas || []).length} record(s) de Supabase. Acción permanente.`)) return;
     setDeletingId(v.idVenta);
     try {
       const res = await window.AT_CLIENT.removeVenta(v.idVenta);
@@ -473,14 +473,14 @@ function HistoricoVentas() {
   if (!atVentas.loaded && allVentas.length === 0) {
     return (
       <div style={{ padding: '32px 24px', textAlign: 'center', color: T.t3, fontSize: 11, letterSpacing: '0.1em' }}>
-        ▸ Cargando ventas desde Airtable...
+        ▸ Cargando ventas desde Supabase...
       </div>
     );
   }
 
   return (
     <div style={{ margin: '0 0 0 14px' }}>
-      <TSectionHead ix="§01" name="Histórico de ventas (Airtable)"
+      <TSectionHead ix="§01" name="Histórico de ventas (Supabase)"
         count={`${filtered.length}${query ? '/' + allVentas.length : ''} ventas · ${atVentas.loaded ? 'LIVE' : 'mock'}`}
         right={
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -503,7 +503,7 @@ function HistoricoVentas() {
       {filtered.length === 0 ? (
         <div style={{ padding: '24px 16px', textAlign: 'center', color: T.t3, fontSize: 11, letterSpacing: '0.1em',
           background: T.panel, border: `1px solid ${T.bd}` }}>
-          {query ? `▸ Sin coincidencias para "${query}"` : '▸ Sin ventas en Airtable todavía'}
+          {query ? `▸ Sin coincidencias para "${query}"` : '▸ Sin ventas en Supabase todavía'}
         </div>
       ) : (
         <div style={{ background: T.panel, border: `1px solid ${T.bd}`, overflowX: 'auto' }}>
@@ -553,7 +553,7 @@ function HistoricoVentas() {
                       <button type="button"
                         onClick={() => handleDelete(v)}
                         disabled={isDel}
-                        title={isDel ? 'Eliminando...' : 'Eliminar venta de Airtable'}
+                        title={isDel ? 'Eliminando...' : 'Eliminar venta de Supabase'}
                         style={{ background: 'transparent', color: T.t4, border: `1px solid ${T.bd}`,
                           fontSize: 10, padding: '2px 6px', cursor: isDel ? 'wait' : 'pointer',
                           fontFamily: 'inherit', lineHeight: 1 }}
@@ -701,8 +701,8 @@ function FormVenta() {
     });
     const items = ventaLineas.length;
     setSaving(true);
-    setSaved(`▸ Subiendo a Airtable · ${items} ${items === 1 ? 'SKU' : 'SKUs'} · ${fmt(facturadoTotal)}`);
-    // Optimistic write to Airtable; on success se remueve el evento (la venta
+    setSaved(`▸ Subiendo a Supabase · ${items} ${items === 1 ? 'SKU' : 'SKUs'} · ${fmt(facturadoTotal)}`);
+    // Optimistic write to Supabase; on success se remueve el evento (la venta
     // ahora vive en window.__AIRTABLE_DATA__.ventas y se ve via el overlay).
     if (window.AT_CLIENT?.createVenta) {
       window.AT_CLIENT.createVenta({
@@ -715,7 +715,7 @@ function FormVenta() {
         .then(({ idVenta }) => {
           window.__SESSION_LEDGER__.removeEvent(ev.id);
           setSaving(false);
-          setSaved(`✓ Venta ${idVenta} guardada en Airtable · ${fmt(facturadoTotal)} → ${cuentaNombre}`);
+          setSaved(`✓ Venta ${idVenta} guardada en Supabase · ${fmt(facturadoTotal)} → ${cuentaNombre}`);
           setTimeout(() => { setSaved(null); reset(); }, 4000);
         })
         .catch((err) => {
@@ -983,7 +983,7 @@ function SesionLog() {
         })}
       </div>
       <div style={{ marginTop: 10, fontSize: 9, color: T.t4, letterSpacing: '0.06em', fontStyle: 'italic', padding: '0 0 0 14px' }}>
-        ▸ las operaciones de sesión se pierden al recargar · listo para sustituir con Airtable
+        ▸ las operaciones de sesión se pierden al recargar · listo para sustituir con Supabase
       </div>
     </div>
   );
@@ -1321,7 +1321,7 @@ function FormCashFlow() {
     });
     setSaved(`▸ Sincronizando · ${ev.id.slice(0, 14)}`);
 
-    // Escribir a Airtable (background)
+    // Escribir a Supabase (background)
     if (window.AT_CLIENT?.create && window.AT?.fields?.cashflow) {
       const F = window.AT.fields.cashflow;
       try {

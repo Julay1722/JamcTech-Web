@@ -10,11 +10,11 @@ function PanelCashFlow({ filter }) {
   const [deletingId, setDeletingId] = React.useState(null);
   const [editingId, setEditingId] = React.useState(null);
   const [savingEditId, setSavingEditId] = React.useState(null);
-  // Overlay session-only CF entries + Airtable-sourced cashflow (replace mocks when loaded)
+  // Overlay session-only CF entries + Supabase-sourced cashflow (replace mocks when loaded)
   const sessionCF = useSessionCF();
   const atVentas = useAirtableTable('ventas');
   const atCF = useAirtableTable('cashflow');
-  // Single source of truth: si Airtable cashflow está cargado, ÉL es la base.
+  // Single source of truth: si Supabase cashflow está cargado, ÉL es la base.
   // Si no, usar mocks + overlay de venta sintetizada.
   const airtableCF = atCF.loaded ? (window.__AIRTABLE_DATA__?.cashflow || []) : [];
   const airtableVentas = (!atCF.loaded && atVentas.loaded) ? (window.__AIRTABLE_DATA__?.ventasCF || []) : [];
@@ -66,7 +66,7 @@ function PanelCashFlow({ filter }) {
 
   // ── Export CSV helper (§8.5 · usa exportCSVDownload central con BOM UTF-8) ──
   const exportCSV = () => {
-    const headers = ['Fecha', 'Tipo', 'Categoria', 'Aux', 'Entrada', 'Salida', 'Neto', 'AirtableID'];
+    const headers = ['Fecha', 'Tipo', 'Categoria', 'Aux', 'Entrada', 'Salida', 'Neto', 'ID'];
     const rows = filteredRows.map((r) => {
       const tipo = r._src ? 'SESION' : (esFinanciero(r.c) ? 'FIN' : 'OP');
       return [r.f || '', tipo, r.c || '', r.a || '', r.e || 0, r.s || 0, (r.e || 0) - (r.s || 0), r._airtableId || ''];
@@ -76,13 +76,13 @@ function PanelCashFlow({ filter }) {
     });
   };
 
-  // ── Delete from Airtable handler ──
+  // ── Delete from Supabase handler ──
   const handleDelete = async (row) => {
     if (!row._airtableId) {
-      window.toastWarn?.('No se puede eliminar', 'Este movimiento no tiene ID de Airtable');
+      window.toastWarn?.('No se puede eliminar', 'Este movimiento no tiene ID de Supabase');
       return;
     }
-    if (!confirm(`¿Eliminar este movimiento de Airtable?\n\n${row.f} · ${row.c}\nEntrada: ${row.e} · Salida: ${row.s}\n\nEsta acción es permanente.`)) return;
+    if (!confirm(`¿Eliminar este movimiento de Supabase?\n\n${row.f} · ${row.c}\nEntrada: ${row.e} · Salida: ${row.s}\n\nEsta acción es permanente.`)) return;
     setDeletingId(row._airtableId);
     try {
       await window.AT_CLIENT.remove('cashflow', row._airtableId);
@@ -100,7 +100,7 @@ function PanelCashFlow({ filter }) {
     setDeletingId(null);
   };
 
-  // ── Edit from Airtable handler · §8.1 ──
+  // ── Edit from Supabase handler · §8.1 ──
   const handleSaveEdit = async (row, patch) => {
     if (!row._airtableId) return;
     const F = window.AT.fields.cashflow;
@@ -295,7 +295,7 @@ function PanelCashFlow({ filter }) {
                       <button
                         type="button"
                         onClick={() => setEditingId(isEditingThis ? null : r._airtableId)}
-                        title={isEditingThis ? 'Cancelar' : 'Editar en Airtable'}
+                        title={isEditingThis ? 'Cancelar' : 'Editar en Supabase'}
                         style={{
                           background: 'transparent', color: isEditingThis ? T.am : T.t4,
                           border: `1px solid ${isEditingThis ? T.am : T.bd}`,
@@ -311,7 +311,7 @@ function PanelCashFlow({ filter }) {
                         type="button"
                         onClick={() => handleDelete(r)}
                         disabled={isDeletingThis}
-                        title={isDeletingThis ? 'Eliminando...' : 'Eliminar de Airtable'}
+                        title={isDeletingThis ? 'Eliminando...' : 'Eliminar de Supabase'}
                         style={{
                           background: 'transparent', color: T.t4, border: `1px solid ${T.bd}`,
                           fontSize: 10, padding: '2px 6px', cursor: isDeletingThis ? 'wait' : 'pointer',
@@ -338,7 +338,7 @@ function PanelCashFlow({ filter }) {
         </table>
         <div style={{ padding: '8px 14px', fontSize: 9, color: T.t3, letterSpacing: '0.12em', borderTop: `1px solid ${T.bd}`,
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <span>▌MOSTRANDO {tailRows.length} de {filteredRows.length} en período · {(window.__AIRTABLE_DATA__?.cashflow?.length || baseCF.length || 0)} total Airtable</span>
+          <span>▌MOSTRANDO {tailRows.length} de {filteredRows.length} en período · {(window.__AIRTABLE_DATA__?.cashflow?.length || baseCF.length || 0)} total Supabase</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {filteredRows.length > pageSize && (
               <button
@@ -373,10 +373,10 @@ function PanelCashFlow({ filter }) {
   );
 }
 
-// ── CF Edit Row · §8.1 inline editor para movimientos de Airtable ──
+// ── CF Edit Row · §8.1 inline editor para movimientos de Supabase ──
 // Se expande debajo del row al click ✎. Edita campos directos
 // (fecha, categoría, auxiliar, entrada, salida) y persiste con
-// AT_CLIENT.update. No cambia el ID de Airtable.
+// AT_CLIENT.update. No cambia el ID de Supabase.
 function CFEditRow({ row, saving, onSave, onCancel }) {
   const T = useTheme();
   const [f, setF] = React.useState(row.f || '');

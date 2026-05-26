@@ -10,7 +10,7 @@ const STATE_META = {
 
 function PanelInventario() {
   const T = useTheme();
-  // Subscribe to Airtable SKU load so buildSK overlay re-renders the panel.
+  // Subscribe to Supabase SKU load so buildSK overlay re-renders the panel.
   const atSkus = useAirtableTable('skus');
   // Session sales reduce stock & adjust derived counts (overlay on top of buildSK)
   const stockDelta = useStockDeltaBySKU();
@@ -517,7 +517,7 @@ function PanelInventario() {
 
 // ─── Inline registration forms surfaced inside the Inventario panel ────
 // Each form is co-located with the data it mutates. Wizard sketch — no
-// Airtable write yet; the submit button just stages the payload visually.
+// Supabase write yet; the submit button just stages the payload visually.
 
 function InventarioRegistrar() {
   const T = useTheme();
@@ -551,7 +551,7 @@ function InventarioRegistrar() {
 }
 
 // ─── Mock lots: synthesized from EN_CAMINO + recent purchases so the
-//     "Administrar Lote" tab has something real to display until Airtable.
+//     "Administrar Lote" tab has something real to display until Supabase.
 //     Cada SKU lleva su propio costoUd (costo base por unidad antes de extras).
 const LOTES_MOCK = [
   // === Últimos 90 días (HOY = 2026-05-22 → cutoff ≈ 2026-02-22) ===
@@ -751,16 +751,16 @@ function FormAdministrarLote({ SK }) {
       const linked = window.__SESSION_LEDGER__.getEvents((e) => e.linkedLoteId === id);
       sessionDeleted = linked.length;
       linked.forEach((e) => {
-        // Si el evento tiene _airtableId, borrarlo de Airtable también
+        // Si el evento tiene _airtableId, borrarlo de Supabase también
         if (e._airtableId && window.AT_CLIENT?.remove) {
           window.AT_CLIENT.remove('cashflow', e._airtableId)
-            .catch((err) => console.warn('[lote-delete] CF Airtable remove falló:', err.message));
+            .catch((err) => console.warn('[lote-delete] CF Supabase remove falló:', err.message));
         }
         window.__SESSION_LEDGER__.removeEvent(e.id);
       });
     }
 
-    // ─── Cleanup: borrar también las entradas (records de Lote en Airtable) ───
+    // ─── Cleanup: borrar también las entradas (records de Lote en Supabase) ───
     let airtableEntries = 0;
     if (lote.lineas && window.AT_CLIENT?.remove) {
       const entradaIds = lote.lineas.map((l) => l._airtableId).filter(Boolean);
@@ -776,7 +776,7 @@ function FormAdministrarLote({ SK }) {
     }
 
     window.toastOk?.('Lote eliminado', `${id} · ${sessionDeleted} CF + ${airtableEntries} entradas`);
-    setFlash({ id, msg: `Lote ${id} eliminado · ${sessionDeleted} CF + ${airtableEntries} entradas Airtable` });
+    setFlash({ id, msg: `Lote ${id} eliminado · ${sessionDeleted} CF + ${airtableEntries} entradas Supabase` });
     setTimeout(() => setFlash((f) => (f && f.id === id ? null : f)), 5000);
   };
 
@@ -1172,11 +1172,11 @@ function FormEntradaLote({ SK }) {
     const skuCount = lineasReales.length;
     setSaving(true);
 
-    // ─── Airtable write (cuando hay líneas reales) ───
+    // ─── Supabase write (cuando hay líneas reales) ───
     let airtableSyncMsg = '';
     if (skuCount > 0 && window.AT_CLIENT?.createLote) {
       try {
-        setSaved('▸ Sincronizando con Airtable...');
+        setSaved('▸ Sincronizando con Supabase...');
         const result = await window.AT_CLIENT.createLote({
           fecha,
           status,
@@ -1189,12 +1189,12 @@ function FormEntradaLote({ SK }) {
           courier: parseFloat(courier) || 0,
           otros: parseFloat(otros) || 0,
         });
-        airtableSyncMsg = ` · ☁ Airtable: ${result.airtableIds?.length || 0} records`;
-        window.toastOk?.('Lote sincronizado', `${loteId} · ${result.airtableIds?.length || 0} records en Airtable`);
+        airtableSyncMsg = ` · ☁ Supabase: ${result.airtableIds?.length || 0} records`;
+        window.toastOk?.('Lote sincronizado', `${loteId} · ${result.airtableIds?.length || 0} records en Supabase`);
       } catch (e) {
-        airtableSyncMsg = ` · ⚠ Airtable falló: ${e.message?.slice(0, 80) || 'error'}`;
-        console.error('[FormEntradaLote] Airtable createLote falló:', e);
-        window.toastErr?.('Lote no sincronizado', `${loteId} guardado local · Airtable: ${e.message?.slice(0, 80) || 'error'}`);
+        airtableSyncMsg = ` · ⚠ Supabase falló: ${e.message?.slice(0, 80) || 'error'}`;
+        console.error('[FormEntradaLote] Supabase createLote falló:', e);
+        window.toastErr?.('Lote no sincronizado', `${loteId} guardado local · Supabase: ${e.message?.slice(0, 80) || 'error'}`);
       }
     }
 
@@ -1230,7 +1230,7 @@ function FormEntradaLote({ SK }) {
         entrada: 0, salida: parseFloat(otros),
       });
     }
-    // Escribe CF también a Airtable (en paralelo, no bloquea UI)
+    // Escribe CF también a Supabase (en paralelo, no bloquea UI)
     cfRows.forEach((row) => {
       window.__SESSION_LEDGER__.addEvent({
         tipo: 'cf_mov',
@@ -1248,8 +1248,8 @@ function FormEntradaLote({ SK }) {
             [F.entrada]:  row.entrada || 0,
             [F.salida]:   row.salida || 0,
           }).catch((e) => {
-            console.warn('[CF·lote] Airtable falló:', e.message);
-            window.toastErr?.('CF · lote', `No se pudo guardar en Airtable: ${e.message.slice(0, 80)}`);
+            console.warn('[CF·lote] Supabase falló:', e.message);
+            window.toastErr?.('CF · lote', `No se pudo guardar en Supabase: ${e.message.slice(0, 80)}`);
           });
         }
       }
@@ -1679,10 +1679,10 @@ function FormNuevoSku({ SK }) {
     return [...new Set([...Object.keys(COLOR_CODE), ...fromSk])].sort();
   }, []);
 
-  // Categorías permitidas por el singleSelect Airtable (schema verificado).
+  // Categorías permitidas por el singleSelect Supabase (schema verificado).
   const SKU_CATS_AIRTABLE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Otro'];
   // Dropdown incluye 'Mousepad' porque Julio vende/planea vender mousepads.
-  // Si lo elige y no está aún en Airtable: soft warning. El writer lo rechazará
+  // Si lo elige y no está aún en Supabase: soft warning. El writer lo rechazará
   // hasta que Julio agregue la opción al singleSelect (1 minuto, sin push).
   const SKU_CATS_UI = [...new Set([...SKU_CATS_AIRTABLE, 'Mousepad'])];
 
@@ -1709,7 +1709,7 @@ function FormNuevoSku({ SK }) {
   const autoNm = [modelo, color].filter(Boolean).join(' ');
   const finalNm = nm.trim() || autoNm;
   const collision = skuId && SK.find((s) => s.id === skuId);
-  const catPendingAirtable = cat && !SKU_CATS_AIRTABLE.includes(cat);
+  const catPendingSupabase = cat && !SKU_CATS_AIRTABLE.includes(cat);
 
   // Margen estimado
   const pvN = parseFloat(pv) || 0;
@@ -1717,15 +1717,15 @@ function FormNuevoSku({ SK }) {
   const margen = pvN > 0 && cppN > 0 ? ((pvN - cppN) / pvN) * 100 : null;
 
   // §6 #5 validación mixta: hard guards (button disabled) vs soft warnings (proceede).
-  // Categoría no presente en Airtable es SOFT WARNING — Julio puede intentar
+  // Categoría no presente en Supabase es SOFT WARNING — Julio puede intentar
   // y el writer mostrará el error real si la opción no fue agregada todavía.
   const hardError =
     !skuId ? 'faltan datos · categoría + marca + modelo mínimos' :
     collision ? `ID ${skuId} ya existe · cambia modelo o color` :
     null;
   const softWarning =
-    !hardError && catPendingAirtable
-      ? `"${cat}" no está aún en Airtable · agrégala al campo Categoría (1 min, sin push) o el guardado fallará`
+    !hardError && catPendingSupabase
+      ? `"${cat}" no está aún en Supabase · agrégala al campo Categoría (1 min, sin push) o el guardado fallará`
       : !hardError && parseFloat(stockIni) > 0
       ? 'el stock inicial no se persiste · regístralo después como lote Recibido'
       : null;
@@ -1761,7 +1761,7 @@ function FormNuevoSku({ SK }) {
       reset();
     } catch (err) {
       const msg = err?.message || 'error desconocido';
-      setSaved('✕ Airtable: ' + msg);
+      setSaved('✕ Supabase: ' + msg);
       window.toastErr?.('Error al crear SKU', msg);
       setTimeout(() => setSaved(null), 8000);
     } finally {
@@ -1781,7 +1781,7 @@ function FormNuevoSku({ SK }) {
         <div style={{ flex: 1, height: 1, background: T.bd }} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
-        <FormField label="Categoría" hint={`en Airtable: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
+        <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
           <Combobox
             value={cat} onChange={setCat}
             options={SKU_CATS_UI}
@@ -1928,7 +1928,7 @@ function FormEditarSku({ SK }) {
   }, []);
 
   const SKU_CATS_AIRTABLE = (window.AT_CLIENT && window.AT_CLIENT.SKU_CATEGORIAS) || ['Mouse', 'Teclado', 'Headset', 'Otro'];
-  // Dropdown incluye 'Mousepad' aunque no esté aún en Airtable · ver
+  // Dropdown incluye 'Mousepad' aunque no esté aún en Supabase · ver
   // comentario en FormNuevoSku.
   const SKU_CATS_UI = [...new Set([...SKU_CATS_AIRTABLE, 'Mousepad'])];
 
@@ -1966,7 +1966,7 @@ function FormEditarSku({ SK }) {
   const finalNm = nm.trim() || autoNm;
   const changed = sel && (newId !== sel.id || finalNm !== sel.nm || cat !== sel.cat || mk !== sel.mk);
   const collision = sel && newId && newId !== sel.id && SK.find((s) => s.id === newId);
-  const catPendingAirtable = cat && !SKU_CATS_AIRTABLE.includes(cat);
+  const catPendingSupabase = cat && !SKU_CATS_AIRTABLE.includes(cat);
 
   const modelosForMarca = modelosByMarca[mk] || [];
 
@@ -1982,10 +1982,10 @@ function FormEditarSku({ SK }) {
     !changed ? 'sin cambios para guardar' :
     null;
   // Categoría pendiente → soft warning, no hard guard. Si Julio procede sin
-  // agregarla en Airtable, el writer mostrará un toast error explicativo.
+  // agregarla en Supabase, el writer mostrará un toast error explicativo.
   const softWarning =
-    !hardError && catPendingAirtable
-      ? `"${cat}" no está aún en Airtable · agrégala al campo Categoría (1 min, sin push) o el guardado fallará`
+    !hardError && catPendingSupabase
+      ? `"${cat}" no está aún en Supabase · agrégala al campo Categoría (1 min, sin push) o el guardado fallará`
       : null;
 
   const submit = async () => {
@@ -2011,7 +2011,7 @@ function FormEditarSku({ SK }) {
       setTimeout(() => setSaved(null), 6000);
     } catch (err) {
       const msg = err?.message || 'error desconocido';
-      setSaved('✕ Airtable: ' + msg);
+      setSaved('✕ Supabase: ' + msg);
       window.toastErr?.('Error al actualizar SKU', msg);
       setTimeout(() => setSaved(null), 8000);
     } finally {
@@ -2084,7 +2084,7 @@ function FormEditarSku({ SK }) {
             <div style={{ flex: 1, height: 1, background: T.bd }} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
-            <FormField label="Categoría" hint={`en Airtable: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
+            <FormField label="Categoría" hint={`en Supabase: ${SKU_CATS_AIRTABLE.join(' · ')} · "Mousepad" pendiente de agregar`}>
               <Combobox value={cat} onChange={setCat}
                 options={SKU_CATS_UI}
                 placeholder="categoría" allowAdd={false} />
@@ -2160,13 +2160,13 @@ function FormEditarSku({ SK }) {
             warning={softWarning}
           />
 
-          {/* Zona eliminar — Airtable hard delete, no rollback */}
+          {/* Zona eliminar — Supabase hard delete, no rollback */}
           <div style={{ marginTop: 22, background: '#2a1414', border: `1px solid ${T.re}`, padding: '12px 14px' }}>
             <div style={{ fontSize: 9, color: T.re, letterSpacing: '0.14em', marginBottom: 8, fontWeight: 700 }}>
               ▸ ZONA DE ELIMINACIÓN · IRREVERSIBLE
             </div>
             <div style={{ fontSize: 10, color: T.t2, lineHeight: 1.55, marginBottom: 10 }}>
-              Eliminar este SKU borra el record de Airtable. <span style={{ color: T.t }}>El historial de ventas y entradas
+              Eliminar este SKU borra el record de Supabase. <span style={{ color: T.t }}>El historial de ventas y entradas
               no se borra</span> — solo pierden el link al SKU.
               {(refs.ventas + refs.entradas) > 0 && (
                 <div style={{ marginTop: 6, color: T.am, fontStyle: 'italic' }}>
@@ -2223,7 +2223,7 @@ function ReadKV({ label, value }) {
 }
 
 // ─── HistoricoLotes · §8.1 (Tarea A) ─────────────────────────────
-// Tabla paginada de TODOS los lotes Airtable con búsqueda + filtros +
+// Tabla paginada de TODOS los lotes Supabase con búsqueda + filtros +
 // edit inline (header) + delete por fila + export CSV. Mismo patrón
 // que HistoricoVentas (panel-radar-registrar.jsx).
 function HistoricoLotes({ SK }) {
@@ -2269,7 +2269,7 @@ function HistoricoLotes({ SK }) {
       `¿Eliminar lote ${l.id}?\n\n` +
       `${l.fecha} · ${l.status || '—'}\n` +
       `${linesCount} línea(s) · ${t.uds} ud · ${fmt(t.total)}\n\n` +
-      `Borra ${linesCount} record(s) de Airtable. Acción permanente.`,
+      `Borra ${linesCount} record(s) de Supabase. Acción permanente.`,
     )) return;
     setDeletingId(l.id);
     try {
@@ -2335,7 +2335,7 @@ function HistoricoLotes({ SK }) {
   if (!atEntradas.loaded && allLotes.length === 0) {
     return (
       <div style={{ padding: '32px 24px', textAlign: 'center', color: T.t3, fontSize: 11, letterSpacing: '0.1em' }}>
-        ▸ Cargando entradas desde Airtable...
+        ▸ Cargando entradas desde Supabase...
       </div>
     );
   }
@@ -2343,7 +2343,7 @@ function HistoricoLotes({ SK }) {
   return (
     <div style={{ padding: '18px 22px' }}>
       <div style={{ background: T.panel2, padding: '10px 12px', border: `1px solid ${T.bd}`, marginBottom: 14, fontSize: 10, color: T.t2, lineHeight: 1.55 }}>
-        Lista paginada de TODOS los lotes en Airtable. Botón <span style={{ color: T.am }}>✎</span> abre editor inline (fecha · status · proveedor · costos compartidos · notas) propagado a todas las líneas. Botón <span style={{ color: T.re }}>×</span> elimina el lote completo. <span style={{ color: T.t3 }}>Para cambiar cantidad/SKUs de un lote existente: bórralo y créalo nuevo con NUEVA ENTRADA · LOTE.</span>
+        Lista paginada de TODOS los lotes en Supabase. Botón <span style={{ color: T.am }}>✎</span> abre editor inline (fecha · status · proveedor · costos compartidos · notas) propagado a todas las líneas. Botón <span style={{ color: T.re }}>×</span> elimina el lote completo. <span style={{ color: T.t3 }}>Para cambiar cantidad/SKUs de un lote existente: bórralo y créalo nuevo con NUEVA ENTRADA · LOTE.</span>
       </div>
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
@@ -2382,7 +2382,7 @@ function HistoricoLotes({ SK }) {
       {filtered.length === 0 ? (
         <div style={{ padding: '24px 16px', textAlign: 'center', color: T.t3, fontSize: 11, letterSpacing: '0.1em',
           background: T.panel, border: `1px solid ${T.bd}` }}>
-          {(query || statusFilter !== 'all') ? '▸ Sin coincidencias para los filtros activos' : '▸ Sin lotes en Airtable todavía'}
+          {(query || statusFilter !== 'all') ? '▸ Sin coincidencias para los filtros activos' : '▸ Sin lotes en Supabase todavía'}
         </div>
       ) : (
         <div style={{ background: T.panel, border: `1px solid ${T.bd}`, overflowX: 'auto' }}>
