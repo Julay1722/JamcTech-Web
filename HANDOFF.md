@@ -43,10 +43,18 @@ Esta es la fase que estaba marcada como "P0 pendiente" en TODO.md y se ejecutó 
 - UI end-to-end: registrar venta desde panel `04 RADAR > 05 VENTAS > NUEVA VENTA`
 - Visual: MANDO, FINANC, INVENT, RADAR todos rendereando data real de Supabase
 
+**Mejoras adicionales aplicadas (commits posteriores):**
+- Fix side-effect cleanup en removeLote/removeMovFin (auto-link via lote_id + dedup MovFin mirror).
+- Fix CAT_MAP/CAT_REV: enum es MOUSEPAD (no underscore) + agregado OTRO.
+- Conectado panel CUENTAS DE BANCO a cuentas reales de Supabase (antes: 3 banks mock; ahora: las 5 reales con saldos calculados).
+- Hardening Supabase: ALTER FUNCTION search_path para 9 triggers + CREATE INDEX para 10 FKs sin cobertura.
+- Tests E2E via wizard real para venta, lote y MovFin (todos pasan, sin orphans en DB post-cleanup).
+
 **Lo que NO se hizo (decidir con Julio antes):**
-- Cuotas BHD auto-regen (P1, requiere decisión: schedule vs balance corriente)
 - Stock management retroactivo con lotes (P2, opcional)
 - Cleanup post-migración (P2): eliminar airtable-client.js, Netlify function, env vars cuando todo esté estable
+- Mobile UI responsive (P2, requiere trabajo significativo)
+- RLS hardening antes de deploy a Netlify (cambiar dev_anon_all a TO authenticated)
 
 ## Fase 1 · Migración Google Sheets → Supabase (texto original abajo)
 
