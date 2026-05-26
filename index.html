@@ -2208,6 +2208,151 @@ function DetalleInversorMovs({ item, cashflow, esDueno }) {
   );
 }
 
+// ═════════════════════════ Detalle inline · Ledger contable de cuenta de banco ═════════════════════════
+// Estado de cuenta completo de una cuenta de banco. Muestra todos los movimientos
+// que entraron y salieron, con saldo corriente. Útil para cuadrar contra el
+// estado de cuenta real del banco. Incluye filtros de período y resumen mensual.
+function DetalleCuentaLedger({ cuenta, cashflow }) {
+  const [periodo, setPeriodo] = useState('todo');
+  const [search, setSearch] = useState('');
+
+  const movsCuenta = (cashflow || []).filter(m => m._origen === cuenta.nombre);
+  const movsPeriodo = filterByPeriod(movsCuenta, periodo, 'f');
+  const movsFiltered = movsPeriodo.filter(m => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (m.c || '').toLowerCase().includes(q)
+        || (m.a || '').toLowerCase().includes(q)
+        || (m.notas || '').toLowerCase().includes(q);
+  });
+
+  // KPIs del período
+  const totalEntradas = movsPeriodo.reduce((s, m) => s + (m.e || 0), 0);
+  const totalSalidas  = movsPeriodo.reduce((s, m) => s + (m.s || 0), 0);
+  const netoPeriodo   = totalEntradas - totalSalidas;
+  const saldoActual   = movsCuenta.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  // Saldo inicial del período (antes del rango filtrado)
+  const range = periodToRange(periodo);
+  const saldoInicial = range
+    ? movsCuenta.filter(m => m.f && m.f < range.from).reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0)
+    : 0;
+
+  // Ordenar ASC para computar running balance, luego revertir para mostrar
+  const ordered = movsFiltered.slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
+  let running = saldoInicial;
+  const rows = ordered.map(m => {
+    running += (m.e || 0) - (m.s || 0);
+    return { ...m, saldoDespues: running };
+  }).reverse();
+
+  // Resumen mensual (para cuadrar mes a mes contra el estado del banco)
+  const buckets = {};
+  movsPeriodo.forEach(m => {
+    const ym = (m.f || '').slice(0, 7);
+    if (!ym) return;
+    if (!buckets[ym]) buckets[ym] = { entradas: 0, salidas: 0, count: 0 };
+    buckets[ym].entradas += m.e || 0;
+    buckets[ym].salidas  += m.s || 0;
+    buckets[ym].count    += 1;
+  });
+  const meses = Object.keys(buckets).sort().reverse();
+
+  return (
+    <>
+      {/* KPIs */}
+      <div className="kpi-row" style={{ marginTop: 'var(--s-3)' }}>
+        <KPI label="Saldo actual" value={fmtNum(saldoActual)} currency
+             delta={null} deltaLabel={`${cuenta.nombre} · histórico`} />
+        <KPI label="Entradas (período)" value={fmtNum(totalEntradas)} currency
+             delta={null} deltaLabel={`${movsPeriodo.length} movimientos`} />
+        <KPI label="Salidas (período)" value={fmtNum(totalSalidas)} currency
+             delta={null} deltaLabel="salidas en período" />
+        <KPI label="Neto del período" value={fmtNum(netoPeriodo)} currency
+             delta={netoPeriodo >= 0 ? 1 : -1} deltaLabel={netoPeriodo >= 0 ? 'positivo' : 'negativo'} />
+      </div>
+
+      {/* Resumen mensual — cuadrar mes a mes */}
+      {meses.length > 1 && (
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Resumen mensual · cuadrar con banco</div>
+              <div className="section-desc">{meses.length} meses · usa estos totales contra el estado de cuenta mensual</div>
+            </div>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>Mes</th><th className="right">Movimientos</th>
+              <th className="right">Entradas</th><th className="right">Salidas</th>
+              <th className="right">Neto del mes</th>
+            </tr></thead>
+            <tbody>
+              {meses.map(ym => {
+                const b = buckets[ym];
+                const neto = b.entradas - b.salidas;
+                return (
+                  <tr key={ym}>
+                    <td>{ym}</td>
+                    <td className="num right muted">{b.count}</td>
+                    <td className="num right pos">{fmtCurrency(b.entradas)}</td>
+                    <td className="num right neg">{fmtCurrency(b.salidas)}</td>
+                    <td className={`num right ${neto >= 0 ? 'pos' : 'neg'}`}>{fmtCurrency(neto)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Ledger detallado */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Movimientos detallados · {cuenta.nombre}</div>
+            <div className="section-desc">
+              {movsFiltered.length} de {movsCuenta.length} · saldo inicial del período {fmtCurrency(saldoInicial)} · final {fmtCurrency(saldoInicial + netoPeriodo)}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input className="input" style={{ width: 180 }} placeholder="Buscar concepto/contraparte/notas..." value={search} onChange={e => setSearch(e.target.value)} />
+            <PeriodFilter value={periodo} onChange={setPeriodo} />
+          </div>
+        </div>
+        <div style={{ maxHeight: 500, overflowY: 'auto' }}>
+          <table className="data">
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+              <tr>
+                <th>Fecha</th><th>Concepto</th><th>Contraparte</th>
+                <th className="right">Entrada</th><th className="right">Salida</th>
+                <th className="right">Saldo después</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m, i) => (
+                <tr key={i}>
+                  <td>{fmtDate(m.f)}</td>
+                  <td className="muted">{m.c || '—'}</td>
+                  <td>{m.a || '—'}</td>
+                  <td className="num right pos">{m.e > 0 ? fmtCurrency(m.e) : '—'}</td>
+                  <td className="num right neg">{m.s > 0 ? fmtCurrency(m.s) : '—'}</td>
+                  <td className="num right" style={{ fontWeight: 600 }}>{fmtCurrency(m.saldoDespues)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>
+                  Sin movimientos en esta cuenta para el período seleccionado.
+                  {search && ' Ajusta el filtro de búsqueda.'}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function ProductDetailModal({ open, item, kind, onClose }) {
   const data = useATData();
   const movFin = data.movFin || [];
@@ -3029,37 +3174,56 @@ function FinanzasPage() {
         </>);
       })()}
 
-      {/* CUENTAS DE BANCO — tabla CRUD */}
-      {subtab === 'cuentas' && (
+      {/* CUENTAS DE BANCO — tabla + ledger contable inline al seleccionar */}
+      {subtab === 'cuentas' && (<>
         <div className="section">
           <table className="data">
             <thead><tr>
               <th>Nombre</th><th>Tipo</th><th>Moneda</th>
-              <th className="right">Límite crédito</th><th>Notas</th><th></th>
+              <th className="right">Saldo actual</th>
+              <th className="right">Límite crédito</th><th></th>
             </tr></thead>
             <tbody>
-              {cuentas.map(c => (
-                <tr key={c.id}>
-                  <td>{c.nombre}</td>
-                  <td><span className={`badge ${c.tipo === 'DEBITO' ? 'success' : c.tipo === 'CREDITO' ? 'warning' : 'neutral'}`}>{c.tipo}</span></td>
-                  <td className="muted">{c.moneda}</td>
-                  <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>{c.notas || '—'}</td>
-                  <td className="row-actions">
-                    <div className="row-actions-inner">
-                      <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
-                      <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {cuentas.map(c => {
+                // Saldo actual = sum(entrada) - sum(salida) de cashflow donde _origen === c.nombre
+                const movs = (data.cashflow || []).filter(m => m._origen === c.nombre);
+                const saldo = movs.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+                const isSelected = selectedId === ('cuenta-' + c.id);
+                return (
+                  <tr key={c.id}
+                    style={{ cursor: 'pointer', background: isSelected ? 'var(--surface-2)' : undefined }}
+                    onClick={() => setSelectedId(isSelected ? null : 'cuenta-' + c.id)}>
+                    <td>
+                      {c.nombre} {isSelected && <span className="muted" style={{ fontSize: 10 }}>(seleccionada ↓)</span>}
+                      {c.notas && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{c.notas}</div>}
+                    </td>
+                    <td><span className={`badge ${c.tipo === 'DEBITO' ? 'success' : c.tipo === 'CREDITO' ? 'warning' : 'neutral'}`}>{c.tipo}</span></td>
+                    <td className="muted">{c.moneda}</td>
+                    <td className={`num right ${saldo >= 0 ? 'pos' : 'neg'}`} style={{ fontWeight: 600 }}>{fmtCurrency(saldo)}</td>
+                    <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
+                    <td className="row-actions" onClick={e => e.stopPropagation()}>
+                      <div className="row-actions-inner">
+                        <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
+                        <button className="icon-btn danger" title="Eliminar" onClick={() => setDel({ kind: 'cuenta', id: c.id, label: c.nombre })}>×</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
               {cuentas.length === 0 && (
                 <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>Sin cuentas · click "+ Nuevo"</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+        {/* Ledger contable de la cuenta seleccionada */}
+        {selectedId && selectedId.startsWith('cuenta-') && (() => {
+          const cuentaId = Number(selectedId.slice('cuenta-'.length));
+          const cuenta = cuentas.find(c => c.id === cuentaId);
+          if (!cuenta) return null;
+          return <DetalleCuentaLedger cuenta={cuenta} cashflow={data.cashflow || []} />;
+        })()}
+      </>)}
     </>
   );
 }
