@@ -1,9 +1,11 @@
 {
   "name": "jamcs-tech-dashboard",
   "private": true,
-  "version": "1.0.0",
-  "description": "JAMC's Tech terminal dashboard — Bloomberg-themed React/JSX dashboard sirviendo desde Netlify (sin build step en cliente; Babel-standalone). Este package.json existe solo para devDependencies de testing.",
+  "version": "2.4.0",
+  "description": "JAMC's Tech terminal dashboard — Bloomberg-themed React/JSX dashboard apuntando a Supabase (sin build step en cliente; Babel-standalone). Para correrlo localmente usar `npm start`.",
   "scripts": {
+    "start": "npx serve . -p 3000",
+    "dev": "npx netlify dev",
     "test": "playwright test",
     "test:usuario": "playwright test tests/persona-usuario.spec.js",
     "test:qa": "playwright test tests/persona-qa.spec.js",
