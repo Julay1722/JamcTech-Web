@@ -2250,6 +2250,9 @@ function _availableMonths() {
   const add = (d) => { if (d && typeof d === 'string' && d.length >= 7) set.add(d.slice(0, 7)); };
   (window.__AIRTABLE_DATA__?.ventas   || []).forEach(v => add(v.fecha));
   (window.__AIRTABLE_DATA__?.cashflow || []).forEach(m => add(m.f));
+  // Asegurar que el mes actual aparezca aunque no haya transacciones todavía.
+  const today = window.HOY || new Date().toISOString().slice(0, 10);
+  add(today);
   return [...set].sort().reverse();
 }
 const MES_NAMES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
