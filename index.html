@@ -140,7 +140,7 @@
   }
 
   /* Main content */
-  .main { padding: var(--s-5) var(--s-6); width: 100%; }
+  .main { padding: 0 var(--s-6) var(--s-5); width: 100%; }
   /* Asegurar que tablas y secciones ocupen el ancho disponible */
   .section table.data { width: 100%; }
   .section { width: 100%; }
@@ -758,12 +758,61 @@ function OverviewPage({ period }) {
   const topSkusByUds      = [...allSkuStats].sort((a, b) => b.uds      - a.uds     ).slice(0, 10);
   const topSkus = topSkusByRevenue;  // default
 
-  // ── Balance acumulado mes a mes (siempre histórico) ───────────
+  // ── Series mensuales del PERÍODO filtrado ─────────────────────
+  // Agrupa ventas/cf por mes YYYY-MM dentro del rango del filtro y
+  // computa series para charts. Si el filtro es "todo", usa todos los meses.
+  const periodRange = periodToRange(period); // null si todo
+  // Build the set of YYYY-MM that fall in range (or all from data if todo)
+  const monthsInRange = (() => {
+    const set = new Set();
+    ventas.forEach(v => v.fecha && set.add(v.fecha.slice(0, 7)));
+    cf.forEach(m => m.f && set.add(m.f.slice(0, 7)));
+    return [...set].sort();
+  })();
+  const monthLabel = (ym) => {
+    const [y, m] = ym.split('-');
+    return `${MES_NAMES[parseInt(m, 10) - 1]}-${y.slice(2)}`;
+  };
+  const mesLabelsPeriod = monthsInRange.map(monthLabel);
+  // Ventas y ganancia por mes (filtrado por período)
+  const ventasByMonth = {};
+  const ganxMonth = {};
+  ventas.forEach(v => {
+    if (!v.fecha) return;
+    const ym = v.fecha.slice(0, 7);
+    ventasByMonth[ym] = (ventasByMonth[ym] || 0) + (v.precioFacturadoTotal || 0);
+    ganxMonth[ym]    = (ganxMonth[ym]    || 0) + (v.gananciaTotal     || 0);
+  });
+  const ventasSeriePeriod   = monthsInRange.map(ym => ventasByMonth[ym] || 0);
+  const gananciaSeriePeriod = monthsInRange.map(ym => ganxMonth[ym]    || 0);
+  const margenSeriePeriod   = monthsInRange.map(ym => {
+    const v = ventasByMonth[ym] || 0, g = ganxMonth[ym] || 0;
+    return v > 0 ? (g / v) * 100 : 0;
+  });
+  // Balance acumulado en el período (suma rolling de cf filtrado)
+  const cfByMonth = {};
+  cf.forEach(m => {
+    if (!m.f) return;
+    const ym = m.f.slice(0, 7);
+    if (!cfByMonth[ym]) cfByMonth[ym] = { e: 0, s: 0 };
+    cfByMonth[ym].e += m.e || 0;
+    cfByMonth[ym].s += m.s || 0;
+  });
+  // Para el balance, si el período es "todo" arrancamos desde 0;
+  // si es un rango menor, arrancamos desde el saldo previo al rango (offset).
+  let priorBalance = 0;
+  if (periodRange) {
+    priorBalance = allCf.filter(m => m.f && m.f < periodRange.from)
+                       .reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  }
   const balSeries = [];
-  const balLabels = [];
-  let accBal = 0;
-  const cfMes = window.CF_MES && window.CF_MES.length ? window.CF_MES : MES.map(m => ({ m: m.m, e: m.v, s: 0 }));
-  cfMes.forEach(m => { accBal += (m.e || 0) - (m.s || 0); balSeries.push(accBal); balLabels.push(m.m); });
+  const balLabels = mesLabelsPeriod;
+  let accBal = priorBalance;
+  monthsInRange.forEach(ym => {
+    const c = cfByMonth[ym] || { e: 0, s: 0 };
+    accBal += (c.e - c.s);
+    balSeries.push(accBal);
+  });
 
   // ── KPIs adicionales ──────────────────────────────────────────
   const ticketProm    = ventas.length > 0 ? totalVentas / ventas.length : 0;
@@ -777,11 +826,41 @@ function OverviewPage({ period }) {
   const numLotes      = (data.lotes || []).length;
   const lotesEnCamino = (data.lotes || []).filter(l => l.status === 'En Camino').length;
 
-  // Series mensuales para charts (etiquetadas)
-  const mesLabels       = MES.map(m => m.m);
-  const ventasSerie     = MES.map(m => m.v || 0);
-  const gananciaSerie   = MES.map(m => m.g || 0);
-  const margenSerie     = MES.map(m => m.p || 0);
+  // Si el período abarca pocos meses (1-2), agrupa por DÍA en vez de mes
+  // para que los charts no se queden con 1-2 puntos. Si abarca muchos meses,
+  // agrupa por mes.
+  const useDaily = monthsInRange.length <= 2 && periodRange;
+  let mesLabels, ventasSerie, gananciaSerie, margenSerie;
+  let balLabelsLocal, balSeriesLocal;
+  if (useDaily) {
+    // Generar lista de días dentro del rango (inclusive)
+    const days = [];
+    const dFrom = new Date(periodRange.from), dTo = new Date(periodRange.to);
+    for (let d = new Date(dFrom); d <= dTo; d.setDate(d.getDate() + 1)) {
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const ventasByDay = {}, ganxDay = {}, cfByDay = {};
+    ventas.forEach(v => { if (!v.fecha) return; ventasByDay[v.fecha] = (ventasByDay[v.fecha] || 0) + (v.precioFacturadoTotal || 0); ganxDay[v.fecha] = (ganxDay[v.fecha] || 0) + (v.gananciaTotal || 0); });
+    cf.forEach(m => { if (!m.f) return; if (!cfByDay[m.f]) cfByDay[m.f] = { e: 0, s: 0 }; cfByDay[m.f].e += m.e || 0; cfByDay[m.f].s += m.s || 0; });
+    mesLabels     = days.map(d => d.slice(5));  // MM-DD
+    ventasSerie   = days.map(d => ventasByDay[d] || 0);
+    gananciaSerie = days.map(d => ganxDay[d]    || 0);
+    margenSerie   = days.map(d => { const v = ventasByDay[d] || 0, g = ganxDay[d] || 0; return v > 0 ? (g / v) * 100 : 0; });
+    let acc = priorBalance;
+    balLabelsLocal = mesLabels;
+    balSeriesLocal = days.map(d => { const c = cfByDay[d] || { e: 0, s: 0 }; acc += c.e - c.s; return acc; });
+  } else {
+    mesLabels     = mesLabelsPeriod;
+    ventasSerie   = ventasSeriePeriod;
+    gananciaSerie = gananciaSeriePeriod;
+    margenSerie   = margenSeriePeriod;
+    balLabelsLocal = balLabels;
+    balSeriesLocal = balSeries;
+  }
+  // Reasignar balSeries/balLabels para que el JSX use los locales
+  const balSeriesFinal = balSeriesLocal;
+  const balLabelsFinal = balLabelsLocal;
+  const grain = useDaily ? 'diario' : 'mensual';
 
   // Canales (top channels)
   const canalStats = {};
@@ -860,22 +939,22 @@ function OverviewPage({ period }) {
         <div className="section">
           <div className="section-head">
             <div>
-              <div className="section-title">Ventas mensuales (RD$)</div>
-              <div className="section-desc">Tendencia · {MES.length} meses · prom RD${fmtNum(totalVentas / Math.max(1, MES.length))}</div>
+              <div className="section-title">Ventas {grain === 'diario' ? 'diarias' : 'mensuales'} (RD$)</div>
+              <div className="section-desc">Tendencia · {ventasSerie.length} {grain === 'diario' ? 'días' : 'meses'} · prom RD${fmtNum(ventasSerie.length > 0 ? ventasSerie.reduce((a,b)=>a+b,0) / ventasSerie.length : 0)}</div>
             </div>
           </div>
           <LineChart values={ventasSerie} labels={mesLabels} h={200} color="var(--accent)"
-            fmt={(n) => 'RD$' + fmtK(n)} title="REVENUE MENSUAL · RD$" />
+            fmt={(n) => 'RD$' + fmtK(n)} title={`REVENUE ${grain.toUpperCase()} · RD$`} />
         </div>
         <div className="section">
           <div className="section-head">
             <div>
-              <div className="section-title">Ganancia mensual (RD$)</div>
-              <div className="section-desc">Margen prom {(MES.reduce((s, m) => s + m.p, 0) / Math.max(1, MES.length)).toFixed(1)}%</div>
+              <div className="section-title">Ganancia {grain === 'diario' ? 'diaria' : 'mensual'} (RD$)</div>
+              <div className="section-desc">Margen prom período {margenPct.toFixed(1)}%</div>
             </div>
           </div>
           <LineChart values={gananciaSerie} labels={mesLabels} h={200} color="var(--success)"
-            fmt={(n) => 'RD$' + fmtK(n)} title="GANANCIA MENSUAL · RD$" />
+            fmt={(n) => 'RD$' + fmtK(n)} title={`GANANCIA ${grain.toUpperCase()} · RD$`} />
         </div>
       </div>
 
@@ -921,12 +1000,12 @@ function OverviewPage({ period }) {
         <div className="section-head">
           <div>
             <div className="section-title">Balance acumulado de cuentas (RD$)</div>
-            <div className="section-desc">Capital total mes a mes · suma de entradas menos salidas · histórico completo</div>
+            <div className="section-desc">Capital total {grain === 'diario' ? 'día a día' : 'mes a mes'} · suma rolling · {period === 'todo' ? 'histórico completo' : `período ${period}`}</div>
           </div>
           <span className="badge neutral">Actual: {fmtCurrency(balanceActual)}</span>
         </div>
-        <LineChart values={balSeries} labels={balLabels} h={210} color="var(--success)"
-          fmt={(n) => 'RD$' + fmtK(n)} title="CAPITAL ACUMULADO · RD$" yTicks={5} />
+        <LineChart values={balSeriesFinal} labels={balLabelsFinal} h={210} color="var(--success)"
+          fmt={(n) => 'RD$' + fmtK(n)} title={`CAPITAL ACUMULADO (${grain}) · RD$`} yTicks={5} />
       </div>
 
       {/* Cash Flow breakdown — Op vs Fin ─────────────────────────── */}
@@ -3602,17 +3681,19 @@ function App() {
       </aside>
 
       <main className="main">
-        {showPeriod && (
+        {showPeriod ? (
           <div style={{
-            display: 'flex', justifyContent: 'flex-end',
+            display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             position: 'sticky', top: 0, zIndex: 50,
-            background: 'var(--bg)', padding: 'var(--s-3) 0',
-            marginBottom: 'var(--s-3)',
+            background: 'var(--bg)', padding: '10px 0',
+            marginLeft: 'calc(-1 * var(--s-6))', marginRight: 'calc(-1 * var(--s-6))',
+            paddingLeft: 'var(--s-6)', paddingRight: 'var(--s-6)',
+            marginBottom: 'var(--s-4)',
             borderBottom: '1px solid var(--border)',
           }}>
             <PeriodFilter value={period} onChange={setPeriod} />
           </div>
-        )}
+        ) : <div style={{ paddingTop: 'var(--s-5)' }} />}
         {page === 'overview'    && <OverviewPage period={period} />}
         {page === 'alertas'     && <AlertasPage />}
         {page === 'ventas'      && <VentasPageExt period={period} />}
