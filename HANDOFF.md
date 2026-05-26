@@ -1,10 +1,56 @@
 # JAMC's Tech — Migration Handoff
 
-> Este documento resume el estado al cierre de la migración de Google Sheets V2.1 → Supabase. Si querés ejecutar la migración desde cero o entender decisiones tomadas, leé esto.
+> Este documento resume el estado al cierre de la migración de Google Sheets V2.1 → Supabase, **PLUS** la migración del dashboard frontend de Airtable → Supabase (2026-05-26).
 
 ## TL;DR
 
-La data histórica del negocio (julio 2025 - mayo 2026) fue migrada exitosamente de Google Sheets a Supabase. **La DB está lista para uso productivo.** Lo que queda es desconectar el dashboard de Airtable y conectarlo a Supabase (ver `TODO.md`).
+1. **Data migrada** (jul 2025 - may 2026): Google Sheets V2.1 → Supabase ✓
+2. **Dashboard migrado** (2026-05-26): Airtable client → Supabase client ✓
+3. Estado actual: dashboard local en `npx serve .` apuntando a Supabase, lee y escribe perfectamente.
+
+## Fase 2 · Migración del dashboard (2026-05-26)
+
+Esta es la fase que estaba marcada como "P0 pendiente" en TODO.md y se ejecutó en una sesión autónoma de Claude Code.
+
+**Lo que se hizo:**
+- `src/supabase-client.js` — drop-in replacement de airtable-client.js. Mismo contrato `window.AT_CLIENT.*`, mismo cache `window.__AIRTABLE_DATA__`, mismos eventos `airtable-loaded`. Los 11 archivos de paneles no se modificaron (excepto el footer/ticker hardcoded en shell.jsx).
+- 7 loaders read-only (skus, ventas, entradas, cashflow, financiero, resumen, movFin).
+- 12 writers específicos + 3 wrappers genéricos (cubren el surface completo que los paneles llaman).
+- Override de globals hardcoded (CF_ALL, CF_MES, MES, COOP, ANDREA, BHD) por mutación in-place — necesario porque data.js declara estos como `const` lexical, no como propiedades de window que sean reemplazables.
+- RLS: 13 tablas con policy `dev_anon_all` abierta al rol `anon` (revisar antes de deploy).
+- Compat shim: `window.AT.fields.cashflow.*` con keys literales para paneles que llamaban `AT_CLIENT.create('cashflow', fields-with-airtable-IDs)`.
+
+**Bugs que se encontraron y se fixearon:**
+- `loadResumen` devolvía `[]` que era truthy → rompía fallback a `MES` en panel-mando → panel quedaba en blanco. Fix: computar resumen real desde ventas + cashflow.
+- `_buildFinancieroProductos` infinite loop por re-dispatch de `airtable-loaded`. Fix: flag `_overrideInFlight` + early return en listener.
+- Mutación de `window.MES = newArr` no afectaba a paneles porque `const MES` (lexical binding) seguía referenciando el array original. Fix: mutar array in-place (`arr.length=0; arr.push(...)`).
+- `useAirtableTable` filtraba por nombre exacto de tabla, ignoraba mi event `'globals'`. Fix: aceptar `'globals'` como wildcard.
+- React bail-out con setState({...} con valores iguales). Fix: incluir `_tick: counter` para forzar re-render.
+- Panels mounteados tarde (babel-standalone + React) perdían eventos. Fix: fallback re-corre override a 1.5s, 3s, 5s post-boot.
+
+**SQL migrations aplicadas:**
+- `rls_open_anon_dev_local`: RLS open para todas las tablas
+- `link_movimientos_venta_with_ventas`: linkea movimientos VENTA con ventas via match único fecha+monto (54/169 linkeados; 115 V-LEG sin match único)
+- `link_movimientos_venta_segunda_pasada`: segunda pasada con condición más flexible (sin envío)
+- Tabla `disenos` llenada con 4 entries base (Hollow Knight, Plain White, Plain Black, Custom Cliente)
+
+**Tests verificados:**
+- SKU CRUD (create + update + remove + countSKURefs)
+- Venta multi-step (create con trigger CPP snapshot + update header + remove con cascade FK)
+- Lote suelto (entrada sin lote header) + lote completo (con header + shared costs)
+- MovFin (Cuota Préstamo a Coop con capital/interés/seguro)
+- Cashflow genérico vía shim `window.AT.fields`
+- UI end-to-end: registrar venta desde panel `04 RADAR > 05 VENTAS > NUEVA VENTA`
+- Visual: MANDO, FINANC, INVENT, RADAR todos rendereando data real de Supabase
+
+**Lo que NO se hizo (decidir con Julio antes):**
+- Cuotas BHD auto-regen (P1, requiere decisión: schedule vs balance corriente)
+- Stock management retroactivo con lotes (P2, opcional)
+- Cleanup post-migración (P2): eliminar airtable-client.js, Netlify function, env vars cuando todo esté estable
+
+## Fase 1 · Migración Google Sheets → Supabase (texto original abajo)
+
+La data histórica del negocio (julio 2025 - mayo 2026) fue migrada exitosamente de Google Sheets a Supabase. **La DB está lista para uso productivo.**
 
 ## Estado de tablas (snapshot)
 

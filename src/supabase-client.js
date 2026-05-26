@@ -579,14 +579,19 @@ function _buildFinancieroProductos() {
     if (t.includes('préstamo') || t.includes('prestamo')) {
       const pagosCF = cf.filter((m) => m.c === 'Pago Prestamo');
       const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0), 0);
+      // Cuota mensual desde la primer cuota pendiente del schedule cuotas[]
+      // si está cargado, sino fallback a la mediana de pagos históricos.
+      const medianaPagos = pagosCF.length > 0
+        ? pagosCF.slice().map((m) => m.s).sort((a, b) => a - b)[Math.floor(pagosCF.length / 2)]
+        : 0;
       productos['FIN-P'].push({
         ...base,
         tipoSub:      'Cooperativa',
         monto:        r.montoTotal,
         saldo:        Math.max(0, r.montoTotal - pagado),
         pagado,
-        tasa:         r.tasaMensual,
-        cuota:        0,
+        tasa:         (r.tasaMensual || 0) * 100, // 0.0167 → 1.67 (% mensual)
+        cuota:        medianaPagos || 3568.64,
         seguro:       r.seguroMensual,
         abonoMin5pct: Math.max(0, r.montoTotal - pagado) * 0.05,
         abonoAcum:    0,
@@ -626,14 +631,19 @@ function _buildFinancieroProductos() {
         )
       );
       const usado = movsLC.reduce((sum, m) => sum + (m.e || 0) - (m.s || 0), 0);
+      // BHD no tiene tasa_mensual en prestamos (NULL). Fallback al 26% anual
+      // que tenía data.js hardcoded.
+      const tasaMensualPct = (r.tasaMensual && r.tasaMensual > 0)
+        ? r.tasaMensual * 100   // decimal → percentage
+        : 26 / 12;              // 2.17% mensual (default BHD)
       productos['FIN-LC'].push({
         ...base,
         tipoSub:     'Línea Revolvente',
         moneda:      'DOP',
         limite:      r.montoTotal,
         usado:       Math.max(0, usado),
-        tasaAnual:   (r.tasaMensual || 0) * 12,
-        tasaMensual: r.tasaMensual,
+        tasaAnual:   tasaMensualPct * 12,
+        tasaMensual: tasaMensualPct,
         movimientos: movsLC.map((m) => ({
           id:        'lc-' + m._airtableId,
           fecha:     m.f,

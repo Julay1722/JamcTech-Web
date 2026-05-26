@@ -12,9 +12,12 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 
 | Componente | Tech | Status |
 |---|---|---|
-| **Database** | Supabase (Postgres) | ✓ Migrado, 276 movimientos, 190 ventas, 79 entradas |
-| **Frontend dashboard** | HTML/JS estático en Netlify | ⚠️ Actualmente apunta a Airtable, hay que migrar a Supabase |
-| **Repo dashboard** | github.com/Julay1722/Jamc-s | - |
+| **Database** | Supabase (Postgres) | ✓ 276 movimientos · 190 ventas · 79 entradas · 49 SKUs · 5 préstamos · 4 diseños |
+| **Frontend dashboard** | HTML/JS estático local (`npx serve .`) | ✓ Apuntando a Supabase via `src/supabase-client.js` (migrado 2026-05-26) |
+| **Cliente Airtable legacy** | `src/airtable-client.js` | Comentado en index.html como rollback fácil |
+| **RLS** | Open para anon (dev local) | ⚠ Revisar policies antes de cualquier deploy a Netlify |
+| **Repo dashboard local** | C:\Users\coco2\OneDrive\Escritorio\V17 | Git inicializado · 5+ commits |
+| **Repo GitHub (legacy)** | github.com/Julay1722/Jamc-s | NO sincronizado con esta versión |
 | **Fuente histórica** | Google Sheets "1722PRO V2.1" (ya migrado a Supabase) | Solo referencia |
 
 ## Credenciales Supabase
@@ -22,19 +25,72 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 ```
 Project ID:       oicxvnnzocwnqlsojhco
 URL:              https://oicxvnnzocwnqlsojhco.supabase.co
-Anon key:         [Julio debe sacarlo de Supabase dashboard > Settings > API]
+Anon key:         hardcoded en src/supabase-client.js (legacy JWT, OK para dev local)
+                  También disponible vía publishable key sb_publishable_oy33omygO4RIymWK1aDqTw_A-46pjlX
 Service role key: [NO usar en frontend. Solo para scripts admin.]
+```
+
+## Cómo correrlo
+
+```powershell
+cd C:\Users\coco2\OneDrive\Escritorio\V17
+npx serve .
+# Abrir http://localhost:3000 — el dashboard carga directo desde Supabase.
+```
+
+(También funciona con `netlify dev` en puerto 8888, pero las Netlify Functions
+no se usan ya que vamos directo a Supabase.)
+
+## Arquitectura del cliente
+
+```
+index.html
+├── src/data.js                 ← seeds hardcoded (fallback histórico)
+├── @supabase/supabase-js@2     ← UMD desde CDN
+├── src/supabase-client.js      ← cliente Supabase (drop-in replacement)
+│   ├── Expone window.AT_CLIENT.* (loadVentas, createVenta, etc — mismo
+│   │   contrato que era Airtable, panels no se enteran del cambio)
+│   ├── Pobla window.__AIRTABLE_DATA__.{skus,ventas,cashflow,...}
+│   ├── Dispara eventos 'airtable-loaded' para que panels re-rendereen
+│   └── _overrideGlobals(): muta window.CF_ALL/MES/COOP/ANDREA/BHD
+│       in-place con data real (mismo patrón que VENTAS_SKU/EN_CAMINO).
+│       Re-dispara eventos por tabla para forzar re-render.
+└── src/dashboard/*.jsx         ← paneles React (sin tocar lógica core)
+    └── session-ledger.jsx > useAirtableTable(table)
+         ← hook que panels usan para suscribirse a cambios de tabla.
+           Acepta 'globals' como wildcard (cualquier panel re-renderea).
 ```
 
 ## Estructura del proyecto local
 
 ```
-C:\Users\coco2\OneDrive\Escritorio\3.4\jamcs-tech\
+C:\Users\coco2\OneDrive\Escritorio\V17\
 ├── index.html               # Dashboard principal
-├── airtable-client.js       # ⚠️ A REEMPLAZAR por supabase-client.js
-├── wizard.js                # Wizard para nuevas ventas/entradas
-├── styles.css
-└── (otros assets)
+├── src/
+│   ├── data.js              # Seeds hardcoded (fallback histórico)
+│   ├── airtable-client.js   # Legacy, comentado en index.html
+│   ├── supabase-client.js   # ✓ Cliente activo (lectura + escritura)
+│   ├── helpers.jsx
+│   ├── toast-system.jsx
+│   └── dashboard/           # Panels React
+│       ├── shell.jsx        # Header, footer, ticker (todos reactivos)
+│       ├── session-ledger.jsx # useAirtableTable hook
+│       ├── panel-mando.jsx
+│       ├── panel-inventario.jsx
+│       ├── panel-cashflow.jsx
+│       ├── panel-financiero.jsx
+│       ├── panel-fin-productos.jsx
+│       ├── panel-radar-registrar.jsx  # Form de venta + ajuste manual CF
+│       ├── primitives.jsx
+│       ├── tweaks-panel.jsx
+│       └── app.jsx
+├── netlify/functions/airtable.js  # Legacy proxy, ya no usado
+├── tests/                   # Playwright (mayoría obsoletos post-migración)
+├── .env                     # Solo Airtable PAT (no usado ya)
+├── CLAUDE.md (este archivo)
+├── SCHEMA.md                # Schema de Supabase
+├── TODO.md                  # Trabajo pendiente
+└── HANDOFF.md               # Historia detallada de migración
 ```
 
 ## Modelo mental del negocio
