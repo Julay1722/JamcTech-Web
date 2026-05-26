@@ -1534,9 +1534,12 @@ async function _bootCheck() {
   console.groupEnd();
 }
 
-// loadFinanciero antes que loadMovFin (este último necesita el cache
-// para mapear m.prestamo → idFin). _loadLookups antes de los writers
-// (que resuelven contraparte/cuenta names → ids).
+// Boot: setTimeouts escalonados para que loaders no se solapen al
+// arranque. Probamos paralelizar con Promise.all pero el _bootCheck
+// concurrente colgaba sin causa clara — el secuencial es suficientemente
+// rápido (~600ms total) y conocido funcional. loadMovFin necesita
+// financiero cargado (para mapear m.prestamo → idFin), y loadResumen
+// necesita ventas + cashflow (espera vía listener si no están listos).
 setTimeout(_bootCheck,                                            100);
 setTimeout(_loadLookups,                                          120);
 setTimeout(loadSKUs,                                              150);
