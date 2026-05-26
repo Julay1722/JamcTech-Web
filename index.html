@@ -2239,20 +2239,37 @@ const PERIOD_PRESETS = [
   { id: 'd:7',   l: '7D'   },
   { id: 'd:30',  l: '30D'  },
   { id: 'd:90',  l: '90D'  },
-  { id: 'mes-pasado', l: 'MES PASADO' },
   { id: 'd:180', l: '6M'   },
   { id: 'd:365', l: '1A'   },
-  { id: 'custom', l: 'RANGO…' },
 ];
+// Genera lista de meses con data: recorre todas las fechas conocidas
+// (ventas + cashflow) y produce ['2026-05', '2026-04', ...] del más
+// reciente al más antiguo.
+function _availableMonths() {
+  const set = new Set();
+  const add = (d) => { if (d && typeof d === 'string' && d.length >= 7) set.add(d.slice(0, 7)); };
+  (window.__AIRTABLE_DATA__?.ventas   || []).forEach(v => add(v.fecha));
+  (window.__AIRTABLE_DATA__?.cashflow || []).forEach(m => add(m.f));
+  return [...set].sort().reverse();
+}
+const MES_NAMES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+function _fmtMonth(ym) {
+  const [y, m] = ym.split('-');
+  return `${MES_NAMES[parseInt(m, 10) - 1]} ${y.slice(2)}`;
+}
 function PeriodFilter({ value, onChange }) {
-  // Para "custom", value puede venir como objeto { kind: 'custom', from, to }
-  // serializado como 'custom:YYYY-MM-DD:YYYY-MM-DD'. El botón abre un popover
-  // con dos date pickers.
   const [showPicker, setShowPicker] = useState(false);
+  const [showMonths, setShowMonths] = useState(false);
   const isCustom = typeof value === 'string' && value.startsWith('custom');
+  const isMonth  = typeof value === 'string' && value.startsWith('mes:');
   const customParts = isCustom ? value.split(':') : [];
   const [from, setFrom] = useState(customParts[1] || (window.HOY || new Date().toISOString().slice(0,10)));
   const [to,   setTo]   = useState(customParts[2] || (window.HOY || new Date().toISOString().slice(0,10)));
+
+  // Recomputar cuando cambien data: usar el hook reactivo de tablas como trigger.
+  const dataVentas = useATData().ventas || [];
+  const dataCF     = useATData().cashflow || [];
+  const months = useMemo(() => _availableMonths(), [dataVentas.length, dataCF.length, value]);
 
   const apply = () => {
     if (from && to && from <= to) {
@@ -2264,21 +2281,45 @@ function PeriodFilter({ value, onChange }) {
   return (
     <div style={{ position: 'relative' }}>
       <div className="period-bar">
-        {PERIOD_PRESETS.map(p => {
-          const active = (p.id === 'custom' && isCustom) || value === p.id;
-          if (p.id === 'custom') {
-            return (
-              <button key={p.id} className={active ? 'active' : ''}
-                onClick={() => setShowPicker(s => !s)}>
-                {isCustom ? `${customParts[1]} → ${customParts[2]}` : p.l}
-              </button>
-            );
-          }
-          return (
-            <button key={p.id} className={active ? 'active' : ''} onClick={() => { onChange(p.id); setShowPicker(false); }}>{p.l}</button>
-          );
-        })}
+        {PERIOD_PRESETS.map(p => (
+          <button key={p.id} className={value === p.id ? 'active' : ''}
+            onClick={() => { onChange(p.id); setShowPicker(false); setShowMonths(false); }}>{p.l}</button>
+        ))}
+        <button className={isMonth ? 'active' : ''} onClick={() => { setShowMonths(s => !s); setShowPicker(false); }}>
+          {isMonth ? _fmtMonth(value.slice(4)).toUpperCase() : 'MES ▾'}
+        </button>
+        <button className={isCustom ? 'active' : ''} onClick={() => { setShowPicker(s => !s); setShowMonths(false); }}>
+          {isCustom ? `${customParts[1]} → ${customParts[2]}` : 'RANGO…'}
+        </button>
       </div>
+
+      {showMonths && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 60,
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--r-md)', padding: 'var(--s-2)',
+          boxShadow: '0 4px 16px rgba(0,0,0,.15)',
+          maxHeight: 320, overflowY: 'auto', minWidth: 160,
+        }}>
+          {months.length === 0 && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Sin datos</div>}
+          {months.map(ym => (
+            <button key={ym}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                padding: '6px 10px', border: 'none', background: 'transparent',
+                color: value === `mes:${ym}` ? 'var(--accent)' : 'var(--text-2)',
+                fontWeight: value === `mes:${ym}` ? 600 : 500,
+                cursor: 'pointer', fontSize: 12, borderRadius: 4,
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-2)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              onClick={() => { onChange(`mes:${ym}`); setShowMonths(false); }}>
+              {_fmtMonth(ym)}
+            </button>
+          ))}
+        </div>
+      )}
+
       {showPicker && (
         <div style={{
           position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 60,
@@ -2314,17 +2355,15 @@ function periodToRange(p) {
     return { from: desde.toISOString().slice(0, 10), to: todayReal };
   }
 
-  // mes-pasado → primer al último día del mes calendario anterior
-  if (p === 'mes-pasado') {
-    const t = new Date(todayReal);
-    const firstThisMonth = new Date(t.getFullYear(), t.getMonth(), 1);
-    const firstLastMonth = new Date(firstThisMonth);
-    firstLastMonth.setMonth(firstLastMonth.getMonth() - 1);
-    const lastLastMonth = new Date(firstThisMonth);
-    lastLastMonth.setDate(lastLastMonth.getDate() - 1);
+  // mes:YYYY-MM → primer al último día del mes calendario indicado
+  if (p.startsWith('mes:')) {
+    const [y, m] = p.slice(4).split('-').map(Number);
+    if (!y || !m) return null;
+    const first = new Date(y, m - 1, 1);
+    const last  = new Date(y, m, 0); // día 0 del mes siguiente = último del actual
     return {
-      from: firstLastMonth.toISOString().slice(0, 10),
-      to:   lastLastMonth.toISOString().slice(0, 10),
+      from: first.toISOString().slice(0, 10),
+      to:   last.toISOString().slice(0, 10),
     };
   }
 
