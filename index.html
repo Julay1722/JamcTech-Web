@@ -3796,7 +3796,7 @@ function VentasPageExt({ period }) {
 // ════════════════════════════════════════════════════════════════
 // Movimientos Page — full cashflow tail con delete
 // ════════════════════════════════════════════════════════════════
-function MovimientosPage({ period }) {
+function MovimientosPage({ period, onNavigate }) {
   const data = useATData();
   const all = data.cashflow || [];
   const filtered = filterByPeriod(all, period, 'f').slice(0, 100);
@@ -3804,6 +3804,28 @@ function MovimientosPage({ period }) {
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('lista');
+
+  // Detecta si un movimiento vino de venta, lote, o movFin. Si vino de
+  // una fuente, NO se debe editar aquí (el edit no propaga al origen,
+  // dejando los totales desincronizados). En vez de eso, mostrar link
+  // a la página de la fuente.
+  const linkedSource = (m) => {
+    const c = (m.c || '').toLowerCase();
+    const notas = (m.notas || '').toLowerCase();
+    // venta: concepto = "Venta de mercancia" o notas mencionan V-XXX
+    if (c.includes('venta de mercanc') || /\bv-\d/i.test(m.notas || '') || /vta-/i.test(m.notas || '')) {
+      return { kind: 'venta', label: 'Editar en Ventas', page: 'ventas' };
+    }
+    // lote: compra/envío/courier con notas "Lote L-..."
+    if (/lote\s*l[-\s]/i.test(m.notas || '') || (c.includes('compra de mercanc') && notas.includes('lote'))) {
+      return { kind: 'lote', label: 'Editar en Inventario', page: 'inventario' };
+    }
+    // movFin (cuota préstamo, cargo línea, pago línea, retorno inversor, etc.)
+    if (/cuota|pago línea|cargo línea|pago linea|cargo linea|retorno inversor|abono préstamo|abono prestamo|disposición línea|disposicion linea/i.test(c)) {
+      return { kind: 'movfin', label: 'Editar en Finanzas', page: 'finanzas' };
+    }
+    return null;  // ajuste manual / aporte / otros → editable libremente
+  };
 
   const doDelete = async () => {
     setBusy(true);
@@ -3864,6 +3886,7 @@ function MovimientosPage({ period }) {
           <tbody>
             {filtered.map((m, i) => {
               const neto = (m.e || 0) - (m.s || 0);
+              const source = linkedSource(m);
               return (
                 <tr key={i}>
                   <td>{fmtDate(m.f)}</td>
@@ -3874,8 +3897,21 @@ function MovimientosPage({ period }) {
                   <td className={`num right ${neto > 0 ? 'pos' : neto < 0 ? 'neg' : 'muted'}`}>
                     {neto > 0 ? '+' : ''}{fmtCurrency(neto)}
                   </td>
-                  <td style={{ display: 'flex', gap: 4 }}>
-                    <button className="icon-btn" onClick={() => setEdit(m)} title="Editar">✎</button>
+                  <td style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {source ? (
+                      <button
+                        onClick={() => onNavigate?.(source.page)}
+                        title={`Este movimiento vino de ${source.kind}. Edítalo allá para que se recalculen ganancia/totales.`}
+                        style={{
+                          background: 'transparent', border: '1px solid var(--border)',
+                          color: 'var(--accent)', cursor: 'pointer', fontSize: 11,
+                          padding: '4px 8px', borderRadius: 4, whiteSpace: 'nowrap',
+                        }}>
+                        {source.label} →
+                      </button>
+                    ) : (
+                      <button className="icon-btn" onClick={() => setEdit(m)} title="Editar (movimiento manual)">✎</button>
+                    )}
                     <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
                   </td>
                 </tr>
@@ -4375,7 +4411,7 @@ function App() {
         {page === 'alertas'     && <AlertasPage />}
         {page === 'ventas'      && <VentasPageExt period={period} />}
         {page === 'inventario'  && <InventarioPage />}
-        {page === 'movimientos' && <MovimientosPage period={period} />}
+        {page === 'movimientos' && <MovimientosPage period={period} onNavigate={setPage} />}
         {page === 'finanzas'    && <FinanzasPage />}
       </main>
       <ToastStack />
