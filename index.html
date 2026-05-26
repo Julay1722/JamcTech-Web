@@ -1323,22 +1323,236 @@ function LotesTab() {
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
 
-      <EditModal open={!!edit} busy={busy}
-        title={`Editar lote ${edit?.id}`}
-        fields={edit ? [
-          { name: 'fecha',     label: 'Fecha',            type: 'date',   value: edit.fecha },
-          { name: 'status',    label: 'Status',           type: 'select', value: edit.status,
-            options: [{value:'En Camino',label:'En Camino'},{value:'Recibido',label:'Recibido'},{value:'Perdido',label:'Perdido'}] },
-          { name: 'proveedor', label: 'Proveedor',        type: 'text',   value: edit.proveedor || '' },
-          { name: 'envio',     label: 'Envío (RD$)',      type: 'number', value: edit.envio || 0,     hint: 'Actualiza header lote + CFs linkeados' },
-          { name: 'courier',   label: 'Courier (RD$)',    type: 'number', value: edit.courier || 0,   hint: 'Actualiza header lote + CFs linkeados' },
-          { name: 'otros',     label: 'Otros (RD$)',      type: 'number', value: edit.otros || 0,     hint: 'Actualiza header lote + CFs linkeados' },
-          { name: 'impuestos', label: 'Impuestos (RD$)',  type: 'number', value: edit.impuestos || 0 },
-          { name: 'notas',     label: 'Notas',            type: 'text',   value: edit.notas || '', span: 2 },
-        ] : []}
-        onCancel={() => setEdit(null)}
-        onSave={doSaveEdit} />
+      <EditLoteModal open={!!edit} lote={edit} onClose={() => setEdit(null)} />
     </>
+  );
+}
+
+// ─── EditLoteModal — wizard completo para editar un lote existente ─────
+// Mismo layout que FormLote (SKUs + costos por cuenta + tasa USD) pero
+// opera sobre un lote ya guardado. Cada acción es un writer individual:
+//   - cambiar header (fecha/status/proveedor/costos compartidos) → updateLoteHeader
+//   - agregar SKU → addEntradaToLote
+//   - editar SKU línea → updateEntrada
+//   - borrar SKU línea → removeEntrada (¡no borra el lote!)
+function EditLoteModal({ open, lote, onClose }) {
+  const data = useATData();
+  const skus = data.skus || [];
+  const cuentas = data._cuentas || [];
+  const [fecha, setFecha] = useState('');
+  const [status, setStatus] = useState('En Camino');
+  const [proveedor, setProveedor] = useState('');
+  const [envio, setEnvio]     = useState(0);
+  const [courier, setCourier] = useState(0);
+  const [otros, setOtros]     = useState(0);
+  const [notas, setNotas]     = useState('');
+  const [cuentaMercancia, setCuentaMercancia] = useState('BHD Debito');
+  const [cuentaEnvio,     setCuentaEnvio]     = useState('BHD Debito');
+  const [cuentaCourier,   setCuentaCourier]   = useState('BHD Debito');
+  const [cuentaOtros,     setCuentaOtros]     = useState('BHD Debito');
+  const [tasaCambio, setTasaCambio] = useState(() => Number(localStorage.getItem('tasa-cambio-usd')) || 60);
+  const [lineas, setLineas] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  // Init form when lote opens
+  useEffect(() => {
+    if (open && lote) {
+      setFecha(lote.fecha || '');
+      setStatus(lote.status || 'En Camino');
+      setProveedor(lote.proveedor || '');
+      setEnvio(lote.envio || 0);
+      setCourier(lote.courier || 0);
+      setOtros(lote.otros || 0);
+      setNotas(lote.notas || lote.nota || '');
+      // Líneas existentes: cada SKU del lote es una entrada (e-N)
+      setLineas((lote.skus || []).map(s => ({
+        id: s._airtableId,          // 'e-N' — existente
+        airtableId: s._airtableId,
+        skuId: s.id,
+        qty: s.qty || 0,
+        costoUd: s.costoUd || 0,
+        _isNew: false,
+      })));
+    }
+  }, [open, lote?.id]);
+
+  const isUSDCuenta = (name) => {
+    const c = cuentas.find(x => x.nombre === name);
+    if (c) return c.moneda === 'USD';
+    return /usd/i.test(name);
+  };
+
+  const addLinea = () => setLineas(arr => [...arr, { id: 'new-' + Date.now(), skuId: '', qty: 1, costoUd: 0, _isNew: true }]);
+  const updateLinea = (id, patch) => setLineas(arr => arr.map(l => l.id === id ? { ...l, ...patch } : l));
+  const removeLineaLocal = (id) => setLineas(arr => arr.filter(l => l.id !== id));
+
+  const removeLineaPersistida = async (linea) => {
+    if (!confirm(`¿Borrar línea ${linea.skuId}? Reduce stock en cascada.`)) return;
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.removeEntrada(linea.airtableId);
+      window.toastOk('Línea eliminada', linea.skuId);
+      removeLineaLocal(linea.id);
+    } catch (e) { window.toastErr('No se pudo eliminar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  const costoBase = lineas.filter(l => l.skuId && Number(l.qty) > 0)
+                          .reduce((s, l) => s + Number(l.qty) * Number(l.costoUd || 0), 0);
+
+  const onSave = async () => {
+    setBusy(true);
+    try {
+      // 1) Actualiza header (incluye costos compartidos → sync CFs)
+      await window.AT_CLIENT.updateLoteHeader(lote.id, {
+        fecha, status, proveedor,
+        envio:   Number(envio)   || 0,
+        courier: Number(courier) || 0,
+        otros:   Number(otros)   || 0,
+        notas,
+      });
+      // 2) Líneas: persistir nuevas, actualizar las modificadas
+      const ops = [];
+      for (const l of lineas) {
+        if (!l.skuId) continue;
+        if (l._isNew) {
+          ops.push(window.AT_CLIENT.addEntradaToLote(lote.id, {
+            skuId: l.skuId, qty: Number(l.qty), costoUd: Number(l.costoUd),
+          }));
+        } else {
+          // Solo update si cambió respecto al original
+          const orig = (lote.skus || []).find(s => s._airtableId === l.airtableId);
+          if (orig && (orig.qty !== Number(l.qty) || orig.costoUd !== Number(l.costoUd) || orig.id !== l.skuId)) {
+            ops.push(window.AT_CLIENT.updateEntrada(l.airtableId, {
+              skuId: l.skuId, qty: Number(l.qty), costoUd: Number(l.costoUd),
+            }));
+          }
+        }
+      }
+      await Promise.all(ops);
+      if (Number(tasaCambio) > 0) localStorage.setItem('tasa-cambio-usd', String(tasaCambio));
+      window.toastOk('Lote actualizado', `${lote.id} · ${lineas.length} línea(s)`);
+      onClose();
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  if (!open || !lote) return null;
+
+  const cuentasOpts = cuentas.length > 0
+    ? cuentas.map(c => ({ value: c.nombre, label: `${c.nombre} (${c.tipo})` }))
+    : [
+        { value: 'BHD Debito',  label: 'BHD Debito (DEBITO)' },
+        { value: 'Efectivo',    label: 'Efectivo' },
+        { value: 'Scotia RD',   label: 'Scotia RD (CREDITO)' },
+        { value: 'Scotia USD',  label: 'Scotia USD (CREDITO)' },
+        { value: 'Qik',         label: 'Qik (CREDITO)' },
+      ];
+
+  const renderCostRow = (label, hint, value, setValue, cuenta, setCuenta, readonly) => {
+    const usd = isUSDCuenta(cuenta);
+    const tasa = Number(tasaCambio) || 60;
+    const equivRD = usd && Number(value) ? (Number(value) * tasa) : null;
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 1.4fr', gap: 'var(--s-3)', alignItems: 'end', marginBottom: 8 }}>
+        <div className="field">
+          <div className="field-label">{label}</div>
+          {hint && <div className="field-hint">{hint}</div>}
+        </div>
+        <div className="field">
+          <div className="field-label" style={{ color: usd ? 'var(--accent)' : undefined }}>
+            {usd ? 'Monto (USD$)' : 'Monto (RD$)'}
+          </div>
+          {readonly ? (
+            <div className="input num" style={{ display: 'flex', alignItems: 'center', color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>
+              {fmtCurrency(value)}
+            </div>
+          ) : (
+            <input className="input num" type="number" value={value} onChange={e => setValue(e.target.value)} placeholder="0" />
+          )}
+          {equivRD != null && <div className="field-hint" style={{ color: 'var(--accent)' }}>≈ RD${fmtNum(equivRD)} a tasa {tasa}</div>}
+        </div>
+        <div className="field">
+          <div className="field-label">Cuenta origen</div>
+          <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)} disabled={!Number(value)}>
+            {cuentasOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ minWidth: 900, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">Editar lote · {lote.id}</div>
+
+        <div className="row-4">
+          <div className="field"><div className="field-label">Fecha</div>
+            <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
+          <div className="field"><div className="field-label">Status</div>
+            <select className="select" value={status} onChange={e => setStatus(e.target.value)}>
+              <option>En Camino</option><option>Recibido</option><option>Perdido</option>
+            </select></div>
+          <div className="field"><div className="field-label">Proveedor</div>
+            <input className="input" value={proveedor} onChange={e => setProveedor(e.target.value)} /></div>
+          <div className="field"><div className="field-label">Notas</div>
+            <input className="input" value={notas} onChange={e => setNotas(e.target.value)} /></div>
+        </div>
+
+        <div style={{ marginTop: 'var(--s-4)' }}>
+          <div className="field-label" style={{ marginBottom: 8 }}>SKUs del lote</div>
+          <div className="line-row" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>SKU</span>
+            <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Cantidad</span>
+            <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Costo/ud</span>
+            <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Subtotal</span>
+            <span></span>
+          </div>
+          {lineas.map(l => {
+            const subtotal = Number(l.qty) * Number(l.costoUd || 0);
+            return (
+              <div key={l.id} className="line-row">
+                <select className="select" value={l.skuId} onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
+                  <option value="">— selecciona SKU —</option>
+                  {skus.filter(s => s.id !== 'LEGACY-SALE').map(s => (
+                    <option key={s.id} value={s.id}>{s.nm} · {s.id}</option>
+                  ))}
+                </select>
+                <input className="input num" type="number" min="1" value={l.qty} onChange={e => updateLinea(l.id, { qty: e.target.value })} />
+                <input className="input num" type="number" value={l.costoUd} onChange={e => updateLinea(l.id, { costoUd: e.target.value })} />
+                <span className="num" style={{ fontSize: 12, textAlign: 'right' }}>
+                  {subtotal > 0 ? fmtCurrency(subtotal) : '—'}
+                  {l._isNew && <div style={{ fontSize: 10, color: 'var(--accent)' }}>NUEVO</div>}
+                </span>
+                <button className="icon-btn danger" onClick={() => l._isNew ? removeLineaLocal(l.id) : removeLineaPersistida(l)}>×</button>
+              </div>
+            );
+          })}
+          <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginTop: 16 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Tasa de cambio</div>
+          <div style={{ flex: 1, fontSize: 12, color: 'var(--text-3)' }}>RD$ por 1 USD$ · solo aplica a costos en cuenta USD.</div>
+          <input className="input num" type="number" step="0.01" value={tasaCambio} onChange={e => setTasaCambio(e.target.value)} style={{ width: 100 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>RD$/USD</span>
+        </div>
+
+        <div style={{ marginTop: 'var(--s-4)' }}>
+          <div className="field-label" style={{ marginBottom: 8 }}>Costos del lote · ¿de dónde salió cada uno?</div>
+          {renderCostRow('Mercancía (costo base)',     'Auto-calculado desde los SKUs',                         costoBase, null,        cuentaMercancia, setCuentaMercancia, true)}
+          {renderCostRow('Envío China → USA',          'Shipping al hub en USA',                                envio,     setEnvio,    cuentaEnvio,    setCuentaEnvio)}
+          {renderCostRow('Courier USA → DR',           'Courier USA → DR',                                      courier,   setCourier,  cuentaCourier,  setCuentaCourier)}
+          {renderCostRow('Otros (aduana, comisión)',   'Aduana / fee / comisión',                               otros,     setOtros,    cuentaOtros,    setCuentaOtros)}
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button className="btn" onClick={onSave} disabled={busy}>{busy ? 'Guardando…' : 'Guardar cambios'}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

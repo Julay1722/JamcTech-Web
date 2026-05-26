@@ -1086,6 +1086,52 @@ async function removeLote(loteDashId) {
   return { loteId: loteDashId, deletedCount: numIds.length, cfsBorrados };
 }
 
+// Agrega una entrada nueva a un lote existente. La entrada nueva queda
+// linkeada al mismo lote_id y respeta el status del lote (recibido/pendiente).
+async function addEntradaToLote(loteDashId, linea) {
+  const lote = (window.__AIRTABLE_DATA__?.lotes || []).find((l) => l.id === loteDashId);
+  if (!lote) throw new Error(`lote no encontrado: ${loteDashId}`);
+  const statusMap = { 'En Camino': 'PENDIENTE', 'Recibido': 'RECIBIDO', 'Perdido': 'PERDIDO' };
+  const sbStatus = statusMap[lote.status] || 'PENDIENTE';
+  const { data, error } = await sb.from('entradas').insert({
+    lote_id:             lote._loteIdNum || null,
+    fecha:               lote.fecha,
+    sku_id:              linea.skuId,
+    status:              sbStatus,
+    cantidad:            Number(linea.qty)     || 0,
+    costo_unitario_base: Number(linea.costoUd) || 0,
+    notas:               linea.nota || '',
+  }).select().single();
+  if (error) throw new Error(`addEntradaToLote: ${error.message}`);
+  await loadEntradas();
+  return { id: 'e-' + data.id };
+}
+
+// Actualiza qty/costoUd/sku de una entrada existente. id viene como 'e-N'.
+async function updateEntrada(airtableId, patch) {
+  const id = Number(String(airtableId).replace('e-', ''));
+  if (!Number.isFinite(id)) throw new Error(`updateEntrada: id inválido ${airtableId}`);
+  const row = {};
+  if (patch.skuId   !== undefined) row.sku_id              = patch.skuId;
+  if (patch.qty     !== undefined) row.cantidad            = Number(patch.qty)     || 0;
+  if (patch.costoUd !== undefined) row.costo_unitario_base = Number(patch.costoUd) || 0;
+  if (patch.notas   !== undefined) row.notas               = patch.notas;
+  const { error } = await sb.from('entradas').update(row).eq('id', id);
+  if (error) throw new Error(`updateEntrada: ${error.message}`);
+  await loadEntradas();
+  return { id: airtableId };
+}
+
+// Borra una entrada individual (no el lote completo). id 'e-N'.
+async function removeEntrada(airtableId) {
+  const id = Number(String(airtableId).replace('e-', ''));
+  if (!Number.isFinite(id)) throw new Error(`removeEntrada: id inválido ${airtableId}`);
+  const { error } = await sb.from('entradas').delete().eq('id', id);
+  if (error) throw new Error(`removeEntrada: ${error.message}`);
+  await loadEntradas();
+  return { id: airtableId, deleted: true };
+}
+
 async function updateLoteHeader(loteDashId, patch) {
   const lote = (window.__AIRTABLE_DATA__?.lotes || []).find((l) => l.id === loteDashId);
   if (!lote) throw new Error(`lote no encontrado: ${loteDashId}`);
@@ -1798,6 +1844,7 @@ Object.assign(window.AT_CLIENT, {
   createSKU, updateSKU, removeSKU, countSKURefs,
   createVenta, removeVenta, updateVentaHeader,
   createLote, removeLote, updateLoteHeader,
+  addEntradaToLote, updateEntrada, removeEntrada,
   createMovFin, removeMovFin,
   createCuenta, updateCuenta, removeCuenta,
   createPrestamo, updatePrestamo, removePrestamo,
