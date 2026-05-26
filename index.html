@@ -1199,10 +1199,14 @@ function InventarioPage() {
       <div className="tabs">
         <button className={`tab ${subtab === 'skus' ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
         <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
+        <button className={`tab ${subtab === 'nuevo-sku' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-sku')}>+ Nuevo SKU</button>
+        <button className={`tab ${subtab === 'nuevo-lote' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-lote')}>+ Nuevo lote</button>
       </div>
 
       <div className="section">
-        {subtab === 'lotes' ? <LotesTab /> : (
+        {subtab === 'lotes' ? <LotesTab /> :
+         subtab === 'nuevo-sku' ? <FormSKU /> :
+         subtab === 'nuevo-lote' ? <FormLote /> : (
         <table className="data">
           <thead><tr>
             <th>SKU</th><th>Categoría</th><th>Marca</th>
@@ -2909,6 +2913,7 @@ function MovimientosPage({ period }) {
   const [del, setDel] = useState(null);
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState('lista');
 
   const doDelete = async () => {
     setBusy(true);
@@ -2949,6 +2954,16 @@ function MovimientosPage({ period }) {
         </div>
       </div>
 
+      <div className="tabs">
+        <button className={`tab ${tab === 'lista' ? 'active' : ''}`} onClick={() => setTab('lista')}>Lista</button>
+        <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>+ Movimiento financiero</button>
+        <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>+ Ajuste CF</button>
+      </div>
+
+      {tab === 'movfin' && <div className="section"><FormMovFin /></div>}
+      {tab === 'ajuste' && <div className="section"><FormAjusteCF /></div>}
+
+      {tab === 'lista' && (
       <div className="section">
         <table className="data">
           <thead><tr>
@@ -2979,6 +2994,7 @@ function MovimientosPage({ period }) {
           </tbody>
         </table>
       </div>
+      )}
 
       <ConfirmModal open={!!del} danger busy={busy}
         title={`¿Eliminar movimiento?`}
@@ -3346,7 +3362,6 @@ function App() {
   const pages = [
     { id: 'overview',    label: 'Resumen',     icon: '◉', badge: null },
     { id: 'alertas',     label: 'Alertas',     icon: '!', badge: alertCount, badgeColor: 'var(--danger)' },
-    { id: 'registrar',   label: 'Registrar',   icon: '+', badge: null },
     { id: 'ventas',      label: 'Ventas',      icon: '$', badge: (data.ventas || []).length },
     { id: 'inventario',  label: 'Inventario',  icon: '▤', badge: (data.skus || []).length },
     { id: 'movimientos', label: 'Movimientos', icon: '⇆', badge: (data.cashflow || []).length },
@@ -3415,7 +3430,6 @@ function App() {
         )}
         {page === 'overview'    && <OverviewPage period={period} />}
         {page === 'alertas'     && <AlertasPage />}
-        {page === 'registrar'   && <RegistrarPage />}
         {page === 'ventas'      && <VentasPageExt period={period} />}
         {page === 'inventario'  && <InventarioPage />}
         {page === 'movimientos' && <MovimientosPage period={period} />}
