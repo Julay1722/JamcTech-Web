@@ -593,11 +593,544 @@ function _buildFinancieroProductos() {
   console.log(`✓ [SB/productos] ${productos['FIN-P'].length} préstamos · ${productos['FIN-I'].length} inversores · ${productos['FIN-LC'].length} líneas/tarjetas`);
 }
 
-let _finReady = false, _cfReady = false;
+let _finReady = false, _cfReady = false, _productosBuilt = false;
 window.addEventListener('airtable-loaded', (e) => {
-  if (e.detail?.table === 'financiero') _finReady = true;
-  if (e.detail?.table === 'cashflow')   _cfReady  = true;
-  if (_finReady && _cfReady) _buildFinancieroProductos();
+  const t = e.detail?.table;
+  if (t === 'financiero')      _finReady = true;
+  else if (t === 'cashflow')   _cfReady  = true;
+  else return; // evita re-entrar por el propio 'productos' que dispara abajo
+  if (_finReady && _cfReady && !_productosBuilt) {
+    _productosBuilt = true;
+    _buildFinancieroProductos();
+  }
+});
+
+/* ════════════════════════ Lookup tables (internas) ════════════════════════
+   contrapartes / cuentas viven en cache para que los writers puedan
+   resolver "Facebook" → contraparte_id=9, "BHD Debito" → cuenta_id=1, etc.
+   No emiten eventos — son solo lookup interno.                          */
+
+async function _loadLookups() {
+  try {
+    const [{ data: cps }, { data: cts }] = await Promise.all([
+      sb.from('contrapartes').select('id, nombre, tipo'),
+      sb.from('cuentas').select('id, nombre, tipo, moneda'),
+    ]);
+    window.__AIRTABLE_DATA__._contrapartes = cps || [];
+    window.__AIRTABLE_DATA__._cuentas      = cts || [];
+  } catch (e) {
+    console.warn('[SB/lookups] no se cargaron lookup tables:', e.message);
+  }
+}
+
+const DEFAULT_CUENTA_ID       = 1;   // BHD Debito
+const DEFAULT_CONTRAPARTE_ID  = 17;  // Cliente Generico
+const DEFAULT_FACEBOOK_ID     = 9;   // canal default para ventas
+const DEFAULT_PROVEEDOR_ID    = 5;   // Alibaba
+
+function _findContraparteId(name, fallback = DEFAULT_CONTRAPARTE_ID) {
+  if (!name) return fallback;
+  const list = window.__AIRTABLE_DATA__._contrapartes || [];
+  const n = name.toLowerCase().trim();
+  const found = list.find((c) => c.nombre.toLowerCase() === n)
+            || list.find((c) => c.nombre.toLowerCase().includes(n))
+            || list.find((c) => n.includes(c.nombre.toLowerCase()));
+  return found ? found.id : fallback;
+}
+
+function _findCuentaId(name, fallback = DEFAULT_CUENTA_ID) {
+  if (!name) return fallback;
+  const list = window.__AIRTABLE_DATA__._cuentas || [];
+  const n = name.toLowerCase().trim();
+  const found = list.find((c) => c.nombre.toLowerCase() === n)
+            || list.find((c) => c.nombre.toLowerCase().includes(n));
+  return found ? found.id : fallback;
+}
+
+/* ════════════════════════ Reverse maps + helpers ════════════════════════ */
+
+// Dashboard label → movimientos.tipo enum
+const TIPO_REV = {
+  'Venta de mercancia':     'VENTA',
+  'Envio cobrado':          'ENVIO_COBRADO',
+  'Compra de mercancia':    'COMPRA_MERCANCIA',
+  'Compra operativa':       'COMPRA_OPERATIVA',
+  'Pago Envio':             'ENVIO_LOTE',
+  'Pago Prestamo':          'PAGO_PRESTAMO',
+  'Pago Linea de Credito':  'PAGO_LINEA_CREDITO',
+  'Cuentas por pagar':      'PAGO_TARJETA_CREDITO',
+  'Intereses':              'PAGO_INTERESES',
+  'Pago ADS':               'PAGO_ADS',
+  'Pago Comision':          'PAGO_COMISION',
+  'Pago a Inversores':      'PAGO_INVERSOR',
+  'Courier':                'PAGO_TRANSPORTE',
+  'Envio Mercancia':        'PAGO_TRANSPORTE',
+  'Aportes para negocio':   'APORTE_DUENO',
+  'Transferencia':          'TRANSFERENCIA_INTERNA',
+  'Pago deuda':             'OTROS',
+  'Otro':                   'OTROS',
+};
+
+// Airtable singleSelect (MovFin) → Supabase tipo + lado (entrada vs salida)
+const MOVFIN_REV = {
+  'Cuota Préstamo':    { tipo: 'PAGO_PRESTAMO',      side: 'salida'  },
+  'Abono Préstamo':    { tipo: 'PAGO_PRESTAMO',      side: 'salida'  },
+  'Disposición Línea': { tipo: 'DRAWDOWN',           side: 'entrada' },
+  'Pago Línea':        { tipo: 'PAGO_LINEA_CREDITO', side: 'salida'  },
+  'Cargo Línea':       { tipo: 'PAGO_INTERESES',     side: 'salida'  },
+  'Depósito Inversor': { tipo: 'APORTE_INVERSOR',    side: 'entrada' },
+  'Retorno Inversor':  { tipo: 'PAGO_INVERSOR',      side: 'salida'  },
+  'Otro':              { tipo: 'OTROS',              side: 'salida'  },
+};
+
+// Dashboard 'Mouse' → Supabase enum 'MOUSE'
+const CAT_REV = {
+  'Mouse':     'MOUSE',
+  'Teclado':   'TECLADO',
+  'Headset':   'HEADSET',
+  'Stand':     'STAND',
+  'Mouse Pad': 'MOUSE_PAD',
+  'Otro':      'MOUSE_PAD', // legacy SKUs creados con 'Otro' caen acá
+};
+
+// 'cf-305' → 305 · 'p-1' → 1 · 'MOU-HXS-T90-NEG' → 'MOU-HXS-T90-NEG'
+function _stripPrefix(id) {
+  if (id == null) return null;
+  const s = String(id);
+  const m = s.match(/^[a-zA-Z]+-(\d+)$/);
+  return m ? Number(m[1]) : s;
+}
+
+function HOY_ISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/* ════════════════════════ WRITERS — SKUs ════════════════════════ */
+
+async function createSKU(data) {
+  if (!data.id) throw new Error('createSKU requiere id (CAT-MARCA-MODELO-COLOR)');
+  const cat = CAT_REV[data.cat] || 'MOUSE';
+  const row = {
+    id_sku:                data.id,
+    nombre:                data.nm || data.id,
+    marca:                 data.mk || '',
+    modelo:                data.modelo || '',
+    color:                 data.color  || '',
+    categoria:             cat,
+    precio_venta_sugerido: data.pv != null && data.pv !== '' ? Number(data.pv) : null,
+    notas:                 data.notas || '',
+    activa:                true,
+  };
+  const { data: inserted, error } = await sb.from('skus').insert(row).select().single();
+  if (error) throw new Error(`createSKU: ${error.message}`);
+  await loadSKUs();
+  const mapped = (window.__AIRTABLE_DATA__.skus || []).find((s) => s.id === inserted.id_sku);
+  return mapped || { id: inserted.id_sku, _airtableId: inserted.id_sku, nm: inserted.nombre };
+}
+
+async function updateSKU(airtableId, patch) {
+  const idSku = _stripPrefix(airtableId);
+  const row = {};
+  if (patch.nm     !== undefined) row.nombre   = patch.nm;
+  if (patch.mk     !== undefined) row.marca    = patch.mk;
+  if (patch.modelo !== undefined) row.modelo   = patch.modelo;
+  if (patch.color  !== undefined) row.color    = patch.color;
+  if (patch.cat    !== undefined && patch.cat !== '') row.categoria = CAT_REV[patch.cat] || 'MOUSE';
+  if (patch.pv     !== undefined && patch.pv !== '' && patch.pv !== null) row.precio_venta_sugerido = Number(patch.pv);
+  if (patch.notas  !== undefined) row.notas    = patch.notas;
+  // Si quieren renombrar el SKU (cambiar id_sku) — FK cascade on update lo soporta
+  if (patch.id     !== undefined && patch.id !== idSku) row.id_sku = patch.id;
+  const { data, error } = await sb.from('skus').update(row).eq('id_sku', idSku).select().single();
+  if (error) throw new Error(`updateSKU: ${error.message}`);
+  await loadSKUs();
+  return (window.__AIRTABLE_DATA__.skus || []).find((s) => s.id === data.id_sku) || data;
+}
+
+async function removeSKU(airtableId) {
+  const idSku = _stripPrefix(airtableId);
+  const { error } = await sb.from('skus').delete().eq('id_sku', idSku);
+  if (error) throw new Error(`removeSKU: ${error.message}`);
+  // Quita del cache local + dispara evento
+  if (window.__AIRTABLE_DATA__.skus) {
+    window.__AIRTABLE_DATA__.skus = window.__AIRTABLE_DATA__.skus.filter((s) => s.id !== idSku);
+    _dispatch('skus', window.__AIRTABLE_DATA__.skus.length);
+  }
+  return { deleted: true, id: idSku };
+}
+
+// Sync: cuenta cuántas ventas/entradas referencian el SKU dado (desde cache).
+function countSKURefs(skuDashId) {
+  const ventas   = window.__AIRTABLE_DATA__?.ventasRaw   || [];
+  const entradas = window.__AIRTABLE_DATA__?.entradasRaw || [];
+  return {
+    ventas:   ventas.filter((v)   => v.skuRef === skuDashId).length,
+    entradas: entradas.filter((e) => e.skuRef === skuDashId).length,
+  };
+}
+
+/* ════════════════════════ WRITERS — Ventas ════════════════════════ */
+
+function _nextVentaCodigo(fecha) {
+  const f = (fecha || HOY_ISO()).replace(/-/g, '').slice(2);
+  const existing = (window.__AIRTABLE_DATA__?.ventas || [])
+    .filter((v) => (v.idVenta || '').startsWith(`VTA-${f}`));
+  return `VTA-${f}-${String(existing.length + 1).padStart(3, '0')}`;
+}
+
+// venta = { fecha, lineas[{skuId, qty, cppEnVenta}], precioFacturadoTotal, canal, envio?, nota?, idVenta? }
+async function createVenta(venta) {
+  const codigo = venta.idVenta || _nextVentaCodigo(venta.fecha);
+  const canalId = _findContraparteId(venta.canal, DEFAULT_FACEBOOK_ID);
+  // 1. Header
+  const { data: header, error: e1 } = await sb.from('ventas').insert({
+    codigo,
+    fecha:           venta.fecha,
+    canal_id:        canalId,
+    envio_cobrado:   Number(venta.envio) || 0,
+    descuento:       0,
+    total_facturado: Number(venta.precioFacturadoTotal) || 0,  // se recalcula vía trigger
+    total_ganancia:  0,
+    notas:           venta.nota || '',
+  }).select().single();
+  if (e1) throw new Error(`createVenta header: ${e1.message}`);
+  // 2. Items (multi-línea). El trigger snapshot_cpp captura cpp_historico desde skus.cpp_actual.
+  const nLineas = venta.lineas.length;
+  const precioPorLinea = nLineas > 0
+    ? (Number(venta.precioFacturadoTotal) || 0) / nLineas
+    : 0;
+  const itemsRows = venta.lineas.map((l) => ({
+    venta_id:        header.id,
+    sku_id:          l.skuId,
+    cantidad:        Number(l.qty) || 0,
+    precio_unitario: l.precioUnitario != null ? Number(l.precioUnitario) : precioPorLinea,
+  }));
+  const { data: items, error: e2 } = await sb.from('ventas_items').insert(itemsRows).select();
+  if (e2) {
+    // Rollback: borra el header si fallaron los items
+    await sb.from('ventas').delete().eq('id', header.id);
+    throw new Error(`createVenta items: ${e2.message}`);
+  }
+  // 3. Refetch para que los totales recalculados por trigger lleguen al cache
+  await loadVentas();
+  const newGrouped = (window.__AIRTABLE_DATA__.ventas || []).find((v) => v.idVenta === codigo);
+  return {
+    idVenta:     codigo,
+    airtableIds: (items || []).map((i) => 'vi-' + i.id),
+    grouped:     newGrouped,
+  };
+}
+
+async function removeVenta(idVenta) {
+  // Lookup id real por codigo
+  const venta = (window.__AIRTABLE_DATA__?.ventas || []).find((v) => v.idVenta === idVenta);
+  if (!venta) throw new Error(`venta no encontrada: ${idVenta}`);
+  const vid = _stripPrefix(venta._airtableId);
+  // ventas_items cascadea via FK. Movimientos con venta_id quedan huérfanos
+  // (mismo comportamiento que tenías con Airtable).
+  const { error } = await sb.from('ventas').delete().eq('id', vid);
+  if (error) throw new Error(`removeVenta: ${error.message}`);
+  // Sincroniza cache
+  if (window.__AIRTABLE_DATA__.ventas) {
+    window.__AIRTABLE_DATA__.ventas    = window.__AIRTABLE_DATA__.ventas.filter((v) => v.idVenta !== idVenta);
+    window.__AIRTABLE_DATA__.ventasRaw = (window.__AIRTABLE_DATA__.ventasRaw || []).filter((l) => l.idVenta !== idVenta);
+    window.__AIRTABLE_DATA__.ventasCF  = (window.__AIRTABLE_DATA__.ventasCF  || []).filter((c) => c._ventaId !== idVenta);
+    _dispatch('ventas', window.__AIRTABLE_DATA__.ventas.length);
+  }
+  return { idVenta, deletedCount: (venta.lineas || []).length };
+}
+
+async function updateVentaHeader(idVenta, patch) {
+  const venta = (window.__AIRTABLE_DATA__?.ventas || []).find((v) => v.idVenta === idVenta);
+  if (!venta) throw new Error(`venta no encontrada: ${idVenta}`);
+  const vid = _stripPrefix(venta._airtableId);
+  const row = {};
+  if (patch.fecha != null) row.fecha    = patch.fecha;
+  if (patch.canal != null) row.canal_id = _findContraparteId(patch.canal, DEFAULT_FACEBOOK_ID);
+  if (patch.notas != null) row.notas    = patch.notas;
+  if (patch.envio != null) row.envio_cobrado = Number(patch.envio) || 0;
+  const { error } = await sb.from('ventas').update(row).eq('id', vid);
+  if (error) throw new Error(`updateVentaHeader: ${error.message}`);
+  // Actualiza cache
+  if (patch.fecha != null) venta.fecha = patch.fecha;
+  if (patch.canal != null) venta.canal = patch.canal;
+  if (patch.notas != null) venta.notas = patch.notas;
+  if (patch.envio != null) venta.envio = Number(patch.envio) || 0;
+  _dispatch('ventas', (window.__AIRTABLE_DATA__.ventas || []).length);
+  return { idVenta, updatedCount: (venta.lineas || []).length };
+}
+
+/* ════════════════════════ WRITERS — Lotes/Entradas ════════════════════════ */
+
+// lote = { fecha, status ('En Camino'/'Recibido'/'Perdido'), lineas:[{skuId, qty, costoUd}],
+//          envio, courier, otros, impuestos, nota, proveedor?, loteId? }
+async function createLote(lote) {
+  const statusMap = { 'En Camino': 'PENDIENTE', 'Recibido': 'RECIBIDO', 'Perdido': 'PERDIDO' };
+  const sbStatus  = statusMap[lote.status] || 'PENDIENTE';
+  const hasSharedCosts = Number(lote.envio) || Number(lote.courier) || Number(lote.otros) || Number(lote.impuestos);
+
+  let loteId = null;
+  let loteCodigo = null;
+
+  // Si hay shared costs O viene un proveedor explícito, crear lotes header.
+  // Si no, crear las entradas sueltas (sin lote_id) — más simple y mismo
+  // comportamiento que tenía Julio con airtable cuando no llenaba esos costos.
+  if (hasSharedCosts || lote.proveedor) {
+    loteCodigo = lote.loteId || `L-${(lote.fecha || HOY_ISO()).replace(/-/g, '').slice(2)}-${String(((window.__AIRTABLE_DATA__?.lotes || []).filter((l) => (l.id || '').startsWith('L-')).length) + 1).padStart(2, '0')}`;
+    const { data: lhdr, error: e0 } = await sb.from('lotes').insert({
+      codigo:           loteCodigo,
+      fecha_pedido:     lote.fecha,
+      fecha_recibido:   sbStatus === 'RECIBIDO' ? lote.fecha : null,
+      proveedor_id:     _findContraparteId(lote.proveedor, DEFAULT_PROVEEDOR_ID),
+      status:           sbStatus === 'PERDIDO' ? 'PENDIENTE' : sbStatus,
+      costo_envio:      Number(lote.envio)     || 0,
+      costo_courier:    Number(lote.courier)   || 0,
+      costo_otros:      Number(lote.otros)     || 0,
+      costo_impuestos:  Number(lote.impuestos) || 0,
+      moneda:           'RD',
+      notas:            lote.nota || '',
+    }).select().single();
+    if (e0) throw new Error(`createLote header: ${e0.message}`);
+    loteId = lhdr.id;
+  }
+
+  const rows = lote.lineas.map((l) => ({
+    lote_id:              loteId,
+    fecha:                lote.fecha,
+    sku_id:               l.skuId,
+    status:               sbStatus,
+    cantidad:             Number(l.qty) || 0,
+    costo_unitario_base:  Number(l.costoUd) || 0,
+    notas:                lote.nota || '',
+  }));
+  const { data: created, error: e1 } = await sb.from('entradas').insert(rows).select();
+  if (e1) {
+    if (loteId) await sb.from('lotes').delete().eq('id', loteId);
+    throw new Error(`createLote entradas: ${e1.message}`);
+  }
+  await loadEntradas();
+  const newLote = (window.__AIRTABLE_DATA__.lotes || []).find(
+    (l) => loteCodigo ? l.id === loteCodigo : l.skus.some((s) => (created || []).some((c) => c.id === Number(String(s._airtableId).replace('e-', ''))))
+  );
+  return {
+    loteId:      loteCodigo || (created[0] ? `E-${created[0].id}` : ''),
+    airtableIds: (created || []).map((c) => 'e-' + c.id),
+    grouped:     newLote,
+  };
+}
+
+async function removeLote(loteDashId) {
+  // loteDashId puede ser 'L-N' (lote real) o 'E-N' (entrada suelta) o codigo
+  const lote = (window.__AIRTABLE_DATA__?.lotes || []).find((l) => l.id === loteDashId);
+  if (!lote) throw new Error(`lote no encontrado: ${loteDashId}`);
+  const numIds = (lote.skus || []).map((s) => Number(String(s._airtableId).replace('e-', ''))).filter(Number.isFinite);
+  // Borra todas las entradas
+  if (numIds.length > 0) {
+    const { error } = await sb.from('entradas').delete().in('id', numIds);
+    if (error) throw new Error(`removeLote entradas: ${error.message}`);
+  }
+  // Si es lote real, borra el header después de las entradas
+  if (lote._loteIdNum) {
+    const { error } = await sb.from('lotes').delete().eq('id', lote._loteIdNum);
+    if (error) throw new Error(`removeLote header: ${error.message}`);
+  }
+  // Sincroniza cache
+  if (window.__AIRTABLE_DATA__.lotes) {
+    window.__AIRTABLE_DATA__.lotes       = window.__AIRTABLE_DATA__.lotes.filter((l) => l.id !== loteDashId);
+    window.__AIRTABLE_DATA__.entradasRaw = (window.__AIRTABLE_DATA__.entradasRaw || []).filter((e) => !numIds.includes(Number(String(e._airtableId).replace('e-', ''))));
+    _dispatch('entradas', window.__AIRTABLE_DATA__.lotes.length);
+  }
+  return { loteId: loteDashId, deletedCount: numIds.length };
+}
+
+async function updateLoteHeader(loteDashId, patch) {
+  const lote = (window.__AIRTABLE_DATA__?.lotes || []).find((l) => l.id === loteDashId);
+  if (!lote) throw new Error(`lote no encontrado: ${loteDashId}`);
+  const numIds = (lote.skus || []).map((s) => Number(String(s._airtableId).replace('e-', ''))).filter(Number.isFinite);
+  const statusMap = { 'En Camino': 'PENDIENTE', 'Recibido': 'RECIBIDO', 'Perdido': 'PERDIDO' };
+
+  // Actualiza columnas que viven en `entradas` (fecha, status, notas)
+  const entRow = {};
+  if (patch.fecha  != null) entRow.fecha  = patch.fecha;
+  if (patch.status != null) entRow.status = statusMap[patch.status] || 'PENDIENTE';
+  if (patch.notas  != null) entRow.notas  = patch.notas;
+  if (Object.keys(entRow).length > 0 && numIds.length > 0) {
+    const { error } = await sb.from('entradas').update(entRow).in('id', numIds);
+    if (error) throw new Error(`updateLoteHeader entradas: ${error.message}`);
+  }
+
+  // Actualiza columnas que viven en `lotes` (shared costs, proveedor)
+  if (lote._loteIdNum) {
+    const lhRow = {};
+    if (patch.envio     != null) lhRow.costo_envio     = Number(patch.envio)     || 0;
+    if (patch.courier   != null) lhRow.costo_courier   = Number(patch.courier)   || 0;
+    if (patch.otros     != null) lhRow.costo_otros     = Number(patch.otros)     || 0;
+    if (patch.impuestos != null) lhRow.costo_impuestos = Number(patch.impuestos) || 0;
+    if (patch.proveedor != null) lhRow.proveedor_id    = _findContraparteId(patch.proveedor, DEFAULT_PROVEEDOR_ID);
+    if (Object.keys(lhRow).length > 0) {
+      const { error } = await sb.from('lotes').update(lhRow).eq('id', lote._loteIdNum);
+      if (error) throw new Error(`updateLoteHeader lote: ${error.message}`);
+    }
+  } else {
+    // Lote "suelto" (sin lotes header) — los shared costs no se pueden guardar.
+    // Avisamos en consola, no rompemos.
+    if (patch.envio != null || patch.courier != null || patch.otros != null || patch.impuestos != null) {
+      console.warn(`[SB/updateLoteHeader] lote ${loteDashId} no tiene header de lotes; los shared costs no se guardaron. Borrar y recrear con createLote() para inicializar.`);
+    }
+  }
+
+  // Refresca cache
+  await loadEntradas();
+  return { loteId: loteDashId, updatedCount: numIds.length };
+}
+
+/* ════════════════════════ WRITERS — MovFin ════════════════════════ */
+
+// data = { tipo (singleSelect airtable), fecha, monto, productoFinAirtableId, productoFinId?,
+//          cuentaBanco?, capital?, interes?, seguro?, comision?, mora?, notas? }
+async function createMovFin(data) {
+  const map = MOVFIN_REV[data.tipo];
+  if (!map) throw new Error(`tipo MovFin inválido: "${data.tipo}"`);
+
+  // Resolver producto financiero (préstamo o inversor)
+  let prestamoId = null, inversorId = null;
+  const refId = data.productoFinAirtableId || (window.__AIRTABLE_DATA__?.financiero || []).find((f) => f.idFin === data.productoFinId)?._airtableId;
+  if (refId) {
+    if (refId.startsWith('p-')) prestamoId = Number(refId.slice(2));
+    if (refId.startsWith('i-')) inversorId = Number(refId.slice(2));
+  }
+
+  const monto = Number(data.monto) || 0;
+  const row = {
+    fecha:           data.fecha,
+    tipo:            map.tipo,
+    cuenta_id:       _findCuentaId(data.cuentaBanco, DEFAULT_CUENTA_ID),
+    contraparte_id:  null,
+    entrada:         map.side === 'entrada' ? monto : 0,
+    salida:          map.side === 'salida'  ? monto : 0,
+    prestamo_id:     prestamoId,
+    inversor_id:     inversorId,
+    notas:           data.notas || data.tipo,
+  };
+  // Contraparte por defecto según producto
+  if (prestamoId) {
+    const list = window.__AIRTABLE_DATA__.financiero || [];
+    const p = list.find((f) => f._airtableId === refId);
+    if (p?.nombre) row.contraparte_id = _findContraparteId(p.nombre, null);
+  } else if (inversorId) {
+    row.contraparte_id = _findContraparteId('Andrea Correa', null);
+  }
+  const { data: ins, error } = await sb.from('movimientos').insert(row).select().single();
+  if (error) throw new Error(`createMovFin: ${error.message}`);
+
+  // Actualiza cache movFin
+  const mapped = {
+    _airtableId: 'mf-' + ins.id,
+    idMov:       'MF-' + ins.id,
+    tipo:        data.tipo,
+    fecha:       ins.fecha,
+    monto:       monto,
+    capital:     Number(data.capital)  || 0,
+    interes:     Number(data.interes)  || 0,
+    seguro:      Number(data.seguro)   || 0,
+    comision:    Number(data.comision) || 0,
+    mora:        Number(data.mora)     || 0,
+    cuentaBanco: data.cuentaBanco || '',
+    notas:       data.notas || '',
+    productoFinAirtableId: refId,
+    productoFinId:         data.productoFinId || '',
+    productoFinName:       (window.__AIRTABLE_DATA__?.financiero || []).find((f) => f._airtableId === refId)?.nombre || '',
+  };
+  if (!window.__AIRTABLE_DATA__.movFin) window.__AIRTABLE_DATA__.movFin = [];
+  window.__AIRTABLE_DATA__.movFin = [mapped, ...window.__AIRTABLE_DATA__.movFin];
+  _dispatch('movFin', window.__AIRTABLE_DATA__.movFin.length);
+  return mapped;
+}
+
+async function removeMovFin(airtableId) {
+  const mid = _stripPrefix(airtableId);
+  const { error } = await sb.from('movimientos').delete().eq('id', mid);
+  if (error) throw new Error(`removeMovFin: ${error.message}`);
+  if (window.__AIRTABLE_DATA__.movFin) {
+    window.__AIRTABLE_DATA__.movFin = window.__AIRTABLE_DATA__.movFin.filter((m) => m._airtableId !== airtableId);
+    _dispatch('movFin', window.__AIRTABLE_DATA__.movFin.length);
+  }
+  return { deleted: true, id: airtableId };
+}
+
+/* ════════════════════════ WRITERS — Genéricos (cashflow, financiero) ════════════════════════
+   Los paneles a veces llaman a AT_CLIENT.create('cashflow', fields) / .update() / .remove()
+   pasando un objeto cuyas keys vienen del shim window.AT.fields.{table}.* (que exponemos
+   debajo). Aquí traducimos esas keys planas a columnas reales de Supabase.       */
+
+async function create(tableKey, fields) {
+  if (tableKey === 'cashflow') {
+    const row = {
+      fecha:          fields.fecha,
+      tipo:           TIPO_REV[fields.cuenta] || 'OTROS',
+      cuenta_id:      DEFAULT_CUENTA_ID,                                            // sin info del bank, asumimos BHD
+      contraparte_id: _findContraparteId(fields.auxiliar, DEFAULT_CONTRAPARTE_ID),
+      entrada:        Number(fields.entrada) || 0,
+      salida:         Number(fields.salida)  || 0,
+      notas:          fields.notas || `${fields.cuenta || ''} | ${fields.auxiliar || ''}`,
+    };
+    const { data, error } = await sb.from('movimientos').insert(row).select().single();
+    if (error) throw new Error(`create cashflow: ${error.message}`);
+    return { id: 'cf-' + data.id, fields }; // shape compat con airtable response
+  }
+  throw new Error(`create(${tableKey}) no implementado en supabase-client`);
+}
+
+async function update(tableKey, airtableId, fields) {
+  if (tableKey === 'cashflow') {
+    const mid = _stripPrefix(airtableId);
+    const row = {};
+    if (fields.fecha    !== undefined) row.fecha    = fields.fecha;
+    if (fields.cuenta   !== undefined) row.tipo     = TIPO_REV[fields.cuenta] || 'OTROS';
+    if (fields.auxiliar !== undefined) row.contraparte_id = _findContraparteId(fields.auxiliar, DEFAULT_CONTRAPARTE_ID);
+    if (fields.entrada  !== undefined) row.entrada  = Number(fields.entrada) || 0;
+    if (fields.salida   !== undefined) row.salida   = Number(fields.salida)  || 0;
+    if (fields.notas    !== undefined) row.notas    = fields.notas;
+    const { error } = await sb.from('movimientos').update(row).eq('id', mid);
+    if (error) throw new Error(`update cashflow: ${error.message}`);
+    return { id: airtableId };
+  }
+  if (tableKey === 'financiero') {
+    // En Supabase los totales pagados/balances son calculados desde movimientos,
+    // no se updatean directamente. No-op silencioso para compat (el cache se
+    // refrescará en el próximo loadFinanciero()).
+    console.log('[SB/update financiero] no-op (campos calculados desde movimientos)');
+    return { id: airtableId };
+  }
+  throw new Error(`update(${tableKey}) no implementado`);
+}
+
+async function remove(tableKey, airtableId) {
+  if (tableKey === 'cashflow') {
+    const mid = _stripPrefix(airtableId);
+    const { error } = await sb.from('movimientos').delete().eq('id', mid);
+    if (error) throw new Error(`remove cashflow: ${error.message}`);
+    return { deleted: true, id: airtableId };
+  }
+  if (tableKey === 'entradas') {
+    const eid = _stripPrefix(airtableId);
+    const { error } = await sb.from('entradas').delete().eq('id', eid);
+    if (error) throw new Error(`remove entradas: ${error.message}`);
+    return { deleted: true, id: airtableId };
+  }
+  throw new Error(`remove(${tableKey}) no implementado`);
+}
+
+/* ════════════════════════ Compat shim: window.AT.fields ════════════════════════
+   Los paneles construyen objetos de fields usando window.AT.fields.{table}.{col}.
+   En airtable eso devolvía field IDs (fldXXX). Acá devolvemos strings literales
+   que nuestros writers genéricos reconocen.                                     */
+
+window.AT = window.AT || {};
+window.AT.fields = window.AT.fields || {};
+Object.assign(window.AT.fields, {
+  cashflow:   { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar',
+                entrada: 'entrada', salida: 'salida', notas: 'notas' },
+  financiero: { totalPagado: 'totalPagado', balancePendiente: 'balancePendiente' },
 });
 
 /* ════════════════════════ Exports + boot ════════════════════════ */
@@ -606,8 +1139,15 @@ window.AT_CLIENT = window.AT_CLIENT || {};
 Object.assign(window.AT_CLIENT, {
   loadSKUs, loadVentas, loadEntradas, loadCashflow,
   loadFinanciero, loadResumen, loadMovFin,
-  // Constantes de compat (los formularios las leen para validar enums)
-  SKU_CATEGORIAS: ['Mouse', 'Teclado', 'Headset', 'Otro'],
+  // Writers específicos
+  createSKU, updateSKU, removeSKU, countSKURefs,
+  createVenta, removeVenta, updateVentaHeader,
+  createLote, removeLote, updateLoteHeader,
+  createMovFin, removeMovFin,
+  // Writers genéricos
+  create, update, remove,
+  // Constantes (los formularios las leen para validar enums)
+  SKU_CATEGORIAS: ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'],
   MOVFIN_TIPOS: [
     'Cuota Préstamo', 'Abono Préstamo',
     'Disposición Línea', 'Pago Línea', 'Cargo Línea',
@@ -629,11 +1169,13 @@ async function _bootCheck() {
 }
 
 // loadFinanciero antes que loadMovFin (este último necesita el cache
-// para mapear m.prestamo → idFin).
-setTimeout(_bootCheck,                                       100);
-setTimeout(loadSKUs,                                         150);
-setTimeout(loadVentas,                                       200);
-setTimeout(loadEntradas,                                     250);
-setTimeout(loadCashflow,                                     300);
+// para mapear m.prestamo → idFin). _loadLookups antes de los writers
+// (que resuelven contraparte/cuenta names → ids).
+setTimeout(_bootCheck,                                            100);
+setTimeout(_loadLookups,                                          120);
+setTimeout(loadSKUs,                                              150);
+setTimeout(loadVentas,                                            200);
+setTimeout(loadEntradas,                                          250);
+setTimeout(loadCashflow,                                          300);
 setTimeout(async () => { await loadFinanciero(); loadMovFin(); }, 350);
-setTimeout(loadResumen,                                      400);
+setTimeout(loadResumen,                                           400);
