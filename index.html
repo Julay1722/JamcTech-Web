@@ -3745,28 +3745,51 @@ function VentasPageExt({ period }) {
       <div className="section">
         <table className="data">
           <thead><tr>
-            <th>Código</th><th>Fecha</th><th>Canal</th>
-            <th className="right">SKUs</th><th className="right">Uds</th>
+            <th>Producto(s)</th><th>Fecha</th><th>Canal</th>
+            <th className="right">Uds</th>
+            <th className="right">Costo</th>
             <th className="right">Total</th><th className="right">Ganancia</th><th className="right">Margen</th>
             <th></th>
           </tr></thead>
           <tbody>
-            {filtered.map(v => (
-              <tr key={v.idVenta}>
-                <td><span className="num" style={{ fontSize: 11 }}>{v.idVenta}</span></td>
-                <td>{fmtDate(v.fecha)}</td>
-                <td className="muted">{v.canal || '—'}</td>
-                <td className="num right">{(v.lineas || []).length}</td>
-                <td className="num right">{v.cantidadTotal || 0}</td>
-                <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
-                <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
-                <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
-                <td style={{ display: 'flex', gap: 4 }}>
-                  <button className="icon-btn" onClick={() => setEdit(v)} title="Editar header">✎</button>
-                  <button className="icon-btn danger" onClick={() => setDel(v)} title="Eliminar">×</button>
-                </td>
-              </tr>
-            ))}
+            {(() => {
+              // SKU id → nombre lookup
+              const skuName = {};
+              (data.skus || []).forEach(s => { skuName[s.id] = s.nm || s.id; });
+              return filtered.map(v => {
+                const items = v.lineas || [];
+                const costoTotal = items.reduce((s, l) => s + (l.baseCost || (Number(l.costoUd || 0) * Number(l.qty || 0))), 0);
+                return (
+                  <tr key={v.idVenta}>
+                    <td>
+                      {items.length === 0 && <span className="muted">—</span>}
+                      {items.map((l, i) => {
+                        const sku = l.skuLinked || l.skuRef;
+                        const nombre = skuName[sku] || sku || '—';
+                        return (
+                          <div key={i} style={{ fontSize: 12, marginBottom: i < items.length - 1 ? 2 : 0 }}>
+                            {nombre} <span className="muted">× {l.qty}</span>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{sku}</div>
+                          </div>
+                        );
+                      })}
+                      <div style={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 4, opacity: 0.6 }}>{v.idVenta}</div>
+                    </td>
+                    <td>{fmtDate(v.fecha)}</td>
+                    <td className="muted">{v.canal || '—'}</td>
+                    <td className="num right">{v.cantidadTotal || 0}</td>
+                    <td className="num right neg">{fmtCurrency(costoTotal)}</td>
+                    <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
+                    <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
+                    <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
+                    <td style={{ display: 'flex', gap: 4 }}>
+                      <button className="icon-btn" onClick={() => setEdit(v)} title="Editar header">✎</button>
+                      <button className="icon-btn danger" onClick={() => setDel(v)} title="Eliminar">×</button>
+                    </td>
+                  </tr>
+                );
+              });
+            })()}
           </tbody>
         </table>
       </div>
