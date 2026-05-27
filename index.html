@@ -1225,6 +1225,227 @@ function OverviewPage({ period }) {
   );
 }
 
+// ═════════════════════════ Re-Stock Tab ═════════════════════════
+// Herramienta de planificación de reposición. Para cada SKU calcula:
+//   - días de stock restante (con velocidad de venta histórica)
+//   - cobertura vs lead time (52 días Alibaba→DR por default)
+//   - cantidad recomendada para cubrir (lead time + buffer de seguridad)
+//   - costo estimado de la reposición usando CPP actual
+// Muestra una lista priorizada (críticos primero) con checkboxes para
+// generar un resumen de orden total estimada.
+function RestockTab({ skus }) {
+  const [bufferDias, setBufferDias] = useState(() => {
+    const saved = localStorage.getItem('restock-buffer');
+    return saved ? Number(saved) : 30;  // 30 días extra por defecto
+  });
+  useEffect(() => { if (Number(bufferDias) > 0) localStorage.setItem('restock-buffer', String(bufferDias)); }, [bufferDias]);
+
+  const [leadOverride, setLeadOverride] = useState(() => {
+    const saved = localStorage.getItem('restock-lead');
+    return saved ? Number(saved) : 52;
+  });
+  useEffect(() => { if (Number(leadOverride) > 0) localStorage.setItem('restock-lead', String(leadOverride)); }, [leadOverride]);
+
+  const [selected, setSelected] = useState({});
+  const [filterEstado, setFilterEstado] = useState('necesitan');
+
+  // Computar info de reposición para cada SKU
+  const items = (skus || []).map(s => {
+    const lead = leadOverride;
+    const buffer = Number(bufferDias) || 0;
+    const diasObjetivo = lead + buffer;  // queremos stock para todo este período
+    const stockActual = s.s || 0;
+    const enCamino = s.enCamino || 0;
+    const velocidad = s.velocidad || 0;  // uds/día
+    // Cuántas unidades necesito para cubrir diasObjetivo desde ahora,
+    // restando lo que ya tengo (stock actual + en camino).
+    const necesidadTotal = Math.round(velocidad * diasObjetivo);
+    const cubierto = stockActual + enCamino;
+    const aPedir = Math.max(0, necesidadTotal - cubierto);
+    const costoEstimado = aPedir * (s.cpp || 0);
+    return {
+      ...s,
+      aPedir, costoEstimado, necesidadTotal, cubierto,
+      diasObjetivo, lead, buffer,
+    };
+  });
+
+  // Filtros
+  const filtered = items.filter(s => {
+    if (filterEstado === 'todos') return true;
+    if (filterEstado === 'necesitan') return s.aPedir > 0;
+    if (filterEstado === 'critico') return s.estado === 'critico';
+    if (filterEstado === 'atencion') return s.estado === 'atencion';
+    return true;
+  }).sort((a, b) => {
+    // Críticos primero, luego por días restantes ascendente, luego por velocidad
+    const orderEstado = { critico: 0, atencion: 1, en_reposicion: 2, ok: 3, sin_movimiento: 4 };
+    const ea = orderEstado[a.estado] ?? 9, eb = orderEstado[b.estado] ?? 9;
+    if (ea !== eb) return ea - eb;
+    return (a.diasStock ?? 9999) - (b.diasStock ?? 9999);
+  });
+
+  // Toggle selección de un SKU para la orden
+  const toggleSku = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
+  const toggleAll = (val) => {
+    const next = {};
+    filtered.forEach(s => { if (s.aPedir > 0) next[s.id] = val; });
+    setSelected(next);
+  };
+
+  // Resumen de orden seleccionada
+  const seleccionados = filtered.filter(s => selected[s.id] && s.aPedir > 0);
+  const totalUds = seleccionados.reduce((sum, s) => sum + s.aPedir, 0);
+  const totalCosto = seleccionados.reduce((sum, s) => sum + s.costoEstimado, 0);
+  const numSkus = seleccionados.length;
+
+  // Stats
+  const criticos = items.filter(s => s.estado === 'critico').length;
+  const necesitanPedido = items.filter(s => s.aPedir > 0).length;
+  const totalAPedirGlobal = items.filter(s => s.aPedir > 0).reduce((s, x) => s + x.costoEstimado, 0);
+
+  return (
+    <>
+      {/* Configuración */}
+      <div style={{ display: 'flex', alignItems: 'end', gap: 16, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-4)' }}>
+        <div className="field" style={{ flex: '0 0 140px' }}>
+          <div className="field-label">Lead time (días)</div>
+          <input className="input num" type="number" min="1" value={leadOverride} onChange={e => setLeadOverride(e.target.value)} />
+          <div className="field-hint">Cuánto tarda en llegar un pedido</div>
+        </div>
+        <div className="field" style={{ flex: '0 0 140px' }}>
+          <div className="field-label">Buffer seguridad (días)</div>
+          <input className="input num" type="number" min="0" value={bufferDias} onChange={e => setBufferDias(e.target.value)} />
+          <div className="field-hint">Stock extra para imprevistos</div>
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <div className="field-label">Filtrar</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[
+              { id: 'necesitan', l: 'Necesitan pedido' },
+              { id: 'critico', l: '🔴 Críticos' },
+              { id: 'atencion', l: '🟡 Atención' },
+              { id: 'todos', l: 'Todos' },
+            ].map(f => (
+              <button key={f.id} className="pill" style={{
+                background: filterEstado === f.id ? 'var(--accent)' : 'var(--surface)',
+                color: filterEstado === f.id ? '#fff' : 'var(--text-2)',
+              }} onClick={() => setFilterEstado(f.id)}>{f.l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="kpi-row">
+        <KPI label="SKUs críticos" value={fmtNum(criticos)} delta={null} deltaLabel="pedir ya" />
+        <KPI label="SKUs a pedir" value={fmtNum(necesitanPedido)} delta={null} deltaLabel={`para cubrir ${leadOverride}+${bufferDias}d`} />
+        <KPI label="Costo total recomendado" value={fmtNum(totalAPedirGlobal)} currency delta={null} deltaLabel="todos los que necesitan" />
+        <KPI label="Orden seleccionada" value={fmtNum(totalCosto)} currency delta={numSkus} deltaLabel={`${numSkus} SKUs · ${totalUds} uds`} />
+      </div>
+
+      {/* Tabla de SKUs */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Recomendación de reposición</div>
+            <div className="section-desc">{filtered.length} SKUs mostrando · ordenados por urgencia (críticos primero)</div>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button className="btn ghost" onClick={() => toggleAll(true)}>Sel. todos</button>
+            <button className="btn ghost" onClick={() => toggleAll(false)}>Limpiar</button>
+          </div>
+        </div>
+        <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+          <table className="data">
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+              <tr>
+                <th style={{ width: 28 }}></th>
+                <th>SKU</th><th>Estado</th>
+                <th className="right">Stock</th><th className="right">Vel/mes</th>
+                <th className="right">Días que dura</th><th className="right">Cobertura</th>
+                <th className="right">En camino</th><th className="right">A pedir</th>
+                <th className="right">Costo est.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(s => {
+                const ratio = s.ratioCobertura;
+                const cls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+                return (
+                  <tr key={s.id} style={{ opacity: s.aPedir === 0 ? 0.5 : 1 }}>
+                    <td>
+                      <input type="checkbox" checked={!!selected[s.id]} onChange={() => toggleSku(s.id)} disabled={s.aPedir === 0} />
+                    </td>
+                    <td>
+                      <div><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></div>
+                      <div style={{ fontSize: 12 }}>{s.nm}</div>
+                    </td>
+                    <td><span className={`badge ${cls}`}>{s.estado.replace('_', ' ')}</span></td>
+                    <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
+                    <td className="num right">{s.vtasMes ? s.vtasMes.toFixed(1) : '—'}</td>
+                    <td className="num right">{s.diasStock != null ? s.diasStock + 'd' : '—'}</td>
+                    <td className="num right">{ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
+                    <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
+                    <td className="num right pos" style={{ fontWeight: 600 }}>{s.aPedir > 0 ? s.aPedir : '—'}</td>
+                    <td className="num right">{s.costoEstimado > 0 ? fmtCurrency(s.costoEstimado) : '—'}</td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr><td colSpan="10" className="empty" style={{ padding: 'var(--s-6)' }}>
+                  No hay SKUs en este filtro
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Resumen orden seleccionada */}
+      {seleccionados.length > 0 && (
+        <div className="section" style={{ borderLeft: '4px solid var(--accent)' }}>
+          <div className="section-head">
+            <div>
+              <div className="section-title">Resumen de la orden</div>
+              <div className="section-desc">{numSkus} SKUs · {totalUds} unidades · costo estimado {fmtCurrency(totalCosto)}</div>
+            </div>
+            <span className="badge success" style={{ fontSize: 13 }}>{fmtCurrency(totalCosto)}</span>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>SKU</th><th>Nombre</th>
+              <th className="right">Cantidad</th><th className="right">Costo/ud (CPP)</th>
+              <th className="right">Subtotal</th>
+            </tr></thead>
+            <tbody>
+              {seleccionados.map(s => (
+                <tr key={s.id}>
+                  <td><span className="num" style={{ fontSize: 11 }}>{s.id}</span></td>
+                  <td className="muted">{s.nm}</td>
+                  <td className="num right" style={{ fontWeight: 600 }}>{s.aPedir}</td>
+                  <td className="num right">{fmtCurrency(s.cpp || 0)}</td>
+                  <td className="num right">{fmtCurrency(s.costoEstimado)}</td>
+                </tr>
+              ))}
+              <tr style={{ background: 'var(--surface-2)', fontWeight: 600 }}>
+                <td colSpan="2" className="muted">TOTAL</td>
+                <td className="num right">{totalUds}</td>
+                <td></td>
+                <td className="num right pos">{fmtCurrency(totalCosto)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="field-hint" style={{ marginTop: 12 }}>
+            Esta orden está calculada para cubrir {leadOverride} días de lead time + {bufferDias} días de buffer = <strong>{Number(leadOverride) + Number(bufferDias)} días</strong> de stock proyectado.
+            Crea el lote correspondiente desde el tab "+ Nuevo lote" con estos SKUs y cantidades.
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function LotesTab() {
   const data = useATData();
   const lotes = data.lotes || [];
@@ -1621,6 +1842,7 @@ function InventarioPage() {
       <div className="tabs">
         <button className={`tab ${subtab === 'skus' ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
         <button className={`tab ${subtab === 'nuevo-sku' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-sku')}>+ Nuevo SKU</button>
+        <button className={`tab ${subtab === 'restock' ? 'active' : ''}`} onClick={() => setSubtab('restock')}>Re-Stock</button>
         <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
         <button className={`tab ${subtab === 'nuevo-lote' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-lote')}>+ Nuevo lote</button>
       </div>
@@ -1628,7 +1850,8 @@ function InventarioPage() {
       <div className="section">
         {subtab === 'lotes' ? <LotesTab /> :
          subtab === 'nuevo-sku' ? <FormSKU /> :
-         subtab === 'nuevo-lote' ? <FormLote /> : (() => {
+         subtab === 'nuevo-lote' ? <FormLote /> :
+         subtab === 'restock' ? <RestockTab skus={SK} /> : (() => {
           // Agrupar SKUs por categoría. Si el SKU tiene categoría "Otro" pero
           // el id_sku empieza con un prefijo distinto a los conocidos (MOU/TEC/
           // HEA/STA/PAD/OTR), usamos ese prefijo como categoría visible.

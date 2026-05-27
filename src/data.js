@@ -159,28 +159,41 @@ function buildSK(){
       s.agota = null;
     }
 
-    // ESTADO — spec §6.1 (5 estados)
+    // ESTADO — basado en días de stock vs LEAD_TIME del proveedor.
+    // El ratio es lo que importa: si el stock dura menos que lo que tarda
+    // en llegar un nuevo lote, vas a quedarte sin mercancía.
+    const ratio = s.diasStock !== null ? s.diasStock / LEAD_TIME : null;
+    s.leadTimeDias = LEAD_TIME;
+    s.ratioCobertura = ratio;  // 1 = justo cubre · >1 sobra · <1 quiebre
+
     if(s.vendido === 0){
       s.estado = 'sin_movimiento';
-      s.notaEstado = 'Nunca vendido';
+      s.notaEstado = 'Nunca vendido — no se puede calcular cobertura';
     } else if(s.diasStock === null){
-      // sin stock y con velocidad pero... debería caer en critico
       s.estado = s.enCamino > 0 ? 'en_reposicion' : 'critico';
-      s.notaEstado = s.s === 0 ? 'Sin stock' : 'Sin datos';
-    } else if(s.diasStock > 90){
-      s.estado = 'ok';
-      s.notaEstado = 'Stock saludable';
-    } else if(s.diasStock >= 60){
-      s.estado = 'atencion';
-      s.notaEstado = 'Pedir en próximos 30 días';
+      s.notaEstado = s.s === 0 ? 'Sin stock · pide YA' : 'Sin datos';
+    } else if(s.enCamino > 0 && ratio < 1){
+      s.estado = 'en_reposicion';
+      s.notaEstado = `En camino · ${s.diasStock}d de stock vs ${LEAD_TIME}d lead — posible quiebre antes de llegar`;
     } else if(s.enCamino > 0){
       s.estado = 'en_reposicion';
-      s.notaEstado = s.diasStock < LEAD_TIME
-        ? 'En camino — posible quiebre antes de llegar'
-        : 'En camino — llega a tiempo';
-    } else {
+      s.notaEstado = `En camino · ${s.diasStock}d de stock · llega a tiempo (${LEAD_TIME}d lead)`;
+    } else if(ratio < 1){
+      // Stock se acaba antes de que llegue un nuevo lote
       s.estado = 'critico';
-      s.notaEstado = `Pedir AHORA — agota antes del lead time (${LEAD_TIME}d)`;
+      s.notaEstado = `PEDIR YA · ${s.diasStock}d de stock < ${LEAD_TIME}d lead (quiebre garantizado)`;
+    } else if(ratio < 1.5){
+      // Stock apenas cubre el lead time, sin margen
+      s.estado = 'atencion';
+      s.notaEstado = `Pedir esta semana · ${s.diasStock}d stock vs ${LEAD_TIME}d lead (${(ratio*100).toFixed(0)}% cobertura)`;
+    } else if(ratio < 2.5){
+      // Cómodo pero no excesivo
+      s.estado = 'ok';
+      s.notaEstado = `Stock saludable · ${s.diasStock}d (cobertura ${ratio.toFixed(1)}x lead time)`;
+    } else {
+      // Mucho stock — posible exceso
+      s.estado = 'ok';
+      s.notaEstado = `Stock alto · ${s.diasStock}d (cobertura ${ratio.toFixed(1)}x · posible exceso)`;
     }
 
     return s;
