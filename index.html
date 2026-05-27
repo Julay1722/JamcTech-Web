@@ -1248,6 +1248,7 @@ function RestockTab({ skus }) {
 
   const [selected, setSelected] = useState({});
   const [filterEstado, setFilterEstado] = useState('todos-pedir');
+  const [expandedModels, setExpandedModels] = useState({});
 
   // Computar info de reposición para cada SKU
   const items = (skus || []).map(s => {
@@ -1375,39 +1376,113 @@ function RestockTab({ skus }) {
             <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
               <tr>
                 <th style={{ width: 28 }}></th>
-                <th>SKU</th><th>Estado</th>
+                <th style={{ width: 28 }}></th>
+                <th>Marca · Modelo</th><th>Estado</th>
                 <th className="right">Stock</th><th className="right">Vel/mes</th>
-                <th className="right">Días que dura</th><th className="right">Cobertura</th>
+                <th className="right">Días</th><th className="right">Cobertura</th>
                 <th className="right">En camino</th><th className="right">A pedir</th>
                 <th className="right">Costo est.</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(s => {
-                const ratio = s.ratioCobertura;
-                const cls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
-                return (
-                  <tr key={s.id} style={{ opacity: s.aPedir === 0 ? 0.5 : 1 }}>
-                    <td>
-                      <input type="checkbox" checked={!!selected[s.id]} onChange={() => toggleSku(s.id)} disabled={s.aPedir === 0} />
-                    </td>
-                    <td>
-                      <div><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></div>
-                      <div style={{ fontSize: 12 }}>{s.nm}</div>
-                    </td>
-                    <td><span className={`badge ${cls}`}>{s.estado.replace('_', ' ')}</span></td>
-                    <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
-                    <td className="num right">{s.vtasMes ? s.vtasMes.toFixed(1) : '—'}</td>
-                    <td className="num right">{s.diasStock != null ? s.diasStock + 'd' : '—'}</td>
-                    <td className="num right">{ratio != null ? ratio.toFixed(2) + 'x' : '—'}</td>
-                    <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
-                    <td className="num right pos" style={{ fontWeight: 600 }}>{s.aPedir > 0 ? s.aPedir : '—'}</td>
-                    <td className="num right">{s.costoEstimado > 0 ? fmtCurrency(s.costoEstimado) : '—'}</td>
-                  </tr>
-                );
-              })}
+              {(() => {
+                // Agrupar por marca+modelo. Cada grupo = un row colapsable.
+                const naturalCmp = (a, b) => (a || '').localeCompare(b || '', 'es', { numeric: true, sensitivity: 'base' });
+                const byModel = {};
+                filtered.forEach(s => {
+                  const key = `${s.mk || '—'}|${s.modelo || s.nm || ''}`;
+                  (byModel[key] ||= { mk: s.mk || '—', modelo: s.modelo || s.nm || '', items: [] }).items.push(s);
+                });
+                const groups = Object.values(byModel).sort((a, b) => {
+                  // Críticos primero: si algún item del grupo es crítico, va arriba
+                  const aCrit = a.items.some(x => x.estado === 'critico');
+                  const bCrit = b.items.some(x => x.estado === 'critico');
+                  if (aCrit !== bCrit) return aCrit ? -1 : 1;
+                  return naturalCmp(a.mk, b.mk) || naturalCmp(a.modelo, b.modelo);
+                });
+                const ESTADO_RANK = { critico: 4, atencion: 3, en_reposicion: 2, ok: 1, sin_movimiento: 0 };
+                const estadoPeor = (items) => items.reduce((peor, s) =>
+                  (ESTADO_RANK[s.estado] || 0) > (ESTADO_RANK[peor] || 0) ? s.estado : peor, 'ok');
+
+                return groups.map(g => {
+                  const key = `${g.mk}|${g.modelo}`;
+                  const expanded = !!expandedModels[key];
+                  const totS = g.items.reduce((s, x) => s + (x.s || 0), 0);
+                  const totEC = g.items.reduce((s, x) => s + (x.enCamino || 0), 0);
+                  const totAPedir = g.items.reduce((s, x) => s + (x.aPedir || 0), 0);
+                  const totCosto = g.items.reduce((s, x) => s + (x.costoEstimado || 0), 0);
+                  const velProm = g.items.length > 0 ? g.items.reduce((s, x) => s + (x.vtasMes || 0), 0) : 0;
+                  const diasMin = Math.min(...g.items.map(x => x.diasStock ?? Infinity).filter(d => isFinite(d)));
+                  const ratioMin = Math.min(...g.items.map(x => x.ratioCobertura ?? Infinity).filter(d => isFinite(d)));
+                  const est = estadoPeor(g.items);
+                  const cls = est === 'critico' ? 'danger' : est === 'atencion' ? 'warning' : est === 'ok' ? 'success' : 'neutral';
+                  // Selección a nivel modelo = todos sus items
+                  const allSelected = g.items.every(s => selected[s.id]);
+                  const someSelected = g.items.some(s => selected[s.id]);
+                  const toggleGroup = (val) => {
+                    const next = { ...selected };
+                    g.items.forEach(s => { next[s.id] = val; });
+                    setSelected(next);
+                  };
+                  return (
+                    <React.Fragment key={key}>
+                      <tr style={{ cursor: g.items.length > 1 ? 'pointer' : 'default' }}
+                          onClick={() => g.items.length > 1 && setExpandedModels(m => ({ ...m, [key]: !m[key] }))}>
+                        <td onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" checked={allSelected} ref={el => el && (el.indeterminate = !allSelected && someSelected)} onChange={() => toggleGroup(!allSelected)} />
+                        </td>
+                        <td style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 11 }}>
+                          {g.items.length > 1 ? (expanded ? '▼' : '▶') : ''}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{g.mk} {g.modelo}</div>
+                          {g.items.length > 1 && !expanded && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                              {g.items.map(s => s.color).filter(Boolean).join(' · ') || g.items.length + ' variantes'}
+                            </div>
+                          )}
+                          {g.items.length === 1 && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{g.items[0].id}</div>
+                          )}
+                        </td>
+                        <td><span className={`badge ${cls}`}>{est.replace('_', ' ')}</span></td>
+                        <td className={`num right ${totS === 0 ? 'neg' : ''}`}>{totS}</td>
+                        <td className="num right">{velProm > 0 ? velProm.toFixed(1) : '—'}</td>
+                        <td className="num right">{isFinite(diasMin) ? diasMin + 'd' : '—'}</td>
+                        <td className="num right">{isFinite(ratioMin) ? ratioMin.toFixed(2) + 'x' : '—'}</td>
+                        <td className="num right" style={{ color: totEC > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{totEC || '—'}</td>
+                        <td className="num right pos" style={{ fontWeight: 600 }}>{totAPedir}</td>
+                        <td className="num right">{fmtCurrency(totCosto)}</td>
+                      </tr>
+                      {expanded && g.items.length > 1 && g.items.map(s => {
+                        const sCls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+                        return (
+                          <tr key={s.id} style={{ background: 'var(--surface)' }}>
+                            <td onClick={e => e.stopPropagation()}>
+                              <input type="checkbox" checked={!!selected[s.id]} onChange={() => toggleSku(s.id)} />
+                            </td>
+                            <td></td>
+                            <td style={{ paddingLeft: 24 }}>
+                              <div style={{ fontSize: 12 }}>↳ <strong>{s.color || s.id}</strong></div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)' }}>{s.id}</div>
+                            </td>
+                            <td><span className={`badge ${sCls}`} style={{ fontSize: 9 }}>{s.estado.replace('_', ' ')}</span></td>
+                            <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
+                            <td className="num right">{s.vtasMes ? s.vtasMes.toFixed(1) : '—'}</td>
+                            <td className="num right">{s.diasStock != null ? s.diasStock + 'd' : '—'}</td>
+                            <td className="num right">{s.ratioCobertura != null ? s.ratioCobertura.toFixed(2) + 'x' : '—'}</td>
+                            <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
+                            <td className="num right pos" style={{ fontWeight: 600 }}>{s.aPedir}</td>
+                            <td className="num right">{fmtCurrency(s.costoEstimado)}</td>
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                });
+              })()}
               {filtered.length === 0 && (
-                <tr><td colSpan="10" className="empty" style={{ padding: 'var(--s-6)' }}>
+                <tr><td colSpan="11" className="empty" style={{ padding: 'var(--s-6)' }}>
                   🎉 Sin SKUs que pedir en este filtro · todo el stock está cubierto
                 </td></tr>
               )}
@@ -1806,6 +1881,7 @@ function InventarioPage() {
   const [search, setSearch] = useState('');
   const [del, setDel] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [expandedModels, setExpandedModels] = useState({}); // key 'cat|mk|modelo' → bool
 
   let filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
   if (search) {
@@ -1900,46 +1976,111 @@ function InventarioPage() {
             if (ib === -1) return -1;
             return ia - ib;
           });
+          // Dentro de cada categoría agrupar por marca+modelo (un row por
+          // modelo; cada color es child que se despliega inline).
+          const buildModelGroups = (items) => {
+            const byModel = {};
+            items.forEach(s => {
+              const modelo = s.modelo || s.nm || '';
+              const key = `${s.mk || '—'}|${modelo}`;
+              (byModel[key] ||= { mk: s.mk || '—', modelo, items: [] }).items.push(s);
+            });
+            return Object.values(byModel).sort((a, b) =>
+              naturalCmp(a.mk, b.mk) || naturalCmp(a.modelo, b.modelo)
+            );
+          };
+          // Peor estado entre variantes de color → estado del modelo
+          const ESTADO_RANK = { critico: 4, atencion: 3, en_reposicion: 2, ok: 1, sin_movimiento: 0 };
+          const estadoPeor = (items) => items.reduce((peor, s) =>
+            (ESTADO_RANK[s.estado] || 0) > (ESTADO_RANK[peor] || 0) ? s.estado : peor, 'ok');
           return (
           <table className="data">
             <thead><tr>
-              <th>SKU</th><th>Marca</th>
-              <th className="right">Stock</th><th className="right">En camino</th>
-              <th className="right">CPP</th><th className="right">Precio</th>
-              <th className="right">Margen</th><th>Estado</th><th></th>
+              <th></th><th>Marca · Modelo</th>
+              <th className="right">Variantes</th>
+              <th className="right">Stock total</th><th className="right">En camino</th>
+              <th className="right">CPP prom</th><th className="right">Precio</th>
+              <th className="right">Margen</th><th>Estado</th>
             </tr></thead>
             <tbody>
               {cats.map(cat => {
                 const items = grouped[cat];
                 const totalStock = items.reduce((sum, x) => sum + (x.s || 0), 0);
                 const totalCapital = items.reduce((sum, x) => sum + ((x.s || 0) * (x.cpp || 0)), 0);
+                const modelos = buildModelGroups(items);
                 return (
                   <React.Fragment key={cat}>
                     <tr style={{ background: 'var(--surface-2)' }}>
                       <td colSpan="9" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 12, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                         {cat} <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--text-3)', fontSize: 11, textTransform: 'none', letterSpacing: 0 }}>
-                          {items.length} SKU{items.length !== 1 ? 's' : ''} · {fmtNum(totalStock)} ud · {fmtCurrency(totalCapital)} en stock
+                          {modelos.length} modelo{modelos.length !== 1 ? 's' : ''} · {items.length} SKU{items.length !== 1 ? 's' : ''} · {fmtNum(totalStock)} ud · {fmtCurrency(totalCapital)} en stock
                         </span>
                       </td>
                     </tr>
-                    {items.map(s => {
-                      const margen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
-                      const badgeCls = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+                    {modelos.map(g => {
+                      const key = `${cat}|${g.mk}|${g.modelo}`;
+                      const expanded = !!expandedModels[key];
+                      const totS = g.items.reduce((s, x) => s + (x.s || 0), 0);
+                      const totEC = g.items.reduce((s, x) => s + (x.enCamino || 0), 0);
+                      const cppProm = g.items.length > 0
+                        ? g.items.reduce((s, x) => s + (x.cpp || 0), 0) / g.items.length : 0;
+                      const pvAlguno = g.items.find(x => x.pv > 0)?.pv || 0;
+                      const margen = pvAlguno > 0 ? Math.round(((pvAlguno - cppProm) / pvAlguno) * 100) : 0;
+                      const est = estadoPeor(g.items);
+                      const badgeCls = est === 'critico' ? 'danger' : est === 'atencion' ? 'warning' : est === 'ok' ? 'success' : 'neutral';
                       return (
-                        <tr key={s.id}>
-                          <td>
-                            <div><span className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{s.id}</span></div>
-                            <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>{s.nm}</div>
-                          </td>
-                          <td>{s.mk}</td>
-                          <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
-                          <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
-                          <td className="num right">{fmtCurrency(s.cpp)}</td>
-                          <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
-                          <td className="num right muted">{s.pv > 0 ? margen + '%' : '—'}</td>
-                          <td><span className={`badge ${badgeCls}`}>{s.estado.replace('_', ' ')}</span></td>
-                          <td><button className="icon-btn danger" onClick={() => setDel(s)}>×</button></td>
-                        </tr>
+                        <React.Fragment key={key}>
+                          <tr style={{ cursor: g.items.length > 1 ? 'pointer' : 'default' }}
+                              onClick={() => g.items.length > 1 && setExpandedModels(m => ({ ...m, [key]: !m[key] }))}>
+                            <td style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 11 }}>
+                              {g.items.length > 1 ? (expanded ? '▼' : '▶') : ''}
+                            </td>
+                            <td>
+                              <div style={{ fontWeight: 500 }}>{g.mk} {g.modelo}</div>
+                              {g.items.length > 1 && !expanded && (
+                                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                                  {g.items.map(s => s.color).filter(Boolean).join(' · ') || g.items.map(s => s.id).join(' · ')}
+                                </div>
+                              )}
+                              {g.items.length === 1 && (
+                                <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{g.items[0].id}</div>
+                              )}
+                            </td>
+                            <td className="num right">{g.items.length}</td>
+                            <td className={`num right ${totS === 0 ? 'neg' : ''}`}>{totS}</td>
+                            <td className="num right" style={{ color: totEC > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{totEC || '—'}</td>
+                            <td className="num right">{fmtCurrency(cppProm)}</td>
+                            <td className="num right">{pvAlguno > 0 ? fmtCurrency(pvAlguno) : '—'}</td>
+                            <td className="num right muted">{pvAlguno > 0 ? margen + '%' : '—'}</td>
+                            <td><span className={`badge ${badgeCls}`}>{est.replace('_', ' ')}</span></td>
+                          </tr>
+                          {/* Children: cada color como sub-row */}
+                          {expanded && g.items.length > 1 && g.items.map(s => {
+                            const sBadge = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
+                            const sMargen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
+                            return (
+                              <tr key={s.id} style={{ background: 'var(--surface)' }}>
+                                <td></td>
+                                <td style={{ paddingLeft: 24 }}>
+                                  <div style={{ fontSize: 12 }}>↳ <strong>{s.color || s.id}</strong></div>
+                                  <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{s.id}</div>
+                                </td>
+                                <td></td>
+                                <td className={`num right ${s.s === 0 ? 'neg' : ''}`}>{s.s}</td>
+                                <td className="num right" style={{ color: s.enCamino > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enCamino || '—'}</td>
+                                <td className="num right">{fmtCurrency(s.cpp)}</td>
+                                <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
+                                <td className="num right muted">{s.pv > 0 ? sMargen + '%' : '—'}</td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                    <span className={`badge ${sBadge}`} style={{ fontSize: 9 }}>{s.estado.replace('_', ' ')}</span>
+                                    <button className="icon-btn danger" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); setDel(s); }}>×</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
                       );
                     })}
                   </React.Fragment>
