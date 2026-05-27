@@ -83,13 +83,14 @@
   .app.collapsed .brand { justify-content: center; padding: 0 0 var(--s-3) 0; }
   .app.collapsed aside > div[style*="margin-top: auto"] { display: none; }
   .nav-toggle {
-    position: absolute; right: -10px; top: 22px; z-index: 10;
-    width: 20px; height: 20px; border-radius: 50%; background: var(--surface);
+    position: absolute; right: -14px; top: 20px; z-index: 10;
+    width: 28px; height: 28px; border-radius: 50%; background: var(--surface);
     border: 1px solid var(--border); display: grid; place-items: center;
-    cursor: pointer; font-size: 11px; color: var(--text-2);
+    cursor: pointer; font-size: 16px; font-weight: 600; color: var(--text-2);
     transition: all 120ms ease;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
   }
-  .nav-toggle:hover { background: var(--surface-2); color: var(--text); border-color: var(--accent); }
+  .nav-toggle:hover { background: var(--accent); color: white; border-color: var(--accent); transform: scale(1.1); }
 
   /* Sidebar */
   .nav {
@@ -5751,8 +5752,8 @@ function App() {
     { id: 'alertas',     label: 'Alertas',     icon: '!', badge: alertCount, badgeColor: 'var(--danger)' },
     { id: 'ventas',      label: 'Ventas',      icon: '$', badge: (data.ventas || []).length },
     { id: 'inventario',  label: 'Inventario',  icon: '▤', badge: (data.skus || []).length },
-    { id: 'movimientos', label: 'Movimientos', icon: '⇆', badge: (data.cashflow || []).length },
     { id: 'finanzas',    label: 'Finanzas',    icon: '∮', badge: null },
+    { id: 'movimientos', label: 'Movimientos', icon: '⇆', badge: (data.cashflow || []).length },
   ];
 
   const showPeriod = ['overview', 'ventas', 'movimientos'].includes(page);
