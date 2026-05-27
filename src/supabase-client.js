@@ -461,8 +461,15 @@ async function loadFinanciero() {
         tasaMensual:   0,
         seguroMensual: 0,
         fechaInicio:   i.fecha_inicio || '',
+        plazoMeses:    parseInt(i.plazo_meses) || null,
         notas:         i.notas || '',
         balance:       parseFloat(i.monto_pactado_devolver) || 0,
+        // Metodo de compensacion + campos contextuales
+        tipoCompensacion: i.tipo_compensacion || 'FLAT',
+        pctAplicado:    i.pct_aplicado    != null ? parseFloat(i.pct_aplicado)    : null,
+        cuotaMensual:   i.cuota_mensual   != null ? parseFloat(i.cuota_mensual)   : null,
+        bonusThreshold: i.bonus_threshold != null ? parseFloat(i.bonus_threshold) : null,
+        capDevolver:    i.cap_devolver    != null ? parseFloat(i.cap_devolver)    : null,
       });
     });
 
@@ -645,14 +652,26 @@ function _buildFinancieroProductos() {
     } else if (t.includes('inversor')) {
       const pagosCF = cf.filter((m) => m.c === 'Pago a Inversores');
       const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0), 0);
+      // Para ROYALTY usamos el cap; para los demas el monto_pactado_devolver
+      const targetTotal = r.tipoCompensacion === 'ROYALTY' && r.capDevolver
+        ? r.capDevolver
+        : r.balance;
+      const multiplicador = r.montoTotal > 0 ? targetTotal / r.montoTotal : 0;
       productos['FIN-I'].push({
         ...base,
-        tipoSub:   'Inversor 2×',
-        aporte:    r.montoTotal,
-        retorno:   r.balance,
+        tipoSub:       `Inversor ${multiplicador.toFixed(1)}×`,
+        aporte:        r.montoTotal,
+        retorno:       targetTotal,
         pagado,
-        pendiente: r.balance - pagado,
-        meta:      48,
+        pendiente:     Math.max(0, targetTotal - pagado),
+        meta:          r.plazoMeses || 48,
+        // Pasar los campos de compensacion hasta el panel
+        tipoCompensacion: r.tipoCompensacion || 'FLAT',
+        pctAplicado:      r.pctAplicado,
+        cuotaMensual:     r.cuotaMensual,
+        bonusThreshold:   r.bonusThreshold,
+        capDevolver:      r.capDevolver,
+        plazoMeses:       r.plazoMeses,
         movimientos: pagosCF.map((m) => ({
           id:    'pi-' + m._airtableId,
           fecha: m.f,
@@ -1417,6 +1436,11 @@ async function createInversor(data) {
                              : await _ensureContraparteId(data.nombre, 'INVERSOR'),
     activa:                 true,
     notas:                  data.notas || '',
+    tipo_compensacion:      data.tipoCompensacion || 'FLAT',
+    pct_aplicado:           data.pctAplicado    != null && data.pctAplicado    !== '' ? Number(data.pctAplicado)    : null,
+    cuota_mensual:          data.cuotaMensual   != null && data.cuotaMensual   !== '' ? Number(data.cuotaMensual)   : null,
+    bonus_threshold:        data.bonusThreshold != null && data.bonusThreshold !== '' ? Number(data.bonusThreshold) : null,
+    cap_devolver:           data.capDevolver    != null && data.capDevolver    !== '' ? Number(data.capDevolver)    : null,
   };
   const { data: ins, error } = await sb.from('inversores').insert(row).select().single();
   if (error) throw new Error(`createInversor: ${error.message}`);
@@ -1435,6 +1459,11 @@ async function updateInversor(id, patch) {
   if (patch.contraparteId        != null) row.contraparte_id = patch.contraparteId ? Number(patch.contraparteId) : null;
   if (patch.notas                != null) row.notas = patch.notas;
   if (patch.activa               != null) row.activa = !!patch.activa;
+  if (patch.tipoCompensacion     != null) row.tipo_compensacion = patch.tipoCompensacion;
+  if (patch.pctAplicado          !== undefined) row.pct_aplicado    = patch.pctAplicado    === '' || patch.pctAplicado    == null ? null : Number(patch.pctAplicado);
+  if (patch.cuotaMensual         !== undefined) row.cuota_mensual   = patch.cuotaMensual   === '' || patch.cuotaMensual   == null ? null : Number(patch.cuotaMensual);
+  if (patch.bonusThreshold       !== undefined) row.bonus_threshold = patch.bonusThreshold === '' || patch.bonusThreshold == null ? null : Number(patch.bonusThreshold);
+  if (patch.capDevolver          !== undefined) row.cap_devolver    = patch.capDevolver    === '' || patch.capDevolver    == null ? null : Number(patch.capDevolver);
   const { data, error } = await sb.from('inversores').update(row).eq('id', id).select().single();
   if (error) throw new Error(`updateInversor: ${error.message}`);
   await loadFinanciero();

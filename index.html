@@ -2682,7 +2682,7 @@ function DetalleUsosTarjeta({ item, cashflow }) {
 // Para inversores externos: muestra los pagos hechos a esa persona con
 // running balance pendiente. Para aportes del dueño: muestra los aportes
 // recibidos del dueño (que NO son deudas).
-function DetalleInversorMovs({ item, cashflow, esDueno }) {
+function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
   const cf = (cashflow || []);
   const concepto = esDueno ? 'Aportes para negocio' : 'Pago a Inversores';
   const nameTokens = (item.nombre || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
@@ -2690,12 +2690,26 @@ function DetalleInversorMovs({ item, cashflow, esDueno }) {
     const txt = ((m.a || '') + ' ' + (m.notas || '')).toLowerCase();
     return m.c === concepto && nameTokens.some(t => txt.includes(t));
   }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
-  let saldo = esDueno ? 0 : Number(item.balance || 0); // dueño: acumular aportes; inversor: empezar con deuda total
+  const tipoComp = productoExt?.tipoCompensacion || item.tipoCompensacion || 'FLAT';
+  const meta = TIPO_COMPENSACION_META[tipoComp] || TIPO_COMPENSACION_META.FLAT;
+  const target = tipoComp === 'ROYALTY' && productoExt?.capDevolver ? productoExt.capDevolver : Number(item.balance || 0);
+  let saldo = esDueno ? 0 : target; // dueño: acumular aportes; inversor: empezar con deuda total
   const rows = movs.map(m => {
     const delta = esDueno ? (m.e || 0) : -(m.s || 0);
     saldo += delta;
     return { ...m, monto: m.e || m.s, saldoDespues: saldo };
   }).reverse();
+  const totalPagado = movs.reduce((s, m) => s + (m.s || 0), 0);
+  // Velocidad: monto pagado dividido entre meses transcurridos
+  let mesesTrans = 1;
+  if (item.fechaInicio) {
+    const fechaIni = new Date(item.fechaInicio);
+    const hoy = new Date();
+    mesesTrans = Math.max(1, (hoy - fechaIni) / (30.4 * 86400000));
+  }
+  const ritmoMensual = totalPagado / mesesTrans;
+  const pendiente = Math.max(0, target - totalPagado);
+  const etaMeses = ritmoMensual > 0 ? Math.ceil(pendiente / ritmoMensual) : null;
   return (
     <div className="section">
       <div className="section-head">
@@ -2707,13 +2721,39 @@ function DetalleInversorMovs({ item, cashflow, esDueno }) {
             {movs.length} movimientos ·
             {esDueno
               ? ` total aportado ${fmtCurrency(item.totalPagado || saldo)}`
-              : ` deuda restante ${fmtCurrency(Math.max(0, saldo))}`}
+              : ` deuda restante ${fmtCurrency(pendiente)}`}
           </div>
         </div>
         {esDueno
           ? <span className="badge success">DUEÑO · no es deuda</span>
-          : <span className="badge neutral">Inversor externo</span>}
+          : <span className="badge" style={{ background: meta.color, color: 'white' }}>{meta.label}</span>}
       </div>
+
+      {!esDueno && (
+        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', borderLeft: `3px solid ${meta.color}` }}>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>{meta.desc}</div>
+          <div className="grid-3" style={{ fontSize: 11 }}>
+            {productoExt?.pctAplicado != null && (
+              <div><span className="muted">% aplicado:</span> <b>{productoExt.pctAplicado}%</b></div>
+            )}
+            {productoExt?.cuotaMensual != null && (
+              <div><span className="muted">Cuota fija:</span> <b>RD${productoExt.cuotaMensual}/mes</b></div>
+            )}
+            {productoExt?.bonusThreshold != null && (
+              <div><span className="muted">Target bonus:</span> <b>RD${productoExt.bonusThreshold}/mes</b></div>
+            )}
+            {productoExt?.plazoMeses && (
+              <div><span className="muted">Plazo:</span> <b>{productoExt.plazoMeses} meses</b></div>
+            )}
+            {productoExt?.capDevolver && (
+              <div><span className="muted">Cap:</span> <b>{fmtCurrency(productoExt.capDevolver)}</b></div>
+            )}
+            <div><span className="muted">Ritmo actual:</span> <b>RD${ritmoMensual.toFixed(0)}/mo</b></div>
+            <div><span className="muted">ETA al cierre:</span> <b>{etaMeses != null && etaMeses < 600 ? `${etaMeses} meses` : '—'}</b></div>
+            <div><span className="muted">Progreso:</span> <b>{((totalPagado / target) * 100).toFixed(1)}%</b></div>
+          </div>
+        </div>
+      )}
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
@@ -3449,6 +3489,46 @@ function FormMovFinScoped({ item, kind, onDone }) {
 }
 
 // ─── Form Crear Inversor ─────────────────────────────────────────
+// 6 metodos de compensacion para inversores — labels + descripcion + colores
+const TIPO_COMPENSACION_META = {
+  FLAT: {
+    label: '1 · Multiplicador Flat',
+    desc: 'Capital × N, paga libre sin plazo. Sin presion mensual.',
+    color: 'var(--text-2)',
+    fields: ['retorno'],
+  },
+  AMORTIZACION: {
+    label: '2 · Amortización Fija',
+    desc: 'Cuota mensual fija estilo préstamo. Predictable.',
+    color: 'var(--info, #4a9eff)',
+    fields: ['retorno', 'plazo'],
+  },
+  PCT_GANANCIA: {
+    label: '3 · % de Ganancia por Venta',
+    desc: 'Cada venta, X% de la ganancia bruta al inversor. Cero presion fija.',
+    color: 'var(--success)',
+    fields: ['retorno', 'pct'],
+  },
+  PCT_REVENUE: {
+    label: '4 · % de Revenue por Venta',
+    desc: 'Cada venta, X% del precio facturado. Mas simple de trackear que ganancia.',
+    color: 'var(--success)',
+    fields: ['retorno', 'pct'],
+  },
+  CUOTA_BONUS: {
+    label: '5 · Cuota Fija + Bonus',
+    desc: 'Cuota mensual baja + bonus % cuando ventas mes superan target.',
+    color: 'var(--warning)',
+    fields: ['retorno', 'cuotaMensual', 'bonusThreshold', 'pct'],
+  },
+  ROYALTY: {
+    label: '6 · Royalty Perpetuo Capado',
+    desc: 'X% de toda venta indefinido, hasta llegar al cap.',
+    color: 'var(--danger)',
+    fields: ['cap', 'pct'],
+  },
+};
+
 function FormInversor({ onDone }) {
   const data = useATData();
   const personas = (data._contrapartes || []).filter(c => c.tipo === 'INVERSOR' || c.tipo === 'PERSONA_OPERATIVA' || c.tipo === 'CLIENTE_FAMILIAR');
@@ -3459,22 +3539,54 @@ function FormInversor({ onDone }) {
   const [plazo, setPlazo] = useState('');
   const [contraparte, setContraparte] = useState('');
   const [notas, setNotas] = useState('');
+  const [tipoComp, setTipoComp] = useState('FLAT');
+  const [pct, setPct] = useState('');
+  const [cuotaMensual, setCuotaMensual] = useState('');
+  const [bonusThreshold, setBonusThreshold] = useState('');
+  const [cap, setCap] = useState('');
   const [busy, setBusy] = useState(false);
+  const meta = TIPO_COMPENSACION_META[tipoComp];
+  const shows = (f) => meta.fields.includes(f);
   const valid = nombre.length > 1 && Number(capital) > 0;
+
+  // Para AMORTIZACION: auto-calc cuota si retorno + plazo
+  const cuotaCalculada = tipoComp === 'AMORTIZACION' && Number(retorno) > 0 && Number(plazo) > 0
+    ? (Number(retorno) / Number(plazo)).toFixed(2)
+    : null;
+  // Velocidad estimada
+  const velocidadHint = (() => {
+    const cap_ = Number(capital) || 0;
+    const ret_ = Number(retorno) || cap_ * 2;
+    const pct_ = Number(pct) || 0;
+    if (tipoComp === 'AMORTIZACION' && Number(plazo) > 0) return `~${plazo} meses · cuota RD$${(ret_/plazo).toFixed(0)}/mes`;
+    if (tipoComp === 'PCT_GANANCIA' && pct_ > 0) return `A 15 ventas/mes con ganancia RD$800: ~${Math.ceil(ret_/(pct_/100*800*15))} meses`;
+    if (tipoComp === 'PCT_REVENUE'  && pct_ > 0) return `A 15 ventas/mes de RD$2000: ~${Math.ceil(ret_/(pct_/100*2000*15))} meses`;
+    if (tipoComp === 'CUOTA_BONUS' && Number(cuotaMensual) > 0) return `Cuota piso RD$${cuotaMensual}/mes + bonus`;
+    if (tipoComp === 'ROYALTY' && pct_ > 0) return `A 15 ventas/mes de RD$2000: ~${Math.ceil((Number(cap)||ret_)/(pct_/100*2000*15))} meses al cap`;
+    if (tipoComp === 'FLAT') return 'Sin plazo · ritmo libre';
+    return '';
+  })();
+
   const onSubmit = async () => {
     setBusy(true);
     try {
       await window.AT_CLIENT.createInversor({
         nombre,
         capitalInvertido: Number(capital),
-        montoPactadoDevolver: Number(retorno) || Number(capital) * 2,  // default 2× capital
+        montoPactadoDevolver: Number(retorno) || Number(capital) * 2,
         fechaInicio: fechaInicio || null,
         plazoMeses: plazo || null,
         contraparteId: contraparte || null,
         notas,
+        tipoCompensacion: tipoComp,
+        pctAplicado:    shows('pct') ? pct : null,
+        cuotaMensual:   shows('cuotaMensual') ? cuotaMensual : (tipoComp === 'AMORTIZACION' && cuotaCalculada ? cuotaCalculada : null),
+        bonusThreshold: shows('bonusThreshold') ? bonusThreshold : null,
+        capDevolver:    shows('cap') ? cap : null,
       });
-      window.toastOk('Inversor creado', `${nombre} · aporte ${fmtCurrency(capital)}`);
+      window.toastOk('Inversor creado', `${nombre} · ${meta.label}`);
       setNombre(''); setCapital(''); setRetorno(''); setNotas('');
+      setPct(''); setCuotaMensual(''); setBonusThreshold(''); setCap('');
       onDone?.();
     } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
     setBusy(false);
@@ -3490,21 +3602,72 @@ function FormInversor({ onDone }) {
             {personas.map(c => <option key={c.id} value={c.id}>{c.nombre} ({c.tipo})</option>)}
           </select></div>
       </div>
-      <div className="row-3">
-        <div className="field"><div className="field-label">Capital invertido</div>
-          <input className="input num" type="number" value={capital} onChange={e => setCapital(e.target.value)} placeholder="50000" /></div>
-        <div className="field"><div className="field-label">Monto a devolver</div>
-          <input className="input num" type="number" value={retorno} onChange={e => setRetorno(e.target.value)} placeholder={capital ? (capital * 2) : '100000'} />
-          <div className="field-hint">Default 2× capital si vacío</div></div>
-        <div className="field"><div className="field-label">Plazo (meses)</div>
-          <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="48" /></div>
+
+      <div className="field">
+        <div className="field-label">Método de compensación</div>
+        <select className="select" value={tipoComp} onChange={e => setTipoComp(e.target.value)}>
+          {Object.entries(TIPO_COMPENSACION_META).map(([k, m]) => (
+            <option key={k} value={k}>{m.label}</option>
+          ))}
+        </select>
+        <div className="field-hint" style={{ color: meta.color, fontWeight: 500, marginTop: 4 }}>{meta.desc}</div>
       </div>
-      <div className="row">
+
+      <div className="row-2">
+        <div className="field"><div className="field-label">Capital invertido (RD$)</div>
+          <input className="input num" type="number" value={capital} onChange={e => setCapital(e.target.value)} placeholder="50000" /></div>
         <div className="field"><div className="field-label">Fecha inicio</div>
           <input className="input num" type="date" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} /></div>
-        <div className="field"><div className="field-label">Notas</div>
-          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
       </div>
+
+      {/* Campos contextuales según método */}
+      {(shows('retorno') || shows('plazo') || shows('pct') || shows('cap') || shows('cuotaMensual') || shows('bonusThreshold')) && (
+        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${meta.color}` }}>
+          <div style={{ fontSize: 11, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 8 }}>
+            Parámetros · {meta.label}
+          </div>
+          <div className="row-3">
+            {shows('retorno') && (
+              <div className="field"><div className="field-label">Monto total a devolver (cap)</div>
+                <input className="input num" type="number" value={retorno} onChange={e => setRetorno(e.target.value)} placeholder={capital ? String(capital * 2) : '100000'} />
+                <div className="field-hint">Default 2× capital</div></div>
+            )}
+            {shows('cap') && (
+              <div className="field"><div className="field-label">Cap máximo (RD$)</div>
+                <input className="input num" type="number" value={cap} onChange={e => setCap(e.target.value)} placeholder={capital ? String(capital * 3) : '150000'} />
+                <div className="field-hint">Royalty termina al llegar aquí</div></div>
+            )}
+            {shows('plazo') && (
+              <div className="field"><div className="field-label">Plazo (meses)</div>
+                <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="24" />
+                {cuotaCalculada && <div className="field-hint">Cuota auto: RD${cuotaCalculada}/mes</div>}</div>
+            )}
+            {shows('pct') && (
+              <div className="field"><div className="field-label">{tipoComp === 'CUOTA_BONUS' ? 'Bonus % de ganancia' : '% aplicado'}</div>
+                <input className="input num" type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} placeholder={tipoComp === 'ROYALTY' ? '3' : '15'} />
+                <div className="field-hint">{tipoComp === 'PCT_REVENUE' ? '% del precio' : tipoComp === 'PCT_GANANCIA' ? '% de la ganancia' : tipoComp === 'ROYALTY' ? '% de revenue indefinido' : '% extra cuando supera threshold'}</div></div>
+            )}
+            {shows('cuotaMensual') && (
+              <div className="field"><div className="field-label">Cuota piso mensual (RD$)</div>
+                <input className="input num" type="number" value={cuotaMensual} onChange={e => setCuotaMensual(e.target.value)} placeholder="2000" /></div>
+            )}
+            {shows('bonusThreshold') && (
+              <div className="field"><div className="field-label">Target ventas/mes (RD$)</div>
+                <input className="input num" type="number" value={bonusThreshold} onChange={e => setBonusThreshold(e.target.value)} placeholder="40000" />
+                <div className="field-hint">Bonus activa al superar</div></div>
+            )}
+          </div>
+          {velocidadHint && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
+              <b>Velocidad estimada:</b> {velocidadHint}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="field"><div className="field-label">Notas</div>
+        <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear inversor'}</button>
       </div>
@@ -3604,17 +3767,28 @@ function FinanzasPage() {
   };
 
   // ── Editar Inversor ───────────────────────────────
-  const openEditInversor = (i) => setEdit({
-    kind: 'inversor', id: String(i._airtableId).slice(2),
-    title: `Editar inversor · ${i.nombre}`,
-    fields: [
-      { name: 'nombre', label: 'Nombre', value: i.nombre, span: 2 },
-      { name: 'capitalInvertido', label: 'Capital invertido', type: 'number', value: i.montoTotal ?? '' },
-      { name: 'montoPactadoDevolver', label: 'Monto a devolver', type: 'number', value: i.balance ?? '' },
-      { name: 'fechaInicio', label: 'Fecha inicio', type: 'date', value: i.fechaInicio || '' },
-      { name: 'notas', label: 'Notas', value: i.notas || i.nota || '', span: 2 },
-    ],
-  });
+  const openEditInversor = (i) => {
+    const ext = (data.productos?.['FIN-I'] || []).find(p => p._airtableId === i._airtableId) || {};
+    const tipoComp = ext.tipoCompensacion || i.tipoCompensacion || 'FLAT';
+    setEdit({
+      kind: 'inversor', id: String(i._airtableId).slice(2),
+      title: `Editar inversor · ${i.nombre}`,
+      fields: [
+        { name: 'nombre', label: 'Nombre', value: i.nombre, span: 2 },
+        { name: 'tipoCompensacion', label: 'Método de compensación', type: 'select', value: tipoComp,
+          options: Object.entries(TIPO_COMPENSACION_META).map(([k, m]) => ({ value: k, label: m.label })) },
+        { name: 'capitalInvertido', label: 'Capital invertido', type: 'number', value: i.montoTotal ?? '' },
+        { name: 'montoPactadoDevolver', label: 'Monto a devolver (cap)', type: 'number', value: i.balance ?? '' },
+        { name: 'fechaInicio', label: 'Fecha inicio', type: 'date', value: i.fechaInicio || '' },
+        { name: 'plazoMeses', label: 'Plazo (meses)', type: 'number', value: ext.plazoMeses ?? '' },
+        { name: 'pctAplicado', label: '% aplicado', type: 'number', value: ext.pctAplicado ?? '' },
+        { name: 'cuotaMensual', label: 'Cuota mensual fija', type: 'number', value: ext.cuotaMensual ?? '' },
+        { name: 'bonusThreshold', label: 'Target ventas/mes (bonus)', type: 'number', value: ext.bonusThreshold ?? '' },
+        { name: 'capDevolver', label: 'Cap royalty', type: 'number', value: ext.capDevolver ?? '' },
+        { name: 'notas', label: 'Notas', value: i.notas || i.nota || '', span: 2 },
+      ],
+    });
+  };
 
   const doSaveEdit = async (values) => {
     setEditBusy(true);
@@ -3652,6 +3826,12 @@ function FinanzasPage() {
           capitalInvertido: Number(values.capitalInvertido) || 0,
           montoPactadoDevolver: Number(values.montoPactadoDevolver) || 0,
           fechaInicio: values.fechaInicio || null,
+          plazoMeses: values.plazoMeses === '' ? null : Number(values.plazoMeses),
+          tipoCompensacion: values.tipoCompensacion || 'FLAT',
+          pctAplicado: values.pctAplicado === '' ? null : values.pctAplicado,
+          cuotaMensual: values.cuotaMensual === '' ? null : values.cuotaMensual,
+          bonusThreshold: values.bonusThreshold === '' ? null : values.bonusThreshold,
+          capDevolver: values.capDevolver === '' ? null : values.capDevolver,
           notas: values.notas,
         });
       }
@@ -3982,17 +4162,44 @@ function FinanzasPage() {
             window.toastOk(isDueno(i) ? 'Desmarcado como dueño' : 'Marcado como dueño', i.nombre);
           } catch (e) { window.toastErr('No se pudo marcar', e.message?.slice(0, 120)); }
         };
+        // Compute pendiente real + pagado real + ETA + velocidad por inversor
+        const computeMetricas = (i) => {
+          const ext = (data.productos?.['FIN-I'] || []).find(p => p._airtableId === i._airtableId);
+          // Pagado viene del productoExt (mismo cálculo que usa el panel Resumen)
+          // Fallback: recomputar desde cashflow si no hay ext.
+          let pagado = ext?.pagado || 0;
+          if (!ext) {
+            pagado = (data.cashflow || []).filter(m => m.c === 'Pago a Inversores')
+              .reduce((s, m) => s + (m.s || 0), 0);
+          }
+          const tipo = ext?.tipoCompensacion || i.tipoCompensacion || 'FLAT';
+          const meta = TIPO_COMPENSACION_META[tipo] || TIPO_COMPENSACION_META.FLAT;
+          const target = tipo === 'ROYALTY' && ext?.capDevolver ? ext.capDevolver : i.balance;
+          const pendiente = Math.max(0, target - pagado);
+          // Velocidad: monto pagado / meses transcurridos
+          let meses = 1;
+          if (pagado > 0 && i.fechaInicio) {
+            const fechaIni = new Date(i.fechaInicio);
+            const hoy = new Date();
+            meses = Math.max(1, (hoy - fechaIni) / (30.4 * 86400000));
+          }
+          const ritmoMensual = pagado / meses;
+          const etaMeses = ritmoMensual > 0 ? Math.ceil(pendiente / ritmoMensual) : null;
+          return { tipo, meta, target, pagado, pendiente, ritmoMensual, etaMeses, ext };
+        };
+
         const renderTabla = (items, emptyMsg) => (
           <table className="data">
             <thead><tr>
-              <th>Nombre</th><th className="right">Capital</th>
-              <th className="right">A devolver</th><th className="right">Pagado</th>
-              <th className="right">Pendiente</th><th></th>
+              <th>Nombre</th><th>Método</th><th className="right">Capital</th>
+              <th className="right">Target</th><th className="right">Pagado</th>
+              <th className="right">Pendiente · ETA</th><th></th>
             </tr></thead>
             <tbody>
               {items.map(i => {
                 const dueno = isDueno(i);
                 const isSelected = selectedId === i._airtableId;
+                const m = computeMetricas(i);
                 return (
                   <tr key={i._airtableId}
                     style={{ cursor: 'pointer', background: isSelected ? 'var(--surface-2)' : undefined }}
@@ -4001,10 +4208,28 @@ function FinanzasPage() {
                       {i.nombre}
                       {dueno && <span className="badge success" style={{ marginLeft: 6, fontSize: 9 }}>👤 DUEÑO</span>}
                     </td>
+                    <td>
+                      {dueno ? <span className="muted">—</span> : (
+                        <span className="badge" style={{ background: m.meta.color, color: 'white', fontSize: 9, fontWeight: 600 }}>
+                          {m.meta.label.replace(/^\d+\s·\s/, '')}
+                        </span>
+                      )}
+                    </td>
                     <td className="num right">{fmtCurrency(i.montoTotal)}</td>
-                    <td className="num right">{dueno ? '—' : fmtCurrency(i.balance)}</td>
-                    <td className="num right pos">{fmtCurrency(i.totalPagado)}</td>
-                    <td className="num right neg">{dueno ? '—' : fmtCurrency((i.balance || 0) - (i.totalPagado || 0))}</td>
+                    <td className="num right">{dueno ? '—' : fmtCurrency(m.target)}</td>
+                    <td className="num right pos">{fmtCurrency(m.pagado)}</td>
+                    <td className="num right">
+                      {dueno ? '—' : (
+                        <div>
+                          <div className="neg">{fmtCurrency(m.pendiente)}</div>
+                          {m.etaMeses != null && m.etaMeses < 600 && (
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
+                              ~{m.etaMeses}mo · RD${m.ritmoMensual.toFixed(0)}/mo
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="row-actions" onClick={e => e.stopPropagation()}>
                       <div className="row-actions-inner">
                         <button className="icon-btn" title={dueno ? 'Quitar marca de dueño' : 'Marcar como dueño (es aporte propio, no inversor externo)'}
@@ -4017,7 +4242,7 @@ function FinanzasPage() {
                 );
               })}
               {items.length === 0 && (
-                <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>{emptyMsg}</td></tr>
+                <tr><td colSpan="7" className="empty" style={{ padding: 'var(--s-6)' }}>{emptyMsg}</td></tr>
               )}
             </tbody>
           </table>
@@ -4046,7 +4271,8 @@ function FinanzasPage() {
           {selectedId && (() => {
             const sel = allInv.find(i => i._airtableId === selectedId);
             if (!sel) return null;
-            return <DetalleInversorMovs item={sel} cashflow={data.cashflow || []} esDueno={isDueno(sel)} />;
+            const productoExt = (data.productos?.['FIN-I'] || []).find(p => p._airtableId === sel._airtableId);
+            return <DetalleInversorMovs item={sel} cashflow={data.cashflow || []} esDueno={isDueno(sel)} productoExt={productoExt} />;
           })()}
         </>);
       })()}
