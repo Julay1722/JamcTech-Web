@@ -4737,15 +4737,58 @@ function simularPagos(tipo, params, escenario) {
 }
 
 function SimuladorModal({ open, tipo, params, onClose }) {
+  const data = useATData();
   const meta = TIPO_COMPENSACION_META[tipo];
   const example = meta?.simExample || {};
-  // Escenario editable — defaults del ejemplo del método
-  const [ventasMes, setVentasMes] = useState(example.ventasMes ?? 15);
-  const [ticketProm, setTicketProm] = useState(example.ticketProm ?? 2000);
-  const [margen, setMargen] = useState(example.margen ?? 42);
-  const [pagoMensual, setPagoMensual] = useState(example.cuotaMensual ?? 4000);
-  const [drawdownProm, setDrawdownProm] = useState(example.drawdownProm ?? 10000);
-  const [gastoProm, setGastoProm] = useState(example.gastoProm ?? 5000);
+
+  // Calcula defaults REALES desde la data del negocio (no del ejemplo).
+  // Ventas/mes promedio = ventas totales / # meses con ventas.
+  // Ticket promedio = revenue total / # ventas.
+  // Margen promedio = ganancia / revenue × 100.
+  const realDefaults = useMemo(() => {
+    const ventas = data.ventas || [];
+    const ventasReales = ventas.filter(v => v.idVenta !== 'V-LEG-0000');
+    if (ventasReales.length === 0) return null;
+    const revenue   = ventasReales.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+    const ganancia  = ventasReales.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const mesesUnicos = new Set(ventasReales.map(v => (v.fecha || '').slice(0, 7))).size;
+    const nMeses = Math.max(1, mesesUnicos);
+    // Drawdown promedio: salidas APORTE_DUENO si las hay (raro), o fallback
+    // Gasto promedio: salidas operativas mensuales / nMeses
+    const cf = data.cashflow || [];
+    const gastosOp = cf.filter(m => m.s > 0 && /pago|gasto|compra|envio|courier/i.test(m.c || ''));
+    const gastoPromMensual = gastosOp.length > 0
+      ? gastosOp.reduce((s, m) => s + (m.s || 0), 0) / nMeses
+      : 0;
+    return {
+      ventasMes:   ventasReales.length / nMeses,
+      ticketProm:  revenue / ventasReales.length,
+      margen:      revenue > 0 ? (ganancia / revenue) * 100 : 0,
+      drawdownProm: gastoPromMensual / 5,   // estimación conservadora
+      gastoProm:    gastoPromMensual / 10,  // estimación conservadora
+      _meta: { revenue, ganancia, nMeses, nVentas: ventasReales.length },
+    };
+  }, [data.ventas, data.cashflow]);
+
+  // Escenario editable — usa data real cuando hay, fallback al ejemplo
+  const pickDefault = (key, fallback) => {
+    if (realDefaults && realDefaults[key] != null && realDefaults[key] > 0) return realDefaults[key];
+    return example[key] ?? fallback;
+  };
+  const [ventasMes, setVentasMes]     = useState(pickDefault('ventasMes', 15));
+  const [ticketProm, setTicketProm]   = useState(pickDefault('ticketProm', 2000));
+  const [margen, setMargen]           = useState(pickDefault('margen', 42));
+  const [pagoMensual, setPagoMensual] = useState(example.cuotaMensual ?? params?.cuotaMensual ?? 4000);
+  const [drawdownProm, setDrawdownProm] = useState(pickDefault('drawdownProm', 10000));
+  const [gastoProm, setGastoProm]     = useState(pickDefault('gastoProm', 5000));
+  // Reset valores cuando se reabre el modal con un tipo distinto o data cambia
+  useEffect(() => {
+    if (open && realDefaults) {
+      setVentasMes(pickDefault('ventasMes', 15));
+      setTicketProm(pickDefault('ticketProm', 2000));
+      setMargen(pickDefault('margen', 42));
+    }
+  }, [open, tipo]);
   if (!open || !meta) return null;
 
   const escenario = { ventasMes, ticketProm, margen, pagoMensual, drawdownProm, gastoProm };
@@ -4771,7 +4814,14 @@ function SimuladorModal({ open, tipo, params, onClose }) {
         </div>
 
         {/* Escenario editable */}
-        <div className="field-label" style={{ marginBottom: 8 }}>Escenario · ajustá los inputs para ver el efecto</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div className="field-label" style={{ margin: 0 }}>Escenario · ajustá los inputs para ver el efecto</div>
+          {realDefaults && (
+            <span style={{ fontSize: 10, color: 'var(--success)' }}>
+              📊 auto-llenado de tu data ({realDefaults._meta.nVentas} ventas · {realDefaults._meta.nMeses} meses)
+            </span>
+          )}
+        </div>
         <div className="row-3" style={{ marginBottom: 'var(--s-3)' }}>
           {showsVentas && (
             <div className="field"><div className="field-label">Ventas/mes</div>
