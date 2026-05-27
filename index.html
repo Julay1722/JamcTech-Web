@@ -3224,7 +3224,8 @@ function FinanzasPage() {
         </>);
       })()}
 
-      {/* CUENTAS DE BANCO — tabla + ledger contable inline al seleccionar */}
+      {/* CUENTAS DE BANCO — solo DEBITO + EFECTIVO. Las CREDITO (tarjetas
+          legacy en tabla cuentas) viven ahora en el tab Tarjetas. */}
       {subtab === 'cuentas' && (<>
         <div className="section">
           <table className="data">
@@ -3234,7 +3235,7 @@ function FinanzasPage() {
               <th className="right">Límite crédito</th><th></th>
             </tr></thead>
             <tbody>
-              {cuentas.map(c => {
+              {cuentas.filter(c => c.tipo !== 'CREDITO').map(c => {
                 // Saldo actual = sum(entrada) - sum(salida) de cashflow donde _origen === c.nombre
                 const movs = (data.cashflow || []).filter(m => m._origen === c.nombre);
                 const saldo = movs.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
