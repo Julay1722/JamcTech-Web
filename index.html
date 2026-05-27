@@ -1247,7 +1247,7 @@ function RestockTab({ skus }) {
   useEffect(() => { if (Number(leadOverride) > 0) localStorage.setItem('restock-lead', String(leadOverride)); }, [leadOverride]);
 
   const [selected, setSelected] = useState({});
-  const [filterEstado, setFilterEstado] = useState('necesitan');
+  const [filterEstado, setFilterEstado] = useState('todos-pedir');
 
   // Computar info de reposición para cada SKU
   const items = (skus || []).map(s => {
@@ -1270,15 +1270,16 @@ function RestockTab({ skus }) {
     };
   });
 
-  // Filtros
-  const filtered = items.filter(s => {
-    if (filterEstado === 'todos') return true;
-    if (filterEstado === 'necesitan') return s.aPedir > 0;
-    if (filterEstado === 'critico') return s.estado === 'critico';
-    if (filterEstado === 'atencion') return s.estado === 'atencion';
-    return true;
+  // SOLO SKUs que realmente necesitan reorden. Lo demás es ruido.
+  // Un SKU puede estar en estado "critico" pero NO necesitar pedido si
+  // ya tiene suficiente "en camino" para cubrir la necesidad — esos
+  // quedan fuera. Filtros adicionales solo subdividen este set.
+  const itemsAPedir = items.filter(s => s.aPedir > 0);
+  const filtered = itemsAPedir.filter(s => {
+    if (filterEstado === 'criticos-pedir') return s.estado === 'critico';
+    if (filterEstado === 'atencion-pedir') return s.estado === 'atencion';
+    return true;  // 'todos-pedir'
   }).sort((a, b) => {
-    // Críticos primero, luego por días restantes ascendente, luego por velocidad
     const orderEstado = { critico: 0, atencion: 1, en_reposicion: 2, ok: 3, sin_movimiento: 4 };
     const ea = orderEstado[a.estado] ?? 9, eb = orderEstado[b.estado] ?? 9;
     if (ea !== eb) return ea - eb;
@@ -1289,20 +1290,22 @@ function RestockTab({ skus }) {
   const toggleSku = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
   const toggleAll = (val) => {
     const next = {};
-    filtered.forEach(s => { if (s.aPedir > 0) next[s.id] = val; });
+    filtered.forEach(s => { next[s.id] = val; });
     setSelected(next);
   };
 
   // Resumen de orden seleccionada
-  const seleccionados = filtered.filter(s => selected[s.id] && s.aPedir > 0);
+  const seleccionados = filtered.filter(s => selected[s.id]);
   const totalUds = seleccionados.reduce((sum, s) => sum + s.aPedir, 0);
   const totalCosto = seleccionados.reduce((sum, s) => sum + s.costoEstimado, 0);
   const numSkus = seleccionados.length;
 
-  // Stats
-  const criticos = items.filter(s => s.estado === 'critico').length;
-  const necesitanPedido = items.filter(s => s.aPedir > 0).length;
-  const totalAPedirGlobal = items.filter(s => s.aPedir > 0).reduce((s, x) => s + x.costoEstimado, 0);
+  // Stats — TODAS sobre items que necesitan reorden (no sobre todo el catálogo)
+  const criticosAPedir = itemsAPedir.filter(s => s.estado === 'critico').length;
+  const totalAPedirGlobal = itemsAPedir.reduce((s, x) => s + x.costoEstimado, 0);
+  // Info contextual: críticos totales (incluyendo los ya cubiertos por enCamino)
+  const criticosTotal = items.filter(s => s.estado === 'critico').length;
+  const criticosYaCubiertos = criticosTotal - criticosAPedir;
 
   return (
     <>
@@ -1319,13 +1322,12 @@ function RestockTab({ skus }) {
           <div className="field-hint">Stock extra para imprevistos</div>
         </div>
         <div className="field" style={{ flex: 1 }}>
-          <div className="field-label">Filtrar</div>
+          <div className="field-label">Filtrar (solo SKUs que necesitan pedido)</div>
           <div style={{ display: 'flex', gap: 4 }}>
             {[
-              { id: 'necesitan', l: 'Necesitan pedido' },
-              { id: 'critico', l: '🔴 Críticos' },
-              { id: 'atencion', l: '🟡 Atención' },
-              { id: 'todos', l: 'Todos' },
+              { id: 'todos-pedir', l: `Todos a pedir (${itemsAPedir.length})` },
+              { id: 'criticos-pedir', l: `🔴 Solo críticos (${criticosAPedir})` },
+              { id: 'atencion-pedir', l: '🟡 Solo atención' },
             ].map(f => (
               <button key={f.id} className="pill" style={{
                 background: filterEstado === f.id ? 'var(--accent)' : 'var(--surface)',
@@ -1336,20 +1338,32 @@ function RestockTab({ skus }) {
         </div>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs — todas las métricas son sobre SKUs que necesitan reorden */}
       <div className="kpi-row">
-        <KPI label="SKUs críticos" value={fmtNum(criticos)} delta={null} deltaLabel="pedir ya" />
-        <KPI label="SKUs a pedir" value={fmtNum(necesitanPedido)} delta={null} deltaLabel={`para cubrir ${leadOverride}+${bufferDias}d`} />
-        <KPI label="Costo total recomendado" value={fmtNum(totalAPedirGlobal)} currency delta={null} deltaLabel="todos los que necesitan" />
-        <KPI label="Orden seleccionada" value={fmtNum(totalCosto)} currency delta={numSkus} deltaLabel={`${numSkus} SKUs · ${totalUds} uds`} />
+        <KPI label="SKUs a pedir" value={fmtNum(itemsAPedir.length)}
+             delta={null} deltaLabel={`para cubrir ${leadOverride}+${bufferDias}d`} />
+        <KPI label="Críticos a pedir" value={fmtNum(criticosAPedir)}
+             delta={null}
+             deltaLabel={criticosYaCubiertos > 0 ? `${criticosYaCubiertos} ya cubiertos en camino` : 'todos los críticos sin pedido'} />
+        <KPI label="Costo total recomendado" value={fmtNum(totalAPedirGlobal)} currency
+             delta={null} deltaLabel={`${itemsAPedir.length} SKUs · sumar todo`} />
+        <KPI label="Orden seleccionada" value={fmtNum(totalCosto)} currency
+             delta={numSkus || null} deltaLabel={`${numSkus} SKUs · ${totalUds} uds marcadas`} />
       </div>
 
       {/* Tabla de SKUs */}
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Recomendación de reposición</div>
-            <div className="section-desc">{filtered.length} SKUs mostrando · ordenados por urgencia (críticos primero)</div>
+            <div className="section-title">SKUs que necesitan reorden</div>
+            <div className="section-desc">
+              {filtered.length} mostrando · ordenados por urgencia (críticos primero)
+              {criticosYaCubiertos > 0 && (
+                <span style={{ marginLeft: 8, color: 'var(--text-3)' }}>
+                  · {criticosYaCubiertos} SKU{criticosYaCubiertos > 1 ? 's' : ''} crítico{criticosYaCubiertos > 1 ? 's' : ''} ya cubierto{criticosYaCubiertos > 1 ? 's' : ''} por reposición en camino (no aparece aquí)
+                </span>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
             <button className="btn ghost" onClick={() => toggleAll(true)}>Sel. todos</button>
@@ -1394,7 +1408,7 @@ function RestockTab({ skus }) {
               })}
               {filtered.length === 0 && (
                 <tr><td colSpan="10" className="empty" style={{ padding: 'var(--s-6)' }}>
-                  No hay SKUs en este filtro
+                  🎉 Sin SKUs que pedir en este filtro · todo el stock está cubierto
                 </td></tr>
               )}
             </tbody>
