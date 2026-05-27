@@ -2834,6 +2834,9 @@ function DetalleCuentaLedger({ cuenta, cashflow }) {
 // a deudas (préstamos + líneas + tarjetas + inversores). Muestra semáforo
 // verde/amarillo/rojo con recomendaciones, stress test y breakdown.
 function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }) {
+  const data = useATData();
+  const ventas = data.ventas || [];
+
   // ── Cash flow OPERACIONAL promedio mensual de los últimos 6 meses ───
   // Excluye movimientos financieros (pagos de deuda, intereses, aportes)
   // para tener el flujo "limpio" del negocio.
@@ -2841,7 +2844,6 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
   const hoyDate = new Date(window.HOY || new Date().toISOString().slice(0, 10));
   const hace6 = new Date(hoyDate); hace6.setMonth(hace6.getMonth() - 6);
   const cf6m = cashflow.filter(m => m.f && new Date(m.f) >= hace6 && !FIN_CONCEPTS.test(m.c || ''));
-  // Agrupar por mes y calcular neto
   const byMonth = {};
   cf6m.forEach(m => {
     const ym = m.f.slice(0, 7);
@@ -2852,6 +2854,19 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
   const mesesData = Object.values(byMonth);
   const cashFlowMensualProm = mesesData.length > 0
     ? mesesData.reduce((s, b) => s + (b.e - b.s), 0) / mesesData.length
+    : 0;
+
+  // ── Ganancia contable promedio mensual (últimos 6 meses) ────────────
+  // Suma de gananciaTotal de las ventas del período, dividido entre meses.
+  const ventas6m = ventas.filter(v => v.fecha && new Date(v.fecha) >= hace6);
+  const gananciaByMonth = {};
+  ventas6m.forEach(v => {
+    const ym = v.fecha.slice(0, 7);
+    gananciaByMonth[ym] = (gananciaByMonth[ym] || 0) + (v.gananciaTotal || 0);
+  });
+  const mesesGanancia = Object.keys(gananciaByMonth).length;
+  const gananciaMensualProm = mesesGanancia > 0
+    ? Object.values(gananciaByMonth).reduce((s, x) => s + x, 0) / mesesGanancia
     : 0;
 
   // ── Pagos mensuales totales a deudas ─────────────────────────────────
@@ -2898,8 +2913,23 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
 
   const pagosMensualesTotales = pagosCuotas + pagosMinimos + pagosInversor;
 
-  // ── Ratio de cobertura + semáforo ────────────────────────────────────
+  // ── Ratio de cobertura DUAL: cash flow vs ganancia ───────────────────
+  // Cash flow = lo que de verdad entra a la cuenta (estándar bancario, DSCR)
+  // Ganancia  = utilidad contable (revenue - costos). Útil para sanidad LP.
+  const ratioGanancia = pagosMensualesTotales > 0 ? gananciaMensualProm / pagosMensualesTotales : 99;
   const ratio = pagosMensualesTotales > 0 ? cashFlowMensualProm / pagosMensualesTotales : 99;
+  // Divergencia: si las dos métricas dan estados muy distintos, ALERTA.
+  // Calculamos diferencia relativa entre los dos ratios.
+  const divergenciaPct = Math.abs(ratio - ratioGanancia) / Math.max(0.01, ratio, ratioGanancia) * 100;
+  const hayDivergencia = divergenciaPct > 30 && pagosMensualesTotales > 0;
+  let divergenciaTipo = '';
+  if (hayDivergencia) {
+    if (ratio > ratioGanancia) {
+      divergenciaTipo = 'cash_mejor';  // cash flow indica mejor que ganancia → puede ser inventario sin vender, deuda colectada por adelantado
+    } else {
+      divergenciaTipo = 'ganancia_mejor'; // ganancia mejor que cash → ventas a crédito sin cobrar, o inventario inflado
+    }
+  }
   let estado, color, label, mensaje;
   if (cashFlowMensualProm <= 0) {
     estado = 'ROJO'; color = '#ef4444'; label = '🔴 ALERTA';
@@ -2955,6 +2985,72 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
           <span>2x · estable</span>
           <span>3x+ · saludable</span>
         </div>
+      </div>
+
+      {/* Comparativa Cash flow vs Ganancia · estándar bancario vs contable */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Cobertura: cash flow vs ganancia</div>
+            <div className="section-desc">
+              {hayDivergencia
+                ? `⚠ Divergencia de ${divergenciaPct.toFixed(0)}% entre ambas métricas`
+                : 'Ambas métricas coinciden — alta certeza'}
+            </div>
+          </div>
+        </div>
+        <div className="grid-2">
+          {/* Cash flow side */}
+          {(() => {
+            const cls = ratio < 1 ? 'danger' : ratio < 1.5 ? 'warning' : ratio < 2 ? 'warning' : 'success';
+            const lbl = ratio < 1 ? 'NO CUBRE' : ratio < 1.5 ? 'APRETADO' : ratio < 2 ? 'ESTABLE' : 'SALUDABLE';
+            return (
+              <div className="stat-card" style={{ borderLeft: `4px solid ${ratio < 1 ? '#ef4444' : ratio < 2 ? '#f59e0b' : '#10b981'}` }}>
+                <div className="stat-label">Por cash flow operacional (DSCR · estándar bancario)</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 6 }}>
+                  <div className="stat-value" style={{ fontSize: 24 }}>{ratio < 99 ? ratio.toFixed(2) : '∞'}x</div>
+                  <span className={`badge ${cls}`}>{lbl}</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                  Cash flow {fmtCurrency(cashFlowMensualProm)} / Pagos {fmtCurrency(pagosMensualesTotales)}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, fontStyle: 'italic' }}>
+                  Dinero real que entra mensualmente. Es lo que importa para pagar las cuotas.
+                </div>
+              </div>
+            );
+          })()}
+          {/* Ganancia side */}
+          {(() => {
+            const cls = ratioGanancia < 1 ? 'danger' : ratioGanancia < 1.5 ? 'warning' : ratioGanancia < 2 ? 'warning' : 'success';
+            const lbl = ratioGanancia < 1 ? 'NO CUBRE' : ratioGanancia < 1.5 ? 'APRETADO' : ratioGanancia < 2 ? 'ESTABLE' : 'SALUDABLE';
+            return (
+              <div className="stat-card" style={{ borderLeft: `4px solid ${ratioGanancia < 1 ? '#ef4444' : ratioGanancia < 2 ? '#f59e0b' : '#10b981'}` }}>
+                <div className="stat-label">Por ganancia contable (utilidad)</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 6 }}>
+                  <div className="stat-value" style={{ fontSize: 24 }}>{ratioGanancia < 99 ? ratioGanancia.toFixed(2) : '∞'}x</div>
+                  <span className={`badge ${cls}`}>{lbl}</span>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                  Ganancia {fmtCurrency(gananciaMensualProm)} / Pagos {fmtCurrency(pagosMensualesTotales)}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, fontStyle: 'italic' }}>
+                  Revenue − costos por mes. Indica sanidad del negocio a largo plazo.
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+        {hayDivergencia && (
+          <div style={{ marginTop: 12, padding: 12, background: 'var(--surface-2)', borderRadius: 4, borderLeft: '3px solid #f59e0b' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: '#f59e0b', marginBottom: 6 }}>⚠ Alerta de divergencia</div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.5 }}>
+              {divergenciaTipo === 'ganancia_mejor'
+                ? <>Tu <strong>ganancia se ve mejor</strong> que tu cash flow ({(ratioGanancia/ratio).toFixed(1)}x diferencia). Posibles causas: ventas a crédito que no has cobrado, inventario inflado en el balance, o gastos pagados que no impactan la ganancia. <strong>Confía en el cash flow</strong> para decidir pagos — la ganancia te puede engañar.</>
+                : <>Tu <strong>cash flow se ve mejor</strong> que tu ganancia ({(ratio/ratioGanancia).toFixed(1)}x diferencia). Posibles causas: cobros adelantados que aún no se "ganaron" contablemente, o estás vendiendo bajo CPP (cash entra pero pierdes). <strong>Revisa los márgenes</strong> — quizás tu cash flow no es sostenible.</>}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* KPIs principales */}
