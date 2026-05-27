@@ -398,13 +398,32 @@ async function loadCashflow() {
 // ── Financiero (productos: préstamo/línea/tarjeta + inversores) ──
 async function loadFinanciero() {
   try {
-    const [{ data: prestamos, error: e1 }, { data: inversores, error: e2 }, { data: saldos }] = await Promise.all([
+    const [{ data: prestamos, error: e1 }, { data: inversores, error: e2 }, { data: saldos }, { data: compensaciones }] = await Promise.all([
       sb.from('prestamos').select('*').eq('activa', true),
       sb.from('inversores').select('*').eq('activa', true),
       sb.from('vw_saldo_prestamo').select('*'),
+      sb.from('compensaciones_inversor').select('*').eq('activa', true).order('id'),
     ]);
     if (e1) throw e1;
     if (e2) throw e2;
+    // Index compensaciones por inversor_id para attach
+    const compByInversor = {};
+    (compensaciones || []).forEach((c) => {
+      const k = c.inversor_id;
+      if (!compByInversor[k]) compByInversor[k] = [];
+      compByInversor[k].push({
+        id:              c.id,
+        tipoCompensacion: c.tipo_compensacion,
+        montoPactado:    c.monto_pactado    != null ? parseFloat(c.monto_pactado)    : null,
+        pctAplicado:     c.pct_aplicado     != null ? parseFloat(c.pct_aplicado)     : null,
+        cuotaMensual:    c.cuota_mensual    != null ? parseFloat(c.cuota_mensual)    : null,
+        bonusThreshold:  c.bonus_threshold  != null ? parseFloat(c.bonus_threshold)  : null,
+        capDevolver:     c.cap_devolver     != null ? parseFloat(c.cap_devolver)     : null,
+        fechaInicio:     c.fecha_inicio || null,
+        fechaFin:        c.fecha_fin    || null,
+        notas:           c.notas || '',
+      });
+    });
     const saldosByPrestamoId = Object.fromEntries(
       (saldos || []).map((s) => [s.id, {
         capital_pagado:  parseFloat(s.capital_pagado)  || 0,
@@ -464,12 +483,15 @@ async function loadFinanciero() {
         plazoMeses:    parseInt(i.plazo_meses) || null,
         notas:         i.notas || '',
         balance:       parseFloat(i.monto_pactado_devolver) || 0,
-        // Metodo de compensacion + campos contextuales
+        esDueno:       !!i.es_dueno,
+        // Metodo de compensacion legacy (mantiene compat con vista simple)
         tipoCompensacion: i.tipo_compensacion || 'FLAT',
         pctAplicado:    i.pct_aplicado    != null ? parseFloat(i.pct_aplicado)    : null,
         cuotaMensual:   i.cuota_mensual   != null ? parseFloat(i.cuota_mensual)   : null,
         bonusThreshold: i.bonus_threshold != null ? parseFloat(i.bonus_threshold) : null,
         capDevolver:    i.cap_devolver    != null ? parseFloat(i.cap_devolver)    : null,
+        // Nuevo: array de N reglas de compensacion activas en paralelo
+        compensaciones: compByInversor[i.id] || [],
       });
     });
 
@@ -1459,6 +1481,7 @@ async function updateInversor(id, patch) {
   if (patch.contraparteId        != null) row.contraparte_id = patch.contraparteId ? Number(patch.contraparteId) : null;
   if (patch.notas                != null) row.notas = patch.notas;
   if (patch.activa               != null) row.activa = !!patch.activa;
+  if (patch.esDueno              !== undefined) row.es_dueno = !!patch.esDueno;
   if (patch.tipoCompensacion     != null) row.tipo_compensacion = patch.tipoCompensacion;
   if (patch.pctAplicado          !== undefined) row.pct_aplicado    = patch.pctAplicado    === '' || patch.pctAplicado    == null ? null : Number(patch.pctAplicado);
   if (patch.cuotaMensual         !== undefined) row.cuota_mensual   = patch.cuotaMensual   === '' || patch.cuotaMensual   == null ? null : Number(patch.cuotaMensual);
@@ -1474,6 +1497,55 @@ async function updateInversor(id, patch) {
 async function removeInversor(id) {
   const { error } = await sb.from('inversores').delete().eq('id', id);
   if (error) throw new Error(`removeInversor: ${error.message}`);
+  await loadFinanciero();
+  _buildFinancieroProductos();
+  return { deleted: true, id };
+}
+
+// ── Multi-compensacion: cada inversor puede tener N reglas activas ─
+async function createCompensacion(inversorId, data) {
+  const row = {
+    inversor_id:       Number(inversorId),
+    tipo_compensacion: data.tipoCompensacion || 'FLAT',
+    monto_pactado:     data.montoPactado    != null && data.montoPactado    !== '' ? Number(data.montoPactado)    : null,
+    pct_aplicado:      data.pctAplicado     != null && data.pctAplicado     !== '' ? Number(data.pctAplicado)     : null,
+    cuota_mensual:     data.cuotaMensual    != null && data.cuotaMensual    !== '' ? Number(data.cuotaMensual)    : null,
+    bonus_threshold:   data.bonusThreshold  != null && data.bonusThreshold  !== '' ? Number(data.bonusThreshold)  : null,
+    cap_devolver:      data.capDevolver     != null && data.capDevolver     !== '' ? Number(data.capDevolver)     : null,
+    fecha_inicio:      data.fechaInicio || null,
+    fecha_fin:         data.fechaFin    || null,
+    activa:            data.activa !== false,
+    notas:             data.notas || '',
+  };
+  const { data: ins, error } = await sb.from('compensaciones_inversor').insert(row).select().single();
+  if (error) throw new Error(`createCompensacion: ${error.message}`);
+  await loadFinanciero();
+  _buildFinancieroProductos();
+  return ins;
+}
+
+async function updateCompensacion(id, patch) {
+  const row = {};
+  if (patch.tipoCompensacion != null)      row.tipo_compensacion = patch.tipoCompensacion;
+  if (patch.montoPactado     !== undefined) row.monto_pactado    = patch.montoPactado    === '' || patch.montoPactado    == null ? null : Number(patch.montoPactado);
+  if (patch.pctAplicado      !== undefined) row.pct_aplicado     = patch.pctAplicado     === '' || patch.pctAplicado     == null ? null : Number(patch.pctAplicado);
+  if (patch.cuotaMensual     !== undefined) row.cuota_mensual    = patch.cuotaMensual    === '' || patch.cuotaMensual    == null ? null : Number(patch.cuotaMensual);
+  if (patch.bonusThreshold   !== undefined) row.bonus_threshold  = patch.bonusThreshold  === '' || patch.bonusThreshold  == null ? null : Number(patch.bonusThreshold);
+  if (patch.capDevolver      !== undefined) row.cap_devolver     = patch.capDevolver     === '' || patch.capDevolver     == null ? null : Number(patch.capDevolver);
+  if (patch.fechaInicio      !== undefined) row.fecha_inicio     = patch.fechaInicio || null;
+  if (patch.fechaFin         !== undefined) row.fecha_fin        = patch.fechaFin    || null;
+  if (patch.activa           !== undefined) row.activa           = !!patch.activa;
+  if (patch.notas            !== undefined) row.notas            = patch.notas;
+  const { data, error } = await sb.from('compensaciones_inversor').update(row).eq('id', id).select().single();
+  if (error) throw new Error(`updateCompensacion: ${error.message}`);
+  await loadFinanciero();
+  _buildFinancieroProductos();
+  return data;
+}
+
+async function removeCompensacion(id) {
+  const { error } = await sb.from('compensaciones_inversor').delete().eq('id', id);
+  if (error) throw new Error(`removeCompensacion: ${error.message}`);
   await loadFinanciero();
   _buildFinancieroProductos();
   return { deleted: true, id };
@@ -1923,6 +1995,7 @@ Object.assign(window.AT_CLIENT, {
   createCuenta, updateCuenta, removeCuenta,
   createPrestamo, updatePrestamo, removePrestamo,
   createInversor, updateInversor, removeInversor,
+  createCompensacion, updateCompensacion, removeCompensacion,
   // Writers genéricos
   create, update, remove,
   // Constantes (los formularios las leen para validar enums)

@@ -2754,6 +2754,9 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
           </div>
         </div>
       )}
+
+      <ReglasCompensacionList inversor={item} esDueno={esDueno} />
+
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
@@ -3489,49 +3492,127 @@ function FormMovFinScoped({ item, kind, onDone }) {
 }
 
 // ─── Form Crear Inversor ─────────────────────────────────────────
-// 6 metodos de compensacion para inversores — labels + descripcion + colores
+// Metodos de compensacion: 6 universales + 6 exclusivos del dueno
+// `ownerOnly: true` = solo aparece cuando el inversor es marcado como dueno
 const TIPO_COMPENSACION_META = {
+  // ──── UNIVERSAL (cualquier inversor) ────
   FLAT: {
     label: '1 · Multiplicador Flat',
     desc: 'Capital × N, paga libre sin plazo. Sin presion mensual.',
     color: 'var(--text-2)',
     fields: ['retorno'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, ventasMes: 15, ticketProm: 2000, margen: 42 },
   },
   AMORTIZACION: {
     label: '2 · Amortización Fija',
     desc: 'Cuota mensual fija estilo préstamo. Predictable.',
     color: 'var(--info, #4a9eff)',
     fields: ['retorno', 'plazo'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, plazo: 24 },
   },
   PCT_GANANCIA: {
     label: '3 · % de Ganancia por Venta',
     desc: 'Cada venta, X% de la ganancia bruta al inversor. Cero presion fija.',
     color: 'var(--success)',
     fields: ['retorno', 'pct'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, pct: 15, ventasMes: 15, ticketProm: 2000, margen: 42 },
   },
   PCT_REVENUE: {
     label: '4 · % de Revenue por Venta',
     desc: 'Cada venta, X% del precio facturado. Mas simple de trackear que ganancia.',
     color: 'var(--success)',
     fields: ['retorno', 'pct'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, pct: 5, ventasMes: 15, ticketProm: 2000 },
   },
   CUOTA_BONUS: {
     label: '5 · Cuota Fija + Bonus',
     desc: 'Cuota mensual baja + bonus % cuando ventas mes superan target.',
     color: 'var(--warning)',
     fields: ['retorno', 'cuotaMensual', 'bonusThreshold', 'pct'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, cuotaMensual: 2000, bonusThreshold: 40000, pct: 20, ventasMes: 18, ticketProm: 2000, margen: 42 },
   },
   ROYALTY: {
     label: '6 · Royalty Perpetuo Capado',
     desc: 'X% de toda venta indefinido, hasta llegar al cap.',
     color: 'var(--danger)',
     fields: ['cap', 'pct'],
+    ownerOnly: false,
+    group: 'Universal',
+    simExample: { capital: 50000, cap: 150000, pct: 3, ventasMes: 15, ticketProm: 2000 },
+  },
+
+  // ──── DUENO-ONLY ────
+  SALARIO_FIJO: {
+    label: 'D1 · Salario Fijo Mensual',
+    desc: 'Sale automatico cada mes una cantidad fija, sin importar ventas. Como un sueldo.',
+    color: '#7c5cff',
+    fields: ['cuotaMensual'],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { cuotaMensual: 25000 },
+  },
+  PCT_UTILIDADES: {
+    label: 'D2 · % de Utilidades Mensuales',
+    desc: 'Al cerrar el mes, dueño recibe X% de la utilidad neta (revenue - costos - gastos).',
+    color: '#7c5cff',
+    fields: ['pct'],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { pct: 50, ventasMes: 38000, margen: 42 },
+  },
+  DRAWDOWN_LIBRE: {
+    label: 'D3 · Drawdown a Discreción',
+    desc: 'Extracciones libres del negocio cuando el dueño quiere. Sin regla automatica, requiere registro manual.',
+    color: '#7c5cff',
+    fields: [],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { drawdownProm: 10000 },
+  },
+  PCT_REVENUE_PROP: {
+    label: 'D4 · "Pay Yourself First" — % Revenue',
+    desc: 'X% de cada venta sale automatico para el dueño antes de cualquier otro gasto.',
+    color: '#7c5cff',
+    fields: ['pct'],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { pct: 10, ventasMes: 15, ticketProm: 2000 },
+  },
+  BONUS_HITOS: {
+    label: 'D5 · Bonus por Hitos de Facturación',
+    desc: 'Cuando ventas acumuladas pasan threshold (ej. 500K anual), libera bonus al dueño.',
+    color: '#7c5cff',
+    fields: ['bonusThreshold', 'cap'],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { bonusThreshold: 500000, cap: 25000, ventasMes: 50000 },
+  },
+  REEMBOLSO_GASTOS: {
+    label: 'D6 · Reembolso de Gastos Personales',
+    desc: 'Cuando el dueño paga algo del negocio con tarjeta personal, el negocio le reembolsa.',
+    color: '#7c5cff',
+    fields: [],
+    ownerOnly: true,
+    group: 'Dueño',
+    simExample: { gastoProm: 5000 },
   },
 };
 
 function FormInversor({ onDone }) {
   const data = useATData();
   const personas = (data._contrapartes || []).filter(c => c.tipo === 'INVERSOR' || c.tipo === 'PERSONA_OPERATIVA' || c.tipo === 'CLIENTE_FAMILIAR');
+  // ¿Ya hay un dueño marcado? Si si, no permitimos crear otro.
+  const yaHayDueno = (data.financiero || []).some(f => /inversor/i.test(f.tipo) && f.esDueno);
   const [nombre, setNombre] = useState('');
   const [capital, setCapital] = useState('');
   const [retorno, setRetorno] = useState('');
@@ -3539,15 +3620,23 @@ function FormInversor({ onDone }) {
   const [plazo, setPlazo] = useState('');
   const [contraparte, setContraparte] = useState('');
   const [notas, setNotas] = useState('');
+  const [esDueno, setEsDueno] = useState(false);
   const [tipoComp, setTipoComp] = useState('FLAT');
   const [pct, setPct] = useState('');
   const [cuotaMensual, setCuotaMensual] = useState('');
   const [bonusThreshold, setBonusThreshold] = useState('');
   const [cap, setCap] = useState('');
   const [busy, setBusy] = useState(false);
+  const [simOpen, setSimOpen] = useState(false);
+  // Filtra metodos disponibles segun si es dueño o no
+  const metodosDisponibles = Object.entries(TIPO_COMPENSACION_META).filter(([_k, m]) => esDueno ? true : !m.ownerOnly);
+  // Si el tipo actual es ownerOnly y dejamos de ser dueño, reset a FLAT
+  useEffect(() => {
+    if (!esDueno && TIPO_COMPENSACION_META[tipoComp]?.ownerOnly) setTipoComp('FLAT');
+  }, [esDueno, tipoComp]);
   const meta = TIPO_COMPENSACION_META[tipoComp];
   const shows = (f) => meta.fields.includes(f);
-  const valid = nombre.length > 1 && Number(capital) > 0;
+  const valid = nombre.length > 1 && (esDueno || Number(capital) > 0);
 
   // Para AMORTIZACION: auto-calc cuota si retorno + plazo
   const cuotaCalculada = tipoComp === 'AMORTIZACION' && Number(retorno) > 0 && Number(plazo) > 0
@@ -3570,22 +3659,40 @@ function FormInversor({ onDone }) {
   const onSubmit = async () => {
     setBusy(true);
     try {
-      await window.AT_CLIENT.createInversor({
+      if (esDueno && yaHayDueno) {
+        window.toastErr('Solo un dueño', 'Ya existe un inversor marcado como dueño');
+        setBusy(false);
+        return;
+      }
+      const ins = await window.AT_CLIENT.createInversor({
         nombre,
-        capitalInvertido: Number(capital),
+        capitalInvertido: Number(capital) || 0,
         montoPactadoDevolver: Number(retorno) || Number(capital) * 2,
         fechaInicio: fechaInicio || null,
         plazoMeses: plazo || null,
         contraparteId: contraparte || null,
         notas,
+        esDueno: esDueno,
         tipoCompensacion: tipoComp,
         pctAplicado:    shows('pct') ? pct : null,
         cuotaMensual:   shows('cuotaMensual') ? cuotaMensual : (tipoComp === 'AMORTIZACION' && cuotaCalculada ? cuotaCalculada : null),
         bonusThreshold: shows('bonusThreshold') ? bonusThreshold : null,
         capDevolver:    shows('cap') ? cap : null,
       });
-      window.toastOk('Inversor creado', `${nombre} · ${meta.label}`);
-      setNombre(''); setCapital(''); setRetorno(''); setNotas('');
+      // Crear ademas la primera regla en compensaciones_inversor
+      if (ins?.id) {
+        await window.AT_CLIENT.createCompensacion(ins.id, {
+          tipoCompensacion: tipoComp,
+          montoPactado:   shows('retorno') ? (retorno || Number(capital) * 2) : null,
+          pctAplicado:    shows('pct') ? pct : null,
+          cuotaMensual:   shows('cuotaMensual') ? cuotaMensual : (tipoComp === 'AMORTIZACION' && cuotaCalculada ? cuotaCalculada : null),
+          bonusThreshold: shows('bonusThreshold') ? bonusThreshold : null,
+          capDevolver:    shows('cap') ? cap : null,
+          fechaInicio:    fechaInicio || null,
+        });
+      }
+      window.toastOk(esDueno ? 'Dueño registrado' : 'Inversor creado', `${nombre} · ${meta.label}`);
+      setNombre(''); setCapital(''); setRetorno(''); setNotas(''); setEsDueno(false);
       setPct(''); setCuotaMensual(''); setBonusThreshold(''); setCap('');
       onDone?.();
     } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
@@ -3603,15 +3710,47 @@ function FormInversor({ onDone }) {
           </select></div>
       </div>
 
+      <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: esDueno ? '1px solid #7c5cff' : '1px solid var(--border)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: yaHayDueno && !esDueno ? 'not-allowed' : 'pointer', opacity: yaHayDueno && !esDueno ? 0.5 : 1 }}>
+          <input type="checkbox" checked={esDueno} disabled={yaHayDueno && !esDueno}
+            onChange={e => setEsDueno(e.target.checked)} />
+          <span style={{ fontWeight: 600, color: esDueno ? '#7c5cff' : 'var(--text)' }}>👤 Es el dueño del negocio</span>
+        </label>
+        <div className="field-hint" style={{ marginTop: 4, fontSize: 11 }}>
+          {yaHayDueno && !esDueno
+            ? '⚠ Ya hay un dueño marcado. Solo se permite uno.'
+            : esDueno
+              ? 'Desbloquea métodos exclusivos (Salario, % Utilidades, Drawdown, etc).'
+              : 'Marca como dueño para desbloquear métodos especiales de compensación.'}
+        </div>
+      </div>
+
       <div className="field">
-        <div className="field-label">Método de compensación</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div className="field-label" style={{ margin: 0 }}>Método de compensación{esDueno ? ' · incluye métodos del dueño' : ''}</div>
+          <button type="button" className="btn ghost" style={{ fontSize: 11, padding: '4px 10px' }}
+            onClick={() => setSimOpen(true)}>🧮 Simular pagos</button>
+        </div>
         <select className="select" value={tipoComp} onChange={e => setTipoComp(e.target.value)}>
-          {Object.entries(TIPO_COMPENSACION_META).map(([k, m]) => (
-            <option key={k} value={k}>{m.label}</option>
-          ))}
+          <optgroup label="Universal">
+            {metodosDisponibles.filter(([_k, m]) => m.group === 'Universal').map(([k, m]) => (
+              <option key={k} value={k}>{m.label}</option>
+            ))}
+          </optgroup>
+          {esDueno && (
+            <optgroup label="Solo Dueño">
+              {metodosDisponibles.filter(([_k, m]) => m.group === 'Dueño').map(([k, m]) => (
+                <option key={k} value={k}>{m.label}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <div className="field-hint" style={{ color: meta.color, fontWeight: 500, marginTop: 4 }}>{meta.desc}</div>
       </div>
+
+      <SimuladorModal open={simOpen} tipo={tipoComp}
+        params={{ pct, cuotaMensual, bonusThreshold, cap, retorno, plazo, montoPactado: retorno }}
+        onClose={() => setSimOpen(false)} />
 
       <div className="row-2">
         <div className="field"><div className="field-label">Capital invertido (RD$)</div>
@@ -4149,17 +4288,21 @@ function FinanzasPage() {
           Botón "👤 Dueño" toggle marca/desmarca con notas. */}
       {subtab === 'inversores' && (() => {
         const allInv = fin.filter(f => /inversor/i.test(f.tipo));
-        const isDueno = (i) => /\[dueño\]|dueño|aporte propio/i.test(i.notas || i.nota || '');
+        // Dueño se determina por columna es_dueno (preferida) o fallback al
+        // legacy [Dueño] en notas para compat con data vieja.
+        const isDueno = (i) => i.esDueno === true || /\[dueño\]|dueño|aporte propio/i.test(i.notas || i.nota || '');
         const inversoresExt = allInv.filter(i => !isDueno(i));
         const aportesDueno  = allInv.filter(i =>  isDueno(i));
+        const yaHayDueno = aportesDueno.length > 0;
         const toggleDueno = async (i) => {
           try {
-            const notas = i.notas || i.nota || '';
-            const newNotas = isDueno(i)
-              ? notas.replace(/\s*\[dueño\]\s*/gi, ' ').replace(/\s+/g, ' ').trim()
-              : (notas + ' [Dueño]').trim();
-            await window.AT_CLIENT.updateInversor(Number(i._airtableId.slice(2)), { notas: newNotas });
-            window.toastOk(isDueno(i) ? 'Desmarcado como dueño' : 'Marcado como dueño', i.nombre);
+            const willMark = !isDueno(i);
+            if (willMark && yaHayDueno) {
+              window.toastErr('Solo puede haber un dueño', `Ya esta marcado: ${aportesDueno[0].nombre}`);
+              return;
+            }
+            await window.AT_CLIENT.updateInversor(Number(i._airtableId.slice(2)), { esDueno: willMark });
+            window.toastOk(willMark ? 'Marcado como dueño' : 'Desmarcado como dueño', i.nombre);
           } catch (e) { window.toastErr('No se pudo marcar', e.message?.slice(0, 120)); }
         };
         // Compute pendiente real + pagado real + ETA + velocidad por inversor
@@ -4362,6 +4505,355 @@ function ToastStack() {
           {t.msg && <div className="toast-msg">{t.msg}</div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Lista de reglas de compensación por inversor (multi-comp)
+// ════════════════════════════════════════════════════════════════
+// Permite ver/agregar/borrar reglas. Filtra ownerOnly segun esDueno.
+function ReglasCompensacionList({ inversor, esDueno }) {
+  const data = useATData();
+  const reglas = inversor.compensaciones || [];
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [simReglaId, setSimReglaId] = useState(null);
+  // Nueva regla state
+  const [newTipo, setNewTipo] = useState('FLAT');
+  const [newMonto, setNewMonto] = useState('');
+  const [newPct, setNewPct] = useState('');
+  const [newCuota, setNewCuota] = useState('');
+  const [newThreshold, setNewThreshold] = useState('');
+  const [newCap, setNewCap] = useState('');
+
+  const metodosDisponibles = Object.entries(TIPO_COMPENSACION_META).filter(([_k, m]) => esDueno ? true : !m.ownerOnly);
+  const metaNew = TIPO_COMPENSACION_META[newTipo] || {};
+  const showsNew = (f) => (metaNew.fields || []).includes(f);
+
+  const handleAdd = async () => {
+    setBusy(true);
+    try {
+      const inversorId = Number(inversor._airtableId.slice(2));
+      await window.AT_CLIENT.createCompensacion(inversorId, {
+        tipoCompensacion: newTipo,
+        montoPactado:   showsNew('retorno') ? newMonto : null,
+        pctAplicado:    showsNew('pct') ? newPct : null,
+        cuotaMensual:   showsNew('cuotaMensual') ? newCuota : null,
+        bonusThreshold: showsNew('bonusThreshold') ? newThreshold : null,
+        capDevolver:    showsNew('cap') ? newCap : null,
+      });
+      window.toastOk('Regla agregada', `${inversor.nombre} · ${metaNew.label}`);
+      setAdding(false);
+      setNewTipo('FLAT'); setNewMonto(''); setNewPct('');
+      setNewCuota(''); setNewThreshold(''); setNewCap('');
+    } catch (e) { window.toastErr('No se pudo agregar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  const handleRemove = async (reglaId) => {
+    if (!confirm(`¿Borrar esta regla de compensación? La data histórica de pagos no se pierde.`)) return;
+    try {
+      await window.AT_CLIENT.removeCompensacion(reglaId);
+      window.toastOk('Regla eliminada', '');
+    } catch (e) { window.toastErr('No se pudo borrar', e.message?.slice(0, 120)); }
+  };
+
+  return (
+    <div style={{ marginBottom: 'var(--s-3)', padding: 'var(--s-3)', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s-2)' }}>
+        <div>
+          <div className="section-title" style={{ fontSize: 14 }}>📋 Reglas de compensación activas</div>
+          <div className="section-desc" style={{ fontSize: 11 }}>
+            {reglas.length} regla(s) corriendo en paralelo · todas se pagan simultáneamente
+          </div>
+        </div>
+        {!adding && (
+          <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setAdding(true)}>+ Agregar regla</button>
+        )}
+      </div>
+
+      {reglas.length === 0 && !adding && (
+        <div className="empty" style={{ padding: 'var(--s-4)' }}>
+          Sin reglas configuradas · click "+ Agregar regla"
+        </div>
+      )}
+
+      {reglas.map(r => {
+        const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || {};
+        return (
+          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 4, borderRadius: 3 }}>
+            <span className="badge" style={{ background: m.color, color: 'white', fontSize: 10 }}>{m.label}</span>
+            <span style={{ flex: 1, fontSize: 11, color: 'var(--text-2)' }}>
+              {r.montoPactado != null && <span>Target {fmtCurrency(r.montoPactado)} · </span>}
+              {r.pctAplicado != null && <span>{r.pctAplicado}% · </span>}
+              {r.cuotaMensual != null && <span>RD${r.cuotaMensual}/mo · </span>}
+              {r.bonusThreshold != null && <span>Umbral RD${r.bonusThreshold} · </span>}
+              {r.capDevolver != null && <span>Cap {fmtCurrency(r.capDevolver)} · </span>}
+              {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 60)}…</span>}
+            </span>
+            <button className="icon-btn" title="Simular pagos" onClick={() => setSimReglaId(r.id)}>🧮</button>
+            <button className="icon-btn danger" title="Eliminar regla" onClick={() => handleRemove(r.id)}>×</button>
+          </div>
+        );
+      })}
+
+      {adding && (
+        <div style={{ marginTop: 'var(--s-3)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${metaNew.color || 'var(--border)'}` }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Nueva regla de compensación</div>
+          <div className="row-2">
+            <div className="field">
+              <div className="field-label">Método</div>
+              <select className="select" value={newTipo} onChange={e => setNewTipo(e.target.value)}>
+                <optgroup label="Universal">
+                  {metodosDisponibles.filter(([_k, m]) => m.group === 'Universal').map(([k, m]) => (
+                    <option key={k} value={k}>{m.label}</option>
+                  ))}
+                </optgroup>
+                {esDueno && (
+                  <optgroup label="Solo Dueño">
+                    {metodosDisponibles.filter(([_k, m]) => m.group === 'Dueño').map(([k, m]) => (
+                      <option key={k} value={k}>{m.label}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <div className="field-hint" style={{ color: metaNew.color, marginTop: 4, fontSize: 11 }}>{metaNew.desc}</div>
+            </div>
+          </div>
+          <div className="row-3" style={{ marginTop: 'var(--s-2)' }}>
+            {showsNew('retorno') && (
+              <div className="field"><div className="field-label">Monto a devolver</div>
+                <input className="input num" type="number" value={newMonto} onChange={e => setNewMonto(e.target.value)} placeholder="100000" /></div>
+            )}
+            {showsNew('cap') && (
+              <div className="field"><div className="field-label">Cap máximo</div>
+                <input className="input num" type="number" value={newCap} onChange={e => setNewCap(e.target.value)} placeholder="150000" /></div>
+            )}
+            {showsNew('pct') && (
+              <div className="field"><div className="field-label">% aplicado</div>
+                <input className="input num" type="number" step="0.1" value={newPct} onChange={e => setNewPct(e.target.value)} placeholder="15" /></div>
+            )}
+            {showsNew('cuotaMensual') && (
+              <div className="field"><div className="field-label">Cuota mensual</div>
+                <input className="input num" type="number" value={newCuota} onChange={e => setNewCuota(e.target.value)} placeholder="2000" /></div>
+            )}
+            {showsNew('bonusThreshold') && (
+              <div className="field"><div className="field-label">Threshold (RD$)</div>
+                <input className="input num" type="number" value={newThreshold} onChange={e => setNewThreshold(e.target.value)} placeholder="40000" /></div>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 'var(--s-2)' }}>
+            <button className="btn" disabled={busy} onClick={handleAdd}>{busy ? 'Guardando…' : 'Agregar'}</button>
+            <button className="btn ghost" disabled={busy} onClick={() => setAdding(false)}>Cancelar</button>
+            <button type="button" className="btn ghost" style={{ marginLeft: 'auto' }}
+              onClick={() => setSimReglaId('preview')}>🧮 Simular antes de guardar</button>
+          </div>
+        </div>
+      )}
+
+      {simReglaId && (() => {
+        if (simReglaId === 'preview') {
+          return <SimuladorModal open={true} tipo={newTipo}
+            params={{ pct: newPct, cuotaMensual: newCuota, bonusThreshold: newThreshold, cap: newCap, retorno: newMonto, montoPactado: newMonto }}
+            onClose={() => setSimReglaId(null)} />;
+        }
+        const r = reglas.find(x => x.id === simReglaId);
+        if (!r) return null;
+        return <SimuladorModal open={true} tipo={r.tipoCompensacion}
+          params={{ pct: r.pctAplicado, cuotaMensual: r.cuotaMensual, bonusThreshold: r.bonusThreshold, cap: r.capDevolver, retorno: r.montoPactado, montoPactado: r.montoPactado }}
+          onClose={() => setSimReglaId(null)} />;
+      })()}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Simulador de compensación · proyecta pagos según método + escenario
+// ════════════════════════════════════════════════════════════════
+// Toma un tipo de compensación + parámetros + escenario de ventas
+// y devuelve una proyección mes a mes hasta cerrar el cap (o 36 meses
+// si no hay cap). Pura lógica + UI inline, sin DB.
+function simularPagos(tipo, params, escenario) {
+  const cap = Number(escenario.cap || params.cap || params.retorno || params.montoPactado || 0);
+  const ventasMes  = Number(escenario.ventasMes  || 0);
+  const ticketProm = Number(escenario.ticketProm || 0);
+  const margen     = Number(escenario.margen     || 0) / 100;
+  const revenueMes = ventasMes * ticketProm;
+  const gananciaMes = revenueMes * margen;
+  const pct        = Number(params.pct || 0) / 100;
+  const cuotaFija  = Number(params.cuotaMensual || 0);
+  const threshold  = Number(params.bonusThreshold || 0);
+  const drawdown   = Number(escenario.drawdownProm || 0);
+  const gasto      = Number(escenario.gastoProm || 0);
+
+  // Calcula pago para mes N (1-indexed)
+  const pagoMes = (mes) => {
+    switch (tipo) {
+      case 'FLAT':              return Number(escenario.pagoMensual || cap / 24); // sin regla fija
+      case 'AMORTIZACION':      return Number(params.plazo || params.plazoMeses) > 0 ? cap / Number(params.plazo || params.plazoMeses) : 0;
+      case 'PCT_GANANCIA':      return gananciaMes * pct;
+      case 'PCT_REVENUE':       return revenueMes * pct;
+      case 'CUOTA_BONUS':       return cuotaFija + (revenueMes > threshold ? (revenueMes - threshold) * pct : 0);
+      case 'ROYALTY':           return revenueMes * pct;
+      case 'SALARIO_FIJO':      return cuotaFija;
+      case 'PCT_UTILIDADES':    return gananciaMes * pct;
+      case 'DRAWDOWN_LIBRE':    return drawdown;
+      case 'PCT_REVENUE_PROP':  return revenueMes * pct;
+      case 'BONUS_HITOS': {
+        const acumulado = revenueMes * mes;
+        return acumulado >= threshold ? Number(params.cap || cap) : 0;
+      }
+      case 'REEMBOLSO_GASTOS':  return gasto;
+      default: return 0;
+    }
+  };
+
+  const tieneCap = ['FLAT', 'AMORTIZACION', 'PCT_GANANCIA', 'PCT_REVENUE', 'CUOTA_BONUS', 'ROYALTY'].includes(tipo) && cap > 0;
+  const rows = [];
+  let acumulado = 0;
+  let mesesAlCierre = null;
+  const maxMeses = tieneCap ? 120 : 24;
+  for (let m = 1; m <= maxMeses; m++) {
+    let pago = pagoMes(m);
+    if (tieneCap && acumulado + pago > cap) pago = Math.max(0, cap - acumulado);
+    acumulado += pago;
+    rows.push({ mes: m, pago, acumulado });
+    if (tieneCap && acumulado >= cap && mesesAlCierre == null) {
+      mesesAlCierre = m;
+      break;
+    }
+  }
+  return {
+    rows,
+    cap,
+    mesesAlCierre,
+    pagoMesPromedio: rows.length > 0 ? acumulado / rows.length : 0,
+    pagoMes1: rows[0]?.pago || 0,
+    pagoMes12: rows.slice(0, 12).reduce((s, r) => s + r.pago, 0),
+    totalProyectado: acumulado,
+    sinCap: !tieneCap,
+  };
+}
+
+function SimuladorModal({ open, tipo, params, onClose }) {
+  const meta = TIPO_COMPENSACION_META[tipo];
+  const example = meta?.simExample || {};
+  // Escenario editable — defaults del ejemplo del método
+  const [ventasMes, setVentasMes] = useState(example.ventasMes ?? 15);
+  const [ticketProm, setTicketProm] = useState(example.ticketProm ?? 2000);
+  const [margen, setMargen] = useState(example.margen ?? 42);
+  const [pagoMensual, setPagoMensual] = useState(example.cuotaMensual ?? 4000);
+  const [drawdownProm, setDrawdownProm] = useState(example.drawdownProm ?? 10000);
+  const [gastoProm, setGastoProm] = useState(example.gastoProm ?? 5000);
+  if (!open || !meta) return null;
+
+  const escenario = { ventasMes, ticketProm, margen, pagoMensual, drawdownProm, gastoProm };
+  const sim = simularPagos(tipo, params || meta.simExample, escenario);
+
+  // ¿Qué inputs del escenario muestra cada tipo?
+  const showsVentas = ['PCT_GANANCIA', 'PCT_REVENUE', 'CUOTA_BONUS', 'ROYALTY', 'PCT_UTILIDADES', 'PCT_REVENUE_PROP', 'BONUS_HITOS'].includes(tipo);
+  const showsMargen = ['PCT_GANANCIA', 'CUOTA_BONUS', 'PCT_UTILIDADES'].includes(tipo);
+  const showsPagoMensual = tipo === 'FLAT';
+  const showsDrawdown = tipo === 'DRAWDOWN_LIBRE';
+  const showsGasto = tipo === 'REEMBOLSO_GASTOS';
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 920 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 8, height: 24, background: meta.color, borderRadius: 2 }}></span>
+          Simulador · {meta.label}
+        </div>
+
+        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', fontSize: 13, color: 'var(--text-2)' }}>
+          {meta.desc}
+        </div>
+
+        {/* Escenario editable */}
+        <div className="field-label" style={{ marginBottom: 8 }}>Escenario · ajustá los inputs para ver el efecto</div>
+        <div className="row-3" style={{ marginBottom: 'var(--s-3)' }}>
+          {showsVentas && (
+            <div className="field"><div className="field-label">Ventas/mes</div>
+              <input className="input num" type="number" value={ventasMes} onChange={e => setVentasMes(e.target.value)} /></div>
+          )}
+          {showsVentas && (
+            <div className="field"><div className="field-label">Ticket promedio (RD$)</div>
+              <input className="input num" type="number" value={ticketProm} onChange={e => setTicketProm(e.target.value)} /></div>
+          )}
+          {showsMargen && (
+            <div className="field"><div className="field-label">Margen % promedio</div>
+              <input className="input num" type="number" value={margen} onChange={e => setMargen(e.target.value)} /></div>
+          )}
+          {showsPagoMensual && (
+            <div className="field"><div className="field-label">Pago mensual asumido (RD$)</div>
+              <input className="input num" type="number" value={pagoMensual} onChange={e => setPagoMensual(e.target.value)} />
+              <div className="field-hint">FLAT no tiene cuota fija — esto es un supuesto</div></div>
+          )}
+          {showsDrawdown && (
+            <div className="field"><div className="field-label">Drawdown promedio (RD$/mes)</div>
+              <input className="input num" type="number" value={drawdownProm} onChange={e => setDrawdownProm(e.target.value)} /></div>
+          )}
+          {showsGasto && (
+            <div className="field"><div className="field-label">Gasto promedio (RD$/mes)</div>
+              <input className="input num" type="number" value={gastoProm} onChange={e => setGastoProm(e.target.value)} /></div>
+          )}
+        </div>
+
+        {/* Resultados sumario */}
+        <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
+          <div className="stat-card">
+            <div className="stat-label">Pago mes 1</div>
+            <div className="stat-value" style={{ color: meta.color }}>{fmtCurrency(sim.pagoMes1)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Total año 1</div>
+            <div className="stat-value">{fmtCurrency(sim.pagoMes12)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">{sim.sinCap ? 'Pago mensual prom.' : 'Meses al cierre'}</div>
+            <div className="stat-value">
+              {sim.sinCap
+                ? fmtCurrency(sim.pagoMesPromedio)
+                : (sim.mesesAlCierre ? `${sim.mesesAlCierre} meses` : '>10 años')}
+            </div>
+          </div>
+        </div>
+
+        {/* Tabla proyección */}
+        <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+          <table className="data" style={{ fontSize: 11 }}>
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+              <tr>
+                <th style={{ width: 50 }}>Mes</th>
+                <th className="right">Pago del mes</th>
+                <th className="right">Acumulado pagado</th>
+                {sim.cap > 0 && <th className="right">% del cap</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {sim.rows.slice(0, 60).map((r) => (
+                <tr key={r.mes}>
+                  <td className="num">{r.mes}</td>
+                  <td className="num right">{fmtCurrency(r.pago)}</td>
+                  <td className="num right">{fmtCurrency(r.acumulado)}</td>
+                  {sim.cap > 0 && (
+                    <td className="num right">
+                      <span className="badge" style={{ background: r.acumulado >= sim.cap ? meta.color : 'var(--surface-2)', color: r.acumulado >= sim.cap ? 'white' : 'var(--text-2)' }}>
+                        {((r.acumulado / sim.cap) * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="modal-actions" style={{ marginTop: 'var(--s-3)' }}>
+          <button className="btn ghost" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
     </div>
   );
 }
