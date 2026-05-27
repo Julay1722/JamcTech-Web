@@ -184,15 +184,22 @@ async function loadVentas() {
       .limit(2000);
     if (error) throw error;
 
+    // Ventas LEGACY-SALE no tienen cpp_historico real (placeholder con cpp=0),
+    // asi que el trigger reporta ganancia = facturado (margen 100%) — incorrecto.
+    // Para esos casos aplicamos margen historico promedio del 42% (de V2.1).
+    const LEGACY_DEFAULT_MARGIN = 0.42;
     const ventas = (data || []).map((v) => {
       const items = v.ventas_items || [];
+      const allLegacy = items.length > 0 && items.every((l) => l.sku_id === 'LEGACY-SALE');
       const baseCostTotal = items.reduce(
         (sum, l) => sum + (parseFloat(l.cpp_historico) || 0) * (parseFloat(l.cantidad) || 0),
         0,
       );
       const cantidadTotal = items.reduce((sum, l) => sum + (parseFloat(l.cantidad) || 0), 0);
-      const gananciaTotal = parseFloat(v.total_ganancia) || 0;
       const facturado     = parseFloat(v.total_facturado) || 0;
+      const gananciaTotal = allLegacy
+        ? facturado * LEGACY_DEFAULT_MARGIN
+        : parseFloat(v.total_ganancia) || 0;
       return {
         _airtableId:    'v-' + v.id,
         idVenta:        v.codigo,
@@ -605,15 +612,22 @@ function _buildFinancieroProductos() {
       const medianaPagos = pagosCF.length > 0
         ? pagosCF.slice().map((m) => m.s).sort((a, b) => a - b)[Math.floor(pagosCF.length / 2)]
         : 0;
-      // Saldo oficial desde vw_saldo_prestamo (resta solo capital pagado,
-      // no intereses/seguro). Fallback a cálculo desde cashflow.
-      const saldo = r.balance > 0 ? r.balance : Math.max(0, r.montoTotal - pagosCF.reduce((s, m) => s + (m.s || 0), 0));
+      const pagadoCF = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
+      // Preferimos cashflow sobre vw_saldo_prestamo: la vista solo computa con
+      // FK prestamo_id explicito en movimientos (no siempre se setea en
+      // bulk-loads ni en cuotas manuales). Cashflow refleja la realidad.
+      const capitalPagadoOficial = r._capitalPagado || 0;
+      const pagadoEfectivo = Math.max(pagadoCF, capitalPagadoOficial);
+      const saldoCalc = Math.max(0, (r.montoTotal || 0) - pagadoEfectivo);
+      // Solo confiamos en r.balance si es estrictamente menor que monto inicial
+      // (significaria que la vista ya descontó pagos). Sino usamos calc.
+      const saldo = (r.balance > 0 && r.balance < r.montoTotal) ? r.balance : saldoCalc;
       productos['FIN-P'].push({
         ...base,
         tipoSub:      'Cooperativa',
         monto:        r.montoTotal,
         saldo,
-        pagado:       r._capitalPagado || 0, // capital pagado, no incluye intereses/seguro
+        pagado:       pagadoEfectivo,
         tasa:         (r.tasaMensual || 0) * 100,
         cuota:        medianaPagos || 3568.64,
         seguro:       r.seguroMensual,
@@ -1685,23 +1699,30 @@ function _overrideGlobals() {
     const coop = D.financiero.find((f) =>
       /préstamo|prestamo/i.test(f.tipo) && /coop/i.test(f.nombre)
     );
+    if (!coop && window.COOP) {
+      _replaceObject(window.COOP, { nombre:'Préstamo Cooperativa', inicio:null, monto:0, saldo:0, pagado:0, tasa:0, seguro:0, cuota:0, abonoMin5pct:0, abonoAcum:0, pagos:[] });
+    }
     if (coop) {
       const pagosCF = D.cashflow.filter((m) => m.c === 'Pago Prestamo');
-      // Saldo y pagado desde vw_saldo_prestamo (oficial: solo capital).
-      // Fallback al cálculo de cashflow si la vista no tiene la data.
-      const saldoOficial = coop.balance > 0 ? coop.balance : null;
-      const capitalPagado = coop._capitalPagado || 0;
       const pagadoCF = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
+      // Saldo: preferimos cashflow (siempre actualizado) sobre vw_saldo_prestamo
+      // que solo computa con FK prestamo_id explicito en movimientos (no siempre
+      // se setea en bulk-loads). Si los pagos cashflow exceden el capital
+      // pagado oficial, usamos cashflow.
+      const capitalPagadoOficial = coop._capitalPagado || 0;
+      const usarCashflow = pagadoCF > capitalPagadoOficial || coop.balance >= (coop.montoTotal || 115000);
+      const saldoCalc = Math.max(0, (coop.montoTotal || 115000) - Math.max(pagadoCF, capitalPagadoOficial));
+      const saldoFinal = usarCashflow ? saldoCalc : (coop.balance || saldoCalc);
       _replaceObject(window.COOP, {
-        nombre:       'Préstamo Cooperativa',
-        inicio:       coop.fechaInicio || '2026-02-14',
+        nombre:       coop.nombre || 'Coop Prestamo',
+        inicio:       coop.fechaInicio || '2026-02-12',
         monto:        coop.montoTotal || 115000,
-        saldo:        saldoOficial ?? Math.max(0, (coop.montoTotal || 115000) - pagadoCF),
-        pagado:       capitalPagado || pagadoCF,  // capital pagado (oficial)
+        saldo:        saldoFinal,
+        pagado:       Math.max(pagadoCF, capitalPagadoOficial),
         tasa:         (coop.tasaMensual || 0.0167) * 100,
         seguro:       coop.seguroMensual || 66.7,
         cuota:        3568.64,
-        abonoMin5pct: (saldoOficial ?? (coop.montoTotal - pagadoCF)) * 0.05,
+        abonoMin5pct: saldoFinal * 0.05,
         abonoAcum:    0,
         pagos: pagosCF.map((m, i) => ({
           mes:     _ymToLabel(m.f.slice(0, 7)),
@@ -1716,6 +1737,9 @@ function _overrideGlobals() {
   // ── ANDREA (inversora) ──
   if (Array.isArray(D.financiero) && Array.isArray(D.cashflow)) {
     const inv = D.financiero.find((f) => /inversor/i.test(f.tipo));
+    if (!inv && window.ANDREA) {
+      _replaceObject(window.ANDREA, { nombre:'Andrea Correa', inicio:null, aporte:0, retorno:0, pagado:0, pendiente:0, pagos:[] });
+    }
     if (inv) {
       const pagosCF = D.cashflow.filter((m) => m.c === 'Pago a Inversores');
       const pagado  = pagosCF.reduce((s, m) => s + (m.s || 0), 0);
@@ -1737,7 +1761,8 @@ function _overrideGlobals() {
   // ── BANCOS_SEED (cuentas de banco) ──
   // Reemplaza el mock hardcoded de panel-fin-productos con las cuentas
   // reales de Supabase. Calcula saldo dinámicamente desde cashflow.
-  if (Array.isArray(D._cuentas) && window.BANCOS_SEED) {
+  if (Array.isArray(D._cuentas)) {
+    if (!window.BANCOS_SEED) window.BANCOS_SEED = [];
     // Compute saldos por cuenta_id desde el cashflow ya cargado.
     // Como solo BHD Debito (id=1) tiene movimientos en la data histórica,
     // las otras 4 cuentas salen en 0 (correcto reflejo de la migración).
@@ -1779,6 +1804,9 @@ function _overrideGlobals() {
     const bhd = D.financiero.find((f) =>
       /línea|linea/i.test(f.tipo) && /bhd/i.test(f.nombre)
     );
+    if (!bhd && window.BHD) {
+      _replaceObject(window.BHD, { id:'FIN-003', nombre:'Línea de Crédito BHD', limite:0, usado:0, tasaAnual:0, tasaMensual:0, pagado:0, pagos:[], nota:'' });
+    }
     if (bhd) {
       // 'usado' = drawdowns netos − pagos a línea. Aproximación desde cashflow:
       //   entradas categoría 'Otro' con auxiliar tipo BHD = drawdowns

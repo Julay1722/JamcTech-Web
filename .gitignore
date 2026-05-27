@@ -32,6 +32,9 @@ test-results/
 playwright-report/
 playwright/.cache/
 
+# ── Backups locales de Supabase (artifacts de QA, no para git) ─
+backup_*/
+
 # ── OS / editor ──────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

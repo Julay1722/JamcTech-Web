@@ -705,7 +705,24 @@ function OverviewPage({ period }) {
 
   // Balance acumulado del PERÍODO + capital actual (todo histórico)
   const balancePeriodo = cf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
-  const balanceActual  = allCf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  const cashFlowNeto   = allCf.reduce((s, m) => s + (m.e || 0) - (m.s || 0), 0);
+  // "Capital actual" = saldos vivos de cuentas DEBITO + EFECTIVO (lo que tienes
+  // disponible). Excluye CREDITO porque son deudas, no capital propio.
+  // Si no hay cuentas reales aun, fallback al cash flow neto.
+  let capitalActual = cashFlowNeto;
+  let cuentasLiquidasCount = 0;
+  try {
+    const cuentasArr = Array.isArray(data._cuentas) ? data._cuentas : [];
+    const cuentasLiquidas = cuentasArr.filter(c =>
+      c && (c.tipo === 'DEBITO' || c.tipo === 'EFECTIVO')
+    );
+    cuentasLiquidasCount = cuentasLiquidas.length;
+    if (cuentasLiquidas.length > 0 && Array.isArray(window.BANCOS_SEED)) {
+      capitalActual = window.BANCOS_SEED
+        .filter(b => b && cuentasLiquidas.some(c => c.id === b._cuentaId))
+        .reduce((s, b) => s + (Number(b.saldo) || 0), 0);
+    }
+  } catch (e) { /* fallback al cashFlowNeto */ }
 
   // Deuda total = COOP saldo + ANDREA pendiente + BHD usado
   const deudaTotal = (window.COOP?.saldo || 0) + (window.ANDREA?.pendiente || 0) + (window.BHD?.usado || 0);
@@ -764,7 +781,7 @@ function OverviewPage({ period }) {
       skuStats[k].ganancia += li.ganancia || 0;
     });
   });
-  const allSkuStats = Object.values(skuStats);
+  const allSkuStats = Object.values(skuStats).filter(s => s.sku !== 'LEGACY-SALE' && s.sku !== 'LEGACY' && !/^legacy/i.test(s.nombre || ''));
   const topSkusByRevenue  = [...allSkuStats].sort((a, b) => b.revenue  - a.revenue ).slice(0, 10);
   const topSkusByGanancia = [...allSkuStats].sort((a, b) => b.ganancia - a.ganancia).slice(0, 10);
   const topSkusByUds      = [...allSkuStats].sort((a, b) => b.uds      - a.uds     ).slice(0, 10);
@@ -928,7 +945,7 @@ function OverviewPage({ period }) {
       <div className="topbar">
         <div>
           <h1>Resumen</h1>
-          <div className="sub">{ventas.length} ventas · {SK.length} SKUs · {cf.length} movimientos · {fmtDate(HOY)}</div>
+          <div className="sub">{ventas.length} ventas · {SK.length} SKUs · {cf.length} movimientos · {fmtDate(window.HOY || HOY)}</div>
         </div>
         <div className="topbar-actions">
           <span className="pill"><span className="pill-dot" /> Live · Supabase</span>
@@ -941,8 +958,8 @@ function OverviewPage({ period }) {
              delta={period === 'todo' ? growthMoM : null} deltaLabel={period === 'todo' ? 'MoM' : `${ventas.length} ventas`} />
         <KPI label="Ganancia bruta" value={fmtNum(totalGanancia)} currency
              delta={margenPct} deltaLabel="margen" />
-        <KPI label="Capital actual" value={fmtNum(balanceActual)} currency
-             delta={null} deltaLabel="cash flow neto histórico" />
+        <KPI label="Capital actual" value={fmtNum(capitalActual)} currency
+             delta={null} deltaLabel={cuentasLiquidasCount > 0 ? `${cuentasLiquidasCount} cuenta(s) líquida(s)` : 'cash flow neto'} />
         <KPI label="Deuda total" value={fmtNum(deudaTotal)} currency
              delta={null} deltaLabel="COOP + Andrea + BHD" />
       </div>
@@ -1028,7 +1045,7 @@ function OverviewPage({ period }) {
             <div className="section-title">Balance acumulado de cuentas (RD$)</div>
             <div className="section-desc">Capital total {grain === 'diario' ? 'día a día' : 'mes a mes'} · suma rolling · {period === 'todo' ? 'histórico completo' : `período ${period}`}</div>
           </div>
-          <span className="badge neutral">Actual: {fmtCurrency(balanceActual)}</span>
+          <span className="badge neutral">Actual: {fmtCurrency(capitalActual)}</span>
         </div>
         <LineChart values={balSeriesFinal} labels={balLabelsFinal} h={210} color="var(--success)"
           fmt={(n) => 'RD$' + fmtK(n)} title={`CAPITAL ACUMULADO (${grain}) · RD$`} yTicks={5} />
@@ -1701,7 +1718,16 @@ function EditLoteModal({ open, lote, onClose }) {
   };
 
   const addLinea = () => setLineas(arr => [...arr, { id: 'new-' + Date.now(), skuId: '', qty: 1, costoUd: 0, _isNew: true }]);
-  const updateLinea = (id, patch) => setLineas(arr => arr.map(l => l.id === id ? { ...l, ...patch } : l));
+  const updateLinea = (id, patch) => setLineas(arr => {
+    const next = arr.map(l => l.id === id ? { ...l, ...patch } : l);
+    // Auto-append fila vacia si la ULTIMA fila acaba de recibir un SKU.
+    // Evita tener que hacer click manual en "+ Anadir SKU" tras cada SKU.
+    const last = next[next.length - 1];
+    if (patch.skuId && last.id === id && last.skuId) {
+      next.push({ id: 'new-' + Date.now() + '-auto', skuId: '', qty: 1, costoUd: 0, _isNew: true });
+    }
+    return next;
+  });
   const removeLineaLocal = (id) => setLineas(arr => arr.filter(l => l.id !== id));
 
   const removeLineaPersistida = async (linea) => {
@@ -1900,7 +1926,10 @@ function InventarioPage() {
     setBusy(false);
   };
 
-  let filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
+  // Excluir SKU placeholder LEGACY-SALE de la lista de inventario para evitar
+  // stock negativo y noise. Las ventas legacy se ven aparte en Ventas tab.
+  const SK_FILT = SK.filter(s => s.id !== 'LEGACY-SALE');
+  let filtered = filter === 'all' ? SK_FILT : SK_FILT.filter(s => s.estado === filter);
   if (search) {
     const q = search.toLowerCase();
     filtered = filtered.filter(s =>
@@ -1929,7 +1958,7 @@ function InventarioPage() {
       <div className="topbar">
         <div>
           <h1>Inventario</h1>
-          <div className="sub">{SK.length} SKUs · {fmtNum(SK.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
+          <div className="sub">{SK.filter(s => s.id !== 'LEGACY-SALE').length} SKUs · {fmtNum(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
         </div>
         {subtab === 'skus' && (
           <div className="topbar-actions">
@@ -2215,15 +2244,32 @@ function FormCuenta({ onDone }) {
   const [tipo, setTipo] = useState('DEBITO');
   const [moneda, setMoneda] = useState('RD');
   const [limite, setLimite] = useState('');
+  const [saldoInicial, setSaldoInicial] = useState('');
+  const [fechaApertura, setFechaApertura] = useState(window.HOY || new Date().toISOString().slice(0, 10));
   const [notas, setNotas] = useState('');
   const [busy, setBusy] = useState(false);
   const valid = nombre.length > 1;
+  const saldoNum = Number(saldoInicial) || 0;
   const onSubmit = async () => {
     setBusy(true);
     try {
       await window.AT_CLIENT.createCuenta({ nombre, tipo, moneda, limite, notas });
-      window.toastOk('Cuenta creada', `${nombre} · ${tipo} ${moneda}`);
-      setNombre(''); setLimite(''); setNotas('');
+      // Si hay saldo inicial > 0, sembrarlo con un movimiento automatico.
+      // DEBITO/EFECTIVO → APORTE_DUENO (entrada). CREDITO → DRAWDOWN (deuda preexistente).
+      if (saldoNum > 0) {
+        const esCredito = tipo === 'CREDITO';
+        await window.AT_CLIENT.create('cashflow', {
+          fecha: fechaApertura,
+          cuenta: nombre,
+          concepto: esCredito ? 'Saldo inicial (deuda)' : 'Saldo inicial',
+          tipo: esCredito ? 'DRAWDOWN' : 'APORTE_DUENO',
+          entrada: esCredito ? 0 : saldoNum,
+          salida:  esCredito ? saldoNum : 0,
+          notas: `Saldo inicial al crear cuenta ${nombre}`,
+        });
+      }
+      window.toastOk('Cuenta creada', `${nombre} · ${tipo} ${moneda}${saldoNum > 0 ? ` · saldo inicial ${saldoNum}` : ''}`);
+      setNombre(''); setLimite(''); setNotas(''); setSaldoInicial('');
       onDone?.();
     } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
     setBusy(false);
@@ -2248,11 +2294,26 @@ function FormCuenta({ onDone }) {
         <div className="field"><div className="field-label">Límite de crédito</div>
           <input className="input num" type="number" value={limite} onChange={e => setLimite(e.target.value)} placeholder="0" /></div>
       )}
+      <div className="row-2">
+        <div className="field">
+          <div className="field-label">{tipo === 'CREDITO' ? 'Saldo inicial (deuda actual)' : 'Saldo inicial'}{moneda === 'USD' ? ' (USD)' : ' (RD$)'}</div>
+          <input className="input num" type="number" step="0.01" value={saldoInicial} onChange={e => setSaldoInicial(e.target.value)} placeholder="opcional · 0" />
+        </div>
+        <div className="field">
+          <div className="field-label">Fecha apertura</div>
+          <input className="input num" type="date" value={fechaApertura} onChange={e => setFechaApertura(e.target.value)} />
+        </div>
+      </div>
       <div className="field"><div className="field-label">Notas</div>
         <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
+      {saldoNum > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-3)', padding: 'var(--s-2)', background: 'var(--surface-2)', borderRadius: 4 }}>
+          Se creará automáticamente un movimiento <b>{tipo === 'CREDITO' ? 'DRAWDOWN' : 'APORTE_DUENO'}</b> de {moneda === 'USD' ? 'USD$' : 'RD$'}{saldoNum.toLocaleString()} con fecha {fechaApertura} para sembrar el saldo.
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear cuenta'}</button>
-        <button className="btn ghost" disabled={busy} onClick={() => { setNombre(''); setLimite(''); setNotas(''); }}>Limpiar</button>
+        <button className="btn ghost" disabled={busy} onClick={() => { setNombre(''); setLimite(''); setNotas(''); setSaldoInicial(''); }}>Limpiar</button>
       </div>
     </div>
   );
@@ -3670,57 +3731,69 @@ function FinanzasPage() {
           delta={null} deltaLabel={`pagado ${fmtCurrency(andrea?.pagado || 0)}`} />
         <KPI label="BHD usado" value={fmtNum(lcs.find(l => /bhd/i.test(l.nombre))?.usado || 0)} currency
           delta={null} deltaLabel={`límite ${fmtCurrency(112000)}`} />
-        <KPI label="Cuenta operativa" value={fmtNum(data._cuentas?.[0] ? cuentas.reduce((s, c) => s, 0) : 0)} currency
+        <KPI label="Cuenta operativa" value={fmtNum((window.BANCOS_SEED || []).filter(b => /BHD/i.test(b.nombre) && b.tipoSub === 'Corriente').reduce((s, b) => s + (b.saldo || 0), 0))} currency
           delta={null} deltaLabel="BHD Débito" />
       </div>
 
       <div className="grid-2">
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Préstamo Cooperativa</div>
-              <div className="section-desc">{coop?.movimientos?.length || 0} pagos registrados</div>
+        {(coop && (coop.monto > 0 || coop.saldo > 0)) ? (
+          <div className="section">
+            <div className="section-head">
+              <div>
+                <div className="section-title">{coop.nombre || 'Préstamo Cooperativa'}</div>
+                <div className="section-desc">{coop?.movimientos?.length || 0} pagos registrados</div>
+              </div>
+              <span className="badge neutral">{coop?.tasa?.toFixed?.(2) || 0}% / mes</span>
             </div>
-            <span className="badge neutral">{coop?.tasa?.toFixed?.(2) || 0}% / mes</span>
+            <div className="grid-3">
+              <div className="stat-card">
+                <div className="stat-label">Monto inicial</div>
+                <div className="stat-value">{fmtCurrency(coop?.monto || 0)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Capital pagado</div>
+                <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(coop?.pagado || 0)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Saldo</div>
+                <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(coop?.saldo || 0)}</div>
+              </div>
+            </div>
           </div>
-          <div className="grid-3">
-            <div className="stat-card">
-              <div className="stat-label">Monto inicial</div>
-              <div className="stat-value">{fmtCurrency(coop?.monto || 0)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Capital pagado</div>
-              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(coop?.pagado || 0)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Saldo</div>
-              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(coop?.saldo || 0)}</div>
-            </div>
+        ) : (
+          <div className="section empty-section">
+            <div className="empty">Sin préstamos · agrega uno en tab <b>Préstamos</b></div>
           </div>
-        </div>
+        )}
 
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Inversora · Andrea Correa</div>
-              <div className="section-desc">Retorno 2× · {andrea?.movimientos?.length || 0} pagos</div>
+        {(andrea && (andrea.aporte > 0 || andrea.pendiente > 0)) ? (
+          <div className="section">
+            <div className="section-head">
+              <div>
+                <div className="section-title">Inversora · {andrea.nombre || 'Andrea Correa'}</div>
+                <div className="section-desc">Retorno {andrea.aporte > 0 ? (andrea.retorno / andrea.aporte).toFixed(1) : 0}× · {andrea?.movimientos?.length || 0} pagos</div>
+              </div>
+            </div>
+            <div className="grid-3">
+              <div className="stat-card">
+                <div className="stat-label">Aporte</div>
+                <div className="stat-value">{fmtCurrency(andrea?.aporte || 0)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Pagado</div>
+                <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(andrea?.pagado || 0)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Pendiente</div>
+                <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(andrea?.pendiente || 0)}</div>
+              </div>
             </div>
           </div>
-          <div className="grid-3">
-            <div className="stat-card">
-              <div className="stat-label">Aporte</div>
-              <div className="stat-value">{fmtCurrency(andrea?.aporte || 0)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Pagado</div>
-              <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(andrea?.pagado || 0)}</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-label">Pendiente</div>
-              <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(andrea?.pendiente || 0)}</div>
-            </div>
+        ) : (
+          <div className="section empty-section">
+            <div className="empty">Sin inversora · agrega una en tab <b>Inversores</b></div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="grid-2">
@@ -4291,7 +4364,14 @@ function FormVenta() {
 
   const addLinea = () => setLineas(arr => [...arr, { id: Date.now(), skuId: '', qty: 1 }]);
   const removeLinea = (id) => setLineas(arr => arr.filter(l => l.id !== id));
-  const updateLinea = (id, patch) => setLineas(arr => arr.map(l => l.id === id ? { ...l, ...patch } : l));
+  const updateLinea = (id, patch) => setLineas(arr => {
+    const next = arr.map(l => l.id === id ? { ...l, ...patch } : l);
+    const last = next[next.length - 1];
+    if (patch.skuId && last.id === id && last.skuId) {
+      next.push({ id: Date.now() + Math.random(), skuId: '', qty: 1 });
+    }
+    return next;
+  });
 
   // Compute totals
   const lineasValidas = lineas.filter(l => l.skuId && Number(l.qty) > 0);
@@ -4428,15 +4508,7 @@ function FormVenta() {
         </div>
       </div>
 
-      {(precio || lineasValidas.length > 0) && (
-        <div className="summary">
-          <div className="summary-item"><span className="lbl">Facturado</span><span className="val">{fmtCurrency(Number(precio) || 0)}</span></div>
-          <div className="summary-item"><span className="lbl">Costo</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
-          <div className="summary-item"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
-          <div className="summary-item"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
-        </div>
-      )}
-
+      {/* Buttons FIRST para que su posicion no se mueva cuando aparece el summary abajo. */}
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
           {busy ? 'Registrando…' : 'Registrar venta'}
@@ -4446,6 +4518,15 @@ function FormVenta() {
           setLineas([{ id: 1, skuId: '', qty: 1 }]);
         }}>Limpiar</button>
       </div>
+
+      {(precio || lineasValidas.length > 0) && (
+        <div className="summary">
+          <div className="summary-item"><span className="lbl">Facturado</span><span className="val">{fmtCurrency(Number(precio) || 0)}</span></div>
+          <div className="summary-item"><span className="lbl">Costo</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
+          <div className="summary-item"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
+          <div className="summary-item"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4491,7 +4572,14 @@ function FormLote() {
 
   const addLinea = () => setLineas(arr => [...arr, { id: Date.now(), skuId: '', qty: 1, costoUd: 0 }]);
   const removeLinea = (id) => setLineas(arr => arr.filter(l => l.id !== id));
-  const updateLinea = (id, patch) => setLineas(arr => arr.map(l => l.id === id ? { ...l, ...patch } : l));
+  const updateLinea = (id, patch) => setLineas(arr => {
+    const next = arr.map(l => l.id === id ? { ...l, ...patch } : l);
+    const last = next[next.length - 1];
+    if (patch.skuId && last.id === id && last.skuId) {
+      next.push({ id: Date.now() + Math.random(), skuId: '', qty: 1, costoUd: 0 });
+    }
+    return next;
+  });
 
   const lineasValidas = lineas.filter(l => l.skuId && Number(l.qty) > 0);
   const costoBase = lineasValidas.reduce((s, l) => s + Number(l.qty) * Number(l.costoUd || 0), 0);
@@ -5214,11 +5302,83 @@ function VentasPageExt({ period }) {
 function MovimientosPage({ period, onNavigate }) {
   const data = useATData();
   const all = data.cashflow || [];
-  const filtered = filterByPeriod(all, period, 'f').slice(0, 100);
   const [del, setDel] = useState(null);
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('lista');
+  const [tipoSel, setTipoSel] = useState(new Set());      // multi-select de conceptos
+  const [cuentaSel, setCuentaSel] = useState('todas');    // dropdown de cuenta
+  const [naturalezaSel, setNaturalezaSel] = useState('todas'); // op/fin/all
+  const [search, setSearch] = useState('');
+  const [showRunning, setShowRunning] = useState(true);   // mostrar saldo corriente
+  const [limit, setLimit] = useState(500);                // cuántas filas (paginación simple)
+
+  // Aplicar todos los filtros
+  const filteredAll = filterByPeriod(all, period, 'f').filter(m => {
+    if (tipoSel.size > 0 && !tipoSel.has(m.c)) return false;
+    if (cuentaSel !== 'todas' && m._origen !== cuentaSel) return false;
+    if (naturalezaSel === 'op'  && m._naturaleza === 'FINANCIERO') return false;
+    if (naturalezaSel === 'fin' && m._naturaleza !== 'FINANCIERO') return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const txt = ((m.c || '') + ' ' + (m.a || '') + ' ' + (m.notas || '') + ' ' + (m._origen || '')).toLowerCase();
+      if (!txt.includes(q)) return false;
+    }
+    return true;
+  });
+  const filtered = filteredAll.slice(0, limit);
+
+  // Totales del período filtrado
+  const totalEntradas = filteredAll.reduce((s, m) => s + (m.e || 0), 0);
+  const totalSalidas  = filteredAll.reduce((s, m) => s + (m.s || 0), 0);
+  const neto = totalEntradas - totalSalidas;
+
+  // Conceptos únicos + sus totales (para chips con monto)
+  const conceptosStats = {};
+  filterByPeriod(all, period, 'f').forEach(m => {
+    const c = m.c || 'Sin tipo';
+    if (!conceptosStats[c]) conceptosStats[c] = { count: 0, e: 0, s: 0 };
+    conceptosStats[c].count += 1;
+    conceptosStats[c].e += m.e || 0;
+    conceptosStats[c].s += m.s || 0;
+  });
+  const conceptosOrdenados = Object.entries(conceptosStats)
+    .sort((a, b) => (b[1].e + b[1].s) - (a[1].e + a[1].s));
+
+  // Cuentas únicas
+  const cuentasUnicas = [...new Set(all.map(m => m._origen).filter(Boolean))].sort();
+
+  // Running balance: orden ASC para computar, revertir para mostrar
+  const ordered = filteredAll.slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
+  let running = 0;
+  const withBalance = ordered.map(m => { running += (m.e || 0) - (m.s || 0); return { ...m, _saldo: running }; });
+  const rowsConBalance = withBalance.slice().reverse().slice(0, limit);
+
+  // Export CSV
+  const exportCSV = () => {
+    const headers = ['Fecha', 'Tipo', 'Cuenta', 'Contraparte', 'Naturaleza', 'Debe (entrada)', 'Haber (salida)', 'Saldo corriente', 'Notas'];
+    const rows = withBalance.slice().reverse().map(m => [
+      m.f, m.c, m._origen || '', m.a || '', m._naturaleza || 'CASHFLOW',
+      m.e || 0, m.s || 0, m._saldo || 0, (m.notas || '').replace(/[\n,;]/g, ' '),
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `libro-contable-${period}-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const toggleTipo = (c) => {
+    setTipoSel(prev => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c); else next.add(c);
+      return next;
+    });
+  };
+  const clearTipos = () => setTipoSel(new Set());
 
   // Detecta si un movimiento vino de venta, lote, o movFin. Si vino de
   // una fuente, NO se debe editar aquí (el edit no propaga al origen,
@@ -5276,13 +5436,16 @@ function MovimientosPage({ period, onNavigate }) {
     <>
       <div className="topbar">
         <div>
-          <h1>Movimientos</h1>
-          <div className="sub">{all.length} totales · {filtered.length} mostrando</div>
+          <h1>Movimientos · libro contable</h1>
+          <div className="sub">{all.length} totales · {filteredAll.length} en filtros · saldo período: <strong style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(neto)}</strong></div>
+        </div>
+        <div className="topbar-actions">
+          <button className="pill" onClick={exportCSV} title="Descargar libro contable como CSV">⬇ Exportar CSV</button>
         </div>
       </div>
 
       <div className="tabs">
-        <button className={`tab ${tab === 'lista' ? 'active' : ''}`} onClick={() => setTab('lista')}>Lista</button>
+        <button className={`tab ${tab === 'lista' ? 'active' : ''}`} onClick={() => setTab('lista')}>Libro contable</button>
         <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>+ Movimiento financiero</button>
         <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>+ Ajuste CF</button>
       </div>
@@ -5290,54 +5453,178 @@ function MovimientosPage({ period, onNavigate }) {
       {tab === 'movfin' && <div className="section"><FormMovFin /></div>}
       {tab === 'ajuste' && <div className="section"><FormAjusteCF /></div>}
 
-      {tab === 'lista' && (
-      <div className="section">
-        <table className="data">
-          <thead><tr>
-            <th>Fecha</th><th>Tipo</th><th>Contraparte</th>
-            <th className="right">Entrada</th><th className="right">Salida</th><th className="right">Neto</th>
-            <th></th>
-          </tr></thead>
-          <tbody>
-            {filtered.map((m, i) => {
-              const neto = (m.e || 0) - (m.s || 0);
-              const source = linkedSource(m);
-              return (
-                <tr key={i}>
-                  <td>{fmtDate(m.f)}</td>
-                  <td>{m.c}</td>
-                  <td className="muted">{m.a || '—'}</td>
-                  <td className="num right pos">{m.e > 0 ? fmtCurrency(m.e) : '—'}</td>
-                  <td className="num right neg">{m.s > 0 ? '-' + fmtCurrency(m.s) : '—'}</td>
-                  <td className={`num right ${neto > 0 ? 'pos' : neto < 0 ? 'neg' : 'muted'}`}>
-                    {neto > 0 ? '+' : ''}{fmtCurrency(neto)}
-                  </td>
-                  <td className="row-actions">
-                    <div className="row-actions-inner">
-                      {source ? (
-                        <button
-                          onClick={() => onNavigate?.(source.page)}
-                          title={`Este movimiento vino de ${source.kind}. Edítalo allá para que se recalculen ganancia/totales.`}
-                          style={{
-                            background: 'transparent', border: '1px solid var(--border)',
-                            color: 'var(--accent)', cursor: 'pointer', fontSize: 11,
-                            padding: '4px 8px', borderRadius: 4, whiteSpace: 'nowrap',
-                          }}>
-                          {source.label} →
-                        </button>
-                      ) : (
-                        <button className="icon-btn" onClick={() => setEdit(m)} title="Editar (movimiento manual)">✎</button>
-                      )}
-                      <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
-                    </div>
-                  </td>
+      {tab === 'lista' && (<>
+        {/* KPIs del período filtrado */}
+        <div className="kpi-row">
+          <KPI label="Movimientos" value={fmtNum(filteredAll.length)} delta={null} deltaLabel={`de ${all.length} totales`} />
+          <KPI label="Total Debe (entradas)" value={fmtNum(totalEntradas)} currency delta={null} deltaLabel="cobros / aportes / ingresos" />
+          <KPI label="Total Haber (salidas)" value={fmtNum(totalSalidas)} currency delta={null} deltaLabel="pagos / compras / gastos" />
+          <KPI label="Saldo neto del período" value={fmtNum(neto)} currency
+               delta={neto >= 0 ? 1 : -1} deltaLabel={neto >= 0 ? 'superávit' : 'déficit'} />
+        </div>
+
+        {/* Filtros */}
+        <div className="section" style={{ marginBottom: 'var(--s-3)' }}>
+          <div className="section-head">
+            <div>
+              <div className="section-title">Filtros</div>
+              <div className="section-desc">Combina filtros: tipo (chip) + cuenta + naturaleza + búsqueda</div>
+            </div>
+            {(tipoSel.size > 0 || cuentaSel !== 'todas' || naturalezaSel !== 'todas' || search) && (
+              <button className="btn ghost" onClick={() => { clearTipos(); setCuentaSel('todas'); setNaturalezaSel('todas'); setSearch(''); }}>
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+
+          {/* Row 1: cuenta + naturaleza + búsqueda + toggle saldo */}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'end', marginBottom: 12, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: '0 0 220px' }}>
+              <div className="field-label">Cuenta origen</div>
+              <select className="select" value={cuentaSel} onChange={e => setCuentaSel(e.target.value)}>
+                <option value="todas">Todas las cuentas</option>
+                {cuentasUnicas.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ flex: '0 0 200px' }}>
+              <div className="field-label">Naturaleza</div>
+              <select className="select" value={naturalezaSel} onChange={e => setNaturalezaSel(e.target.value)}>
+                <option value="todas">Todas</option>
+                <option value="op">Solo operacional</option>
+                <option value="fin">Solo financiero</option>
+              </select>
+            </div>
+            <div className="field" style={{ flex: 1, minWidth: 200 }}>
+              <div className="field-label">Búsqueda libre</div>
+              <input className="input" type="text" placeholder="concepto, contraparte, cuenta, notas…" value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <div className="field" style={{ flex: '0 0 auto' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-2)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={showRunning} onChange={e => setShowRunning(e.target.checked)} />
+                Saldo corriente
+              </label>
+            </div>
+          </div>
+
+          {/* Row 2: chips de tipo */}
+          <div>
+            <div className="field-label" style={{ marginBottom: 6 }}>
+              Tipo de movimiento ({tipoSel.size === 0 ? 'todos' : tipoSel.size + ' seleccionados'})
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {conceptosOrdenados.map(([c, st]) => {
+                const active = tipoSel.has(c);
+                const isInflow = st.e > st.s;
+                return (
+                  <button key={c} className="pill" onClick={() => toggleTipo(c)} style={{
+                    background: active ? (isInflow ? 'var(--success)' : 'var(--danger)') : 'var(--surface-2)',
+                    color: active ? 'white' : 'var(--text-2)',
+                    border: 'none', fontSize: 11,
+                  }}>
+                    {c} <span style={{ opacity: 0.75, marginLeft: 4 }}>({st.count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Libro contable */}
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Libro contable</div>
+              <div className="section-desc">
+                {filtered.length} de {filteredAll.length} · ordenado desc por fecha · sticky header
+              </div>
+            </div>
+            {filteredAll.length > limit && (
+              <button className="btn ghost" onClick={() => setLimit(l => l + 500)}>
+                Cargar más ({filteredAll.length - limit} restantes)
+              </button>
+            )}
+          </div>
+          <div style={{ maxHeight: 700, overflowY: 'auto' }}>
+            <table className="data">
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Tipo / Concepto</th>
+                  <th>Cuenta</th>
+                  <th>Contraparte</th>
+                  <th>Nat.</th>
+                  <th className="right">Debe</th>
+                  <th className="right">Haber</th>
+                  {showRunning && <th className="right">Saldo</th>}
+                  <th></th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      )}
+              </thead>
+              <tbody>
+                {rowsConBalance.map((m, i) => {
+                  const source = linkedSource(m);
+                  const isFin = m._naturaleza === 'FINANCIERO';
+                  return (
+                    <tr key={i}>
+                      <td className="num" style={{ fontSize: 11, color: 'var(--text-3)' }}>{fmtDate(m.f)}</td>
+                      <td><span style={{ fontWeight: 500 }}>{m.c}</span></td>
+                      <td className="muted" style={{ fontSize: 11 }}>{m._origen || '—'}</td>
+                      <td className="muted" style={{ fontSize: 12 }}>{m.a || '—'}</td>
+                      <td>
+                        <span className="badge" style={{
+                          background: isFin ? 'rgba(245,158,11,0.2)' : 'rgba(59,130,246,0.2)',
+                          color: isFin ? '#f59e0b' : '#3b82f6', fontSize: 9,
+                        }}>{isFin ? 'FIN' : 'OP'}</span>
+                      </td>
+                      <td className="num right pos">{m.e > 0 ? fmtCurrency(m.e) : ''}</td>
+                      <td className="num right neg">{m.s > 0 ? fmtCurrency(m.s) : ''}</td>
+                      {showRunning && (
+                        <td className="num right" style={{ fontWeight: 600, color: m._saldo >= 0 ? 'var(--text)' : 'var(--danger)' }}>
+                          {fmtCurrency(m._saldo)}
+                        </td>
+                      )}
+                      <td className="row-actions">
+                        <div className="row-actions-inner">
+                          {source ? (
+                            <button
+                              onClick={() => onNavigate?.(source.page)}
+                              title={`Vino de ${source.kind} · editar en su fuente`}
+                              style={{
+                                background: 'transparent', border: '1px solid var(--border)',
+                                color: 'var(--accent)', cursor: 'pointer', fontSize: 10,
+                                padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap',
+                              }}>
+                              {source.kind} →
+                            </button>
+                          ) : (
+                            <button className="icon-btn" onClick={() => setEdit(m)} title="Editar">✎</button>
+                          )}
+                          <button className="icon-btn danger" onClick={() => setDel(m)} title="Eliminar">×</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {rowsConBalance.length === 0 && (
+                  <tr><td colSpan={showRunning ? 9 : 8} className="empty" style={{ padding: 'var(--s-6)' }}>
+                    Sin movimientos en estos filtros
+                  </td></tr>
+                )}
+              </tbody>
+              {rowsConBalance.length > 0 && (
+                <tfoot>
+                  <tr style={{ background: 'var(--surface-2)', fontWeight: 600, position: 'sticky', bottom: 0 }}>
+                    <td colSpan="5" className="muted">TOTALES del período filtrado</td>
+                    <td className="num right pos">{fmtCurrency(totalEntradas)}</td>
+                    <td className="num right neg">{fmtCurrency(totalSalidas)}</td>
+                    {showRunning && <td className="num right" style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(neto)}</td>}
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      </>)}
 
       <ConfirmModal open={!!del} danger busy={busy}
         title={`¿Eliminar movimiento?`}
@@ -5415,7 +5702,9 @@ function EditModal({ open, title, fields, onCancel, onSave, busy }) {
 // ════════════════════════════════════════════════════════════════
 function AlertasPage() {
   const data = useATData();
-  const SK = window.buildSK ? window.buildSK() : (data.skus || []);
+  const SK_ALL = window.buildSK ? window.buildSK() : (data.skus || []);
+  // Excluir LEGACY-SALE — es placeholder, no inventario real.
+  const SK = SK_ALL.filter(s => s.id !== 'LEGACY-SALE');
   const criticos = SK.filter(s => s.estado === 'critico');
   const atencion = SK.filter(s => s.estado === 'atencion');
   const reposicion = SK.filter(s => s.estado === 'en_reposicion');
@@ -5710,15 +5999,7 @@ function FormSKU() {
         </div>
       </div>
 
-      {valid && (
-        <div className="summary">
-          <div className="summary-item"><span className="lbl">ID generado</span><span className="val num">{skuId}</span></div>
-          <div className="summary-item"><span className="lbl">Nombre</span><span className="val" style={{ fontSize: 13 }}>{showCustom && customCat ? `[${customCat}] ${autoNm}` : autoNm}</span></div>
-          <div className="summary-item"><span className="lbl">Categoría</span><span className="val" style={{ fontSize: 13 }}>{effectiveCat || '—'}</span></div>
-          <div className="summary-item"><span className="lbl">Precio</span><span className="val">{pv ? fmtCurrency(pv) : '—'}</span></div>
-        </div>
-      )}
-
+      {/* Buttons FIRST so position stays stable cuando aparece el preview abajo. */}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
           {busy ? 'Creando…' : 'Crear SKU'}
@@ -5727,6 +6008,15 @@ function FormSKU() {
           setMk(''); setModelo(''); setColor(''); setPv(''); setNotas('');
         }}>Limpiar</button>
       </div>
+
+      {valid && (
+        <div className="summary">
+          <div className="summary-item"><span className="lbl">ID generado</span><span className="val num">{skuId}</span></div>
+          <div className="summary-item"><span className="lbl">Nombre</span><span className="val" style={{ fontSize: 13 }}>{showCustom && customCat ? `[${customCat}] ${autoNm}` : autoNm}</span></div>
+          <div className="summary-item"><span className="lbl">Categoría</span><span className="val" style={{ fontSize: 13 }}>{effectiveCat || '—'}</span></div>
+          <div className="summary-item"><span className="lbl">Precio</span><span className="val">{pv ? fmtCurrency(pv) : '—'}</span></div>
+        </div>
+      )}
     </div>
   );
 }
