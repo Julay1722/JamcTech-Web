@@ -1880,8 +1880,24 @@ function InventarioPage() {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [del, setDel] = useState(null);
+  const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [expandedModels, setExpandedModels] = useState({}); // key 'cat|mk|modelo' → bool
+
+  const doSaveEdit = async (vals) => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.updateSKU(edit.id, {
+        nm: vals.nm, mk: vals.mk, modelo: vals.modelo, color: vals.color,
+        cat: vals.cat,
+        pv: vals.pv === '' ? null : Number(vals.pv),
+        notas: vals.notas,
+      });
+      window.toastOk('SKU actualizado', `${edit.id}`);
+      setEdit(null);
+    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
 
   let filtered = filter === 'all' ? SK : SK.filter(s => s.estado === filter);
   if (search) {
@@ -2052,9 +2068,25 @@ function InventarioPage() {
                             <td className="num right">{fmtCurrency(cppProm)}</td>
                             <td className="num right">{pvAlguno > 0 ? fmtCurrency(pvAlguno) : '—'}</td>
                             <td className="num right muted">{pvAlguno > 0 ? margen + '%' : '—'}</td>
-                            <td><span className={`badge ${badgeCls}`}>{est.replace('_', ' ')}</span></td>
+                            <td>
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                <span className={`badge ${badgeCls}`}>{est.replace('_', ' ')}</span>
+                                {g.items.length === 1 && (
+                                  <>
+                                    <button className="icon-btn" title="Editar SKU" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); setEdit(g.items[0]); }}>✎</button>
+                                    <button className="icon-btn danger" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); setDel(g.items[0]); }}>×</button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
                           </tr>
-                          {/* Children: cada color como sub-row */}
+                          {/* Children: cada color como sub-row.
+                              Si el modelo tiene UNA sola variante (no expandible),
+                              también mostramos sus botones de edit/del en la row del modelo. */}
+                          {g.items.length === 1 && (() => {
+                            // Hack: render del solo SKU debajo con sus actions
+                            return null;  // las actions del SKU único se ponen en el badge cell abajo
+                          })()}
                           {expanded && g.items.length > 1 && g.items.map(s => {
                             const sBadge = s.estado === 'critico' ? 'danger' : s.estado === 'atencion' ? 'warning' : s.estado === 'ok' ? 'success' : 'neutral';
                             const sMargen = s.pv > 0 ? Math.round(((s.pv - s.cpp) / s.pv) * 100) : 0;
@@ -2074,6 +2106,7 @@ function InventarioPage() {
                                 <td>
                                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                                     <span className={`badge ${sBadge}`} style={{ fontSize: 9 }}>{s.estado.replace('_', ' ')}</span>
+                                    <button className="icon-btn" title="Editar" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); setEdit(s); }}>✎</button>
                                     <button className="icon-btn danger" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); setDel(s); }}>×</button>
                                   </div>
                                 </td>
@@ -2101,6 +2134,21 @@ function InventarioPage() {
         }
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
+
+      <EditModal open={!!edit} busy={busy}
+        title={`Editar SKU · ${edit?.id || ''}`}
+        fields={edit ? [
+          { name: 'nm',     label: 'Nombre',     type: 'text',   value: edit.nm || '', span: 2 },
+          { name: 'mk',     label: 'Marca',      type: 'text',   value: edit.mk || '' },
+          { name: 'modelo', label: 'Modelo',     type: 'text',   value: edit.modelo || '' },
+          { name: 'color',  label: 'Color',      type: 'text',   value: edit.color || '' },
+          { name: 'cat',    label: 'Categoría',  type: 'select', value: edit.cat || 'Mouse',
+            options: ['Mouse','Teclado','Headset','Stand','Mouse Pad','Otro'] },
+          { name: 'pv',     label: 'Precio venta (RD$)', type: 'number', value: edit.pv || '' },
+          { name: 'notas',  label: 'Notas',      type: 'text',   value: edit.notas || '', span: 2 },
+        ] : []}
+        onCancel={() => setEdit(null)}
+        onSave={doSaveEdit} />
     </>
   );
 }
