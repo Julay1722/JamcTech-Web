@@ -2403,6 +2403,226 @@ function DetalleCuentaLedger({ cuenta, cashflow }) {
   );
 }
 
+// ═════════════════════════ Análisis de Deuda · Semáforo ═════════════════════════
+// Compara cash flow operacional promedio mensual contra pagos mensuales totales
+// a deudas (préstamos + líneas + tarjetas + inversores). Muestra semáforo
+// verde/amarillo/rojo con recomendaciones, stress test y breakdown.
+function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }) {
+  // ── Cash flow OPERACIONAL promedio mensual de los últimos 6 meses ───
+  // Excluye movimientos financieros (pagos de deuda, intereses, aportes)
+  // para tener el flujo "limpio" del negocio.
+  const FIN_CONCEPTS = /préstamo|prestamo|interés|interes|tarjeta|línea|linea|inversor|aporte|drawdown|fee/i;
+  const hoyDate = new Date(window.HOY || new Date().toISOString().slice(0, 10));
+  const hace6 = new Date(hoyDate); hace6.setMonth(hace6.getMonth() - 6);
+  const cf6m = cashflow.filter(m => m.f && new Date(m.f) >= hace6 && !FIN_CONCEPTS.test(m.c || ''));
+  // Agrupar por mes y calcular neto
+  const byMonth = {};
+  cf6m.forEach(m => {
+    const ym = m.f.slice(0, 7);
+    if (!byMonth[ym]) byMonth[ym] = { e: 0, s: 0 };
+    byMonth[ym].e += m.e || 0;
+    byMonth[ym].s += m.s || 0;
+  });
+  const mesesData = Object.values(byMonth);
+  const cashFlowMensualProm = mesesData.length > 0
+    ? mesesData.reduce((s, b) => s + (b.e - b.s), 0) / mesesData.length
+    : 0;
+
+  // ── Pagos mensuales totales a deudas ─────────────────────────────────
+  // Préstamos amortizados: usa la cuota típica (mediana de pagos previos
+  //   o cálculo PMT desde monto + tasa). En prestamosUnified los _kind='prestamo'.
+  // Líneas/Tarjetas: usa 5% del saldo usado como "pago mínimo" (estándar bancario).
+  // Inversores externos (no dueño): retorno mensual promedio si tiene plazo.
+  let pagosCuotas = 0;     // préstamos amortizados
+  let pagosMinimos = 0;    // tarjetas/líneas (estimación 5% saldo)
+  let pagosInversor = 0;   // retorno mensual a inversores
+
+  const pagosBreakdown = [];
+
+  prestamosUnified.forEach(p => {
+    if (p._kind === 'prestamo') {
+      // Cuota desde productos['FIN-P'] (mediana) o computar
+      const cuota = (window.__AIRTABLE_DATA__?.productos?.['FIN-P'] || []).find(x => x._airtableId === p._airtableId)?.cuota || 0;
+      const cuotaCalc = cuota || (p.tasaMensual && p.montoTotal ? p.montoTotal * p.tasaMensual / (1 - Math.pow(1 + p.tasaMensual, -48)) + (p.seguroMensual || 0) : 0);
+      pagosCuotas += cuotaCalc;
+      if (cuotaCalc > 0) pagosBreakdown.push({ nombre: p.nombre, tipo: 'Préstamo (cuota fija)', monto: cuotaCalc, color: '#3b82f6' });
+    } else if (p._kind === 'linea') {
+      // Línea de crédito: estimar 5% saldo usado como pago mínimo
+      const minimo = (p.balance || 0) * 0.05;
+      pagosMinimos += minimo;
+      if (minimo > 0) pagosBreakdown.push({ nombre: p.nombre, tipo: 'Línea (pago mín. 5%)', monto: minimo, color: '#f59e0b' });
+    }
+  });
+
+  tarjetasCredito.forEach(t => {
+    const minimo = (t.usado || 0) * 0.05;
+    pagosMinimos += minimo;
+    if (minimo > 0) pagosBreakdown.push({ nombre: t.nombre, tipo: 'Tarjeta (pago mín. 5%)', monto: minimo, color: '#f59e0b' });
+  });
+
+  fin.filter(f => /inversor/i.test(f.tipo)).forEach(i => {
+    const esDueno = /\[dueño\]|dueño|aporte propio/i.test(i.notas || '');
+    if (esDueno) return;
+    const pendiente = Math.max(0, (i.balance || 0) - (i.totalPagado || 0));
+    // Estimación: pagar pendiente en 24 meses promedio
+    const cuotaProyectada = pendiente / 24;
+    pagosInversor += cuotaProyectada;
+    if (cuotaProyectada > 0) pagosBreakdown.push({ nombre: i.nombre, tipo: 'Inversor (proy. 24m)', monto: cuotaProyectada, color: '#8b5cf6' });
+  });
+
+  const pagosMensualesTotales = pagosCuotas + pagosMinimos + pagosInversor;
+
+  // ── Ratio de cobertura + semáforo ────────────────────────────────────
+  const ratio = pagosMensualesTotales > 0 ? cashFlowMensualProm / pagosMensualesTotales : 99;
+  let estado, color, label, mensaje;
+  if (cashFlowMensualProm <= 0) {
+    estado = 'ROJO'; color = '#ef4444'; label = '🔴 ALERTA';
+    mensaje = 'Tu cash flow operacional es negativo o cero. Estás perdiendo dinero antes de pagar las deudas. PRIORIDAD: reducir gastos o aumentar ventas YA.';
+  } else if (ratio < 1) {
+    estado = 'ROJO'; color = '#ef4444'; label = '🔴 ROJO · NO CUBRE';
+    mensaje = `Tu cash flow mensual NO cubre los pagos de deuda. Faltan ${fmtCurrency(pagosMensualesTotales - cashFlowMensualProm)} cada mes. Riesgo de incumplimiento o tener que sacar más deuda para pagar deuda.`;
+  } else if (ratio < 1.5) {
+    estado = 'ROJO'; color = '#f97316'; label = '🟠 ROJO LIVIANO · APRETADO';
+    mensaje = `Apenas cubres los pagos. Sin margen para imprevistos. Una mala semana de ventas te pone en problemas. Considera renegociar plazos o consolidar deuda.`;
+  } else if (ratio < 2) {
+    estado = 'AMARILLO'; color = '#f59e0b'; label = '🟡 AMARILLO · ESTABLE';
+    mensaje = `Cubres los pagos con margen pero no holgado. Te queda ${fmtCurrency(cashFlowMensualProm - pagosMensualesTotales)} para reinvertir o ahorro. Está OK, pero ojo con tomar más deuda.`;
+  } else if (ratio < 3) {
+    estado = 'VERDE'; color = '#10b981'; label = '🟢 VERDE · SALUDABLE';
+    mensaje = `Excelente cobertura. Te queda ${fmtCurrency(cashFlowMensualProm - pagosMensualesTotales)} mensual para crecer. Puedes considerar acelerar pagos (abonos extra al capital) para reducir interés.`;
+  } else {
+    estado = 'VERDE'; color = '#059669'; label = '💎 VERDE PROFUNDO';
+    mensaje = `Cobertura sobresaliente (${ratio.toFixed(1)}x). Tienes mucho margen — buen momento para inversiones de crecimiento o pagar deuda más rápido para ahorrar intereses.`;
+  }
+
+  // ── Deuda total ───────────────────────────────────────────────────────
+  const deudaPrestamos = prestamosUnified.reduce((s, p) => s + (p.balance || 0), 0);
+  const deudaTarjetas  = tarjetasCredito.reduce((s, t) => s + (t.usado || 0), 0);
+  const deudaInversor  = fin.filter(f => /inversor/i.test(f.tipo) && !/\[dueño\]|dueño|aporte propio/i.test(f.notas || ''))
+                            .reduce((s, i) => s + Math.max(0, (i.balance || 0) - (i.totalPagado || 0)), 0);
+  const deudaTotal = deudaPrestamos + deudaTarjetas + deudaInversor;
+
+  // ── Stress test: cuánto puede bajar el cash flow antes de quedar < 1x ──
+  const margenColapso = cashFlowMensualProm > pagosMensualesTotales
+    ? ((cashFlowMensualProm - pagosMensualesTotales) / cashFlowMensualProm) * 100
+    : 0;
+
+  return (
+    <>
+      {/* SEMÁFORO grande */}
+      <div className="section" style={{ borderLeft: `6px solid ${color}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 32, fontWeight: 700, color }}>{label}</div>
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>{mensaje}</div>
+        </div>
+
+        {/* Barra visual del ratio */}
+        <div style={{ position: 'relative', height: 32, background: 'var(--surface-2)', borderRadius: 6, overflow: 'hidden', marginBottom: 8 }}>
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: Math.min(100, ratio * 33) + '%', background: color, transition: 'width 300ms ease' }} />
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'white', textShadow: '0 1px 2px rgba(0,0,0,0.5)', fontFamily: 'var(--font-mono)' }}>
+            Cobertura: {ratio < 99 ? ratio.toFixed(2) : '∞'}x
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <span>0x · rojo</span>
+          <span>1x · apretado</span>
+          <span>2x · estable</span>
+          <span>3x+ · saludable</span>
+        </div>
+      </div>
+
+      {/* KPIs principales */}
+      <div className="kpi-row">
+        <KPI label="Cash flow mensual (prom 6m)" value={fmtNum(cashFlowMensualProm)} currency
+             delta={cashFlowMensualProm >= 0 ? 1 : -1} deltaLabel="operacional (sin deudas)" />
+        <KPI label="Pagos deuda mensual" value={fmtNum(pagosMensualesTotales)} currency
+             delta={null} deltaLabel={`${pagosBreakdown.length} obligaciones`} />
+        <KPI label="Sobra/falta mensual" value={fmtNum(cashFlowMensualProm - pagosMensualesTotales)} currency
+             delta={cashFlowMensualProm - pagosMensualesTotales >= 0 ? 1 : -1} deltaLabel="después de deudas" />
+        <KPI label="Margen de colapso" value={margenColapso.toFixed(0) + '%'}
+             delta={null} deltaLabel={`puedes bajar ventas hasta esto`} />
+      </div>
+
+      {/* Deuda total */}
+      <div className="grid-2">
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Deuda total acumulada</div>
+              <div className="section-desc">Saldo pendiente · suma de todo lo que debes</div>
+            </div>
+            <span className="badge danger" style={{ fontSize: 14, padding: '4px 10px' }}>{fmtCurrency(deudaTotal)}</span>
+          </div>
+          <div className="grid-3">
+            <div className="stat-card">
+              <div className="stat-label">Préstamos / Líneas</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(deudaPrestamos)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Tarjetas</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(deudaTarjetas)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Inversores</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(deudaInversor)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Stress test · qué pasa si baja el cash flow</div>
+              <div className="section-desc">Proyección del ratio con caídas de ingresos</div>
+            </div>
+          </div>
+          <table className="data">
+            <thead><tr>
+              <th>Escenario</th><th className="right">Cash flow</th>
+              <th className="right">Ratio</th><th>Estado</th>
+            </tr></thead>
+            <tbody>
+              {[0, 10, 20, 30, 40, 50].map(pct => {
+                const cf = cashFlowMensualProm * (1 - pct/100);
+                const r = pagosMensualesTotales > 0 ? cf / pagosMensualesTotales : 99;
+                const cls = r < 1 ? 'danger' : r < 2 ? 'warning' : 'success';
+                const lbl = r < 1 ? 'NO CUBRE' : r < 1.5 ? 'apretado' : r < 2 ? 'estable' : 'saludable';
+                return (
+                  <tr key={pct} style={{ background: pct === 0 ? 'var(--surface-2)' : undefined }}>
+                    <td>{pct === 0 ? 'Actual' : `−${pct}% ventas`}</td>
+                    <td className="num right">{fmtCurrency(cf)}</td>
+                    <td className="num right">{r.toFixed(2)}x</td>
+                    <td><span className={`badge ${cls}`}>{lbl}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Breakdown de pagos */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Desglose de pagos mensuales</div>
+            <div className="section-desc">{pagosBreakdown.length} obligaciones · total {fmtCurrency(pagosMensualesTotales)}/mes</div>
+          </div>
+        </div>
+        {pagosBreakdown.length > 0 ? (
+          <BarChart data={pagosBreakdown.sort((a, b) => b.monto - a.monto).map(p => ({ label: p.nombre + ' · ' + p.tipo, value: p.monto, color: p.color }))}
+            fmt={(n) => 'RD$' + Math.round(n).toLocaleString('en-US') + '/mes'}
+            title="PAGO MENSUAL POR OBLIGACIÓN · RD$" />
+        ) : (
+          <div className="muted" style={{ padding: 'var(--s-6)', textAlign: 'center' }}>
+            Sin deudas registradas. Estado: <span className="badge success">VERDE PROFUNDO</span>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 function ProductDetailModal({ open, item, kind, onClose }) {
   const data = useATData();
   const movFin = data.movFin || [];
@@ -2871,6 +3091,7 @@ function FinanzasPage() {
 
       <div className="tabs">
         <button className={`tab ${subtab === 'resumen' ? 'active' : ''}`} onClick={() => setSubtab('resumen')}>Resumen</button>
+        <button className={`tab ${subtab === 'analisis' ? 'active' : ''}`} onClick={() => setSubtab('analisis')}>Análisis deuda</button>
         <button className={`tab ${subtab === 'prestamos' ? 'active' : ''}`} onClick={() => setSubtab('prestamos')}>Préstamos</button>
         <button className={`tab ${subtab === 'tarjetas' ? 'active' : ''}`} onClick={() => setSubtab('tarjetas')}>Tarjetas</button>
         <button className={`tab ${subtab === 'inversores' ? 'active' : ''}`} onClick={() => setSubtab('inversores')}>Inversores</button>
@@ -3041,6 +3262,16 @@ function FinanzasPage() {
         </div>
       </div>
       </>)}
+
+      {/* ANÁLISIS DE DEUDA — semáforo basado en cash flow vs pagos mensuales */}
+      {subtab === 'analisis' && (
+        <AnalisisDeudaPanel
+          cashflow={data.cashflow || []}
+          prestamosUnified={prestamosUnified}
+          tarjetasCredito={tarjetasCredito}
+          fin={fin}
+        />
+      )}
 
       {/* PRÉSTAMOS — incluye Préstamos amortizados (normales) Y Líneas de crédito (revolventes) */}
       {subtab === 'prestamos' && (<>
