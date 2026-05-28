@@ -2691,7 +2691,7 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
     return m.c === concepto && nameTokens.some(t => txt.includes(t));
   }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
   const tipoComp = productoExt?.tipoCompensacion || item.tipoCompensacion || 'FLAT';
-  const meta = TIPO_COMPENSACION_META[tipoComp] || TIPO_COMPENSACION_META.FLAT;
+  const meta = TIPO_COMPENSACION_META[tipoComp] || { label: tipoComp || 'Sin método', color: 'var(--text-3)', desc: 'Método legacy', fields: [] };
   const target = tipoComp === 'ROYALTY' && productoExt?.capDevolver ? productoExt.capDevolver : Number(item.balance || 0);
   let saldo = esDueno ? 0 : target; // dueño: acumular aportes; inversor: empezar con deuda total
   const rows = movs.map(m => {
@@ -3492,120 +3492,118 @@ function FormMovFinScoped({ item, kind, onDone }) {
 }
 
 // ─── Form Crear Inversor ─────────────────────────────────────────
-// Metodos de compensacion: 6 universales + 6 exclusivos del dueno
-// `ownerOnly: true` = solo aparece cuando el inversor es marcado como dueno
+// Metodos de compensacion organizados en 2 PAQUETES.
+// Inversor (3 reglas): liquidez temprana + recuperacion + ganancia final.
+// Dueño (5 reglas): compensacion operativa + participacion + cashflow anual.
+// `ownerOnly: true` = exclusivo del dueño. `paquete` = preset bulk-create.
 const TIPO_COMPENSACION_META = {
-  // ──── UNIVERSAL (cualquier inversor) ────
-  FLAT: {
-    label: '1 · Multiplicador Flat',
-    desc: 'Capital × N, paga libre sin plazo. Sin presion mensual.',
-    color: 'var(--text-2)',
-    fields: ['retorno'],
+  // ════════════ PAQUETE INVERSOR ════════════
+  DIVIDENDO_PREFERENTE: {
+    label: 'I1 · Dividendo Preferente Trimestral',
+    desc: 'X% anual sobre el capital invertido, pagado trimestralmente. Primero en prelación — antes de cualquier reparto al dueño.',
+    color: '#0ea5e9',
+    fields: ['pct'],
     ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, ventasMes: 15, ticketProm: 2000, margen: 42 },
+    group: 'Inversor',
+    paquete: 'Paquete Inversor',
+    frecuencia: 'trimestral',
+    simExample: { capital: 50000, pct: 8 },
   },
-  AMORTIZACION: {
-    label: '2 · Amortización Fija',
-    desc: 'Cuota mensual fija estilo préstamo. Predictable.',
-    color: 'var(--info, #4a9eff)',
-    fields: ['retorno', 'plazo'],
+  ROYALTY_BRUTO: {
+    label: 'I2 · Royalty sobre Ingresos Brutos',
+    desc: 'X% de ventas mensuales hasta recuperar una porción del capital invertido.',
+    color: '#0ea5e9',
+    fields: ['pct', 'cap'],
     ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, plazo: 24 },
+    group: 'Inversor',
+    paquete: 'Paquete Inversor',
+    frecuencia: 'mensual',
+    simExample: { capital: 50000, pct: 3, cap: 25000 },
   },
-  PCT_GANANCIA: {
-    label: '3 · % de Ganancia por Venta',
-    desc: 'Cada venta, X% de la ganancia bruta al inversor. Cero presion fija.',
-    color: 'var(--success)',
-    fields: ['retorno', 'pct'],
+  RBF: {
+    label: 'I3 · Revenue-Based Financing',
+    desc: '% mensual de ingresos hasta alcanzar tope de 2× el capital invertido.',
+    color: '#0ea5e9',
+    fields: ['pct', 'cap'],
     ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, pct: 15, ventasMes: 15, ticketProm: 2000, margen: 42 },
-  },
-  PCT_REVENUE: {
-    label: '4 · % de Revenue por Venta',
-    desc: 'Cada venta, X% del precio facturado. Mas simple de trackear que ganancia.',
-    color: 'var(--success)',
-    fields: ['retorno', 'pct'],
-    ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, pct: 5, ventasMes: 15, ticketProm: 2000 },
-  },
-  CUOTA_BONUS: {
-    label: '5 · Cuota Fija + Bonus',
-    desc: 'Cuota mensual baja + bonus % cuando ventas mes superan target.',
-    color: 'var(--warning)',
-    fields: ['retorno', 'cuotaMensual', 'bonusThreshold', 'pct'],
-    ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, cuotaMensual: 2000, bonusThreshold: 40000, pct: 20, ventasMes: 18, ticketProm: 2000, margen: 42 },
-  },
-  ROYALTY: {
-    label: '6 · Royalty Perpetuo Capado',
-    desc: 'X% de toda venta indefinido, hasta llegar al cap.',
-    color: 'var(--danger)',
-    fields: ['cap', 'pct'],
-    ownerOnly: false,
-    group: 'Universal',
-    simExample: { capital: 50000, cap: 150000, pct: 3, ventasMes: 15, ticketProm: 2000 },
+    group: 'Inversor',
+    paquete: 'Paquete Inversor',
+    frecuencia: 'mensual',
+    simExample: { capital: 50000, pct: 5, cap: 100000 },
   },
 
-  // ──── DUENO-ONLY ────
-  SALARIO_FIJO: {
-    label: 'D1 · Salario Fijo Mensual',
-    desc: 'Sale automatico cada mes una cantidad fija, sin importar ventas. Como un sueldo.',
+  // ════════════ PAQUETE DUEÑO ════════════
+  SALARIO_PRO_LABORE: {
+    label: 'D1 · Salario / Pro-Labore',
+    desc: 'Sueldo mensual fijo del dueño como operador. Gasto deducible para la empresa.',
     color: '#7c5cff',
     fields: ['cuotaMensual'],
     ownerOnly: true,
     group: 'Dueño',
+    paquete: 'Paquete Dueño',
+    frecuencia: 'mensual',
     simExample: { cuotaMensual: 25000 },
   },
-  PCT_UTILIDADES: {
-    label: 'D2 · % de Utilidades Mensuales',
-    desc: 'Al cerrar el mes, dueño recibe X% de la utilidad neta (revenue - costos - gastos).',
+  UTILIDADES_SUBORD: {
+    label: 'D2 · Reparto Utilidades Subordinado',
+    desc: 'X% de las utilidades del mes, DESPUÉS de cubrir el dividendo preferente del inversor.',
     color: '#7c5cff',
     fields: ['pct'],
     ownerOnly: true,
     group: 'Dueño',
-    simExample: { pct: 50, ventasMes: 38000, margen: 42 },
+    paquete: 'Paquete Dueño',
+    frecuencia: 'mensual',
+    simExample: { pct: 70, ventasMes: 15, ticketProm: 2000, margen: 42 },
   },
-  DRAWDOWN_LIBRE: {
-    label: 'D3 · Drawdown a Discreción',
-    desc: 'Extracciones libres del negocio cuando el dueño quiere. Sin regla automatica, requiere registro manual.',
-    color: '#7c5cff',
-    fields: [],
-    ownerOnly: true,
-    group: 'Dueño',
-    simExample: { drawdownProm: 10000 },
-  },
-  PCT_REVENUE_PROP: {
-    label: 'D4 · "Pay Yourself First" — % Revenue',
-    desc: 'X% de cada venta sale automatico para el dueño antes de cualquier otro gasto.',
+  SWEAT_EQUITY: {
+    label: 'D3 · Sweat Equity',
+    desc: '% adicional de participación accionaria ganado por aportar trabajo y gestión. No es pago en cash — incrementa tu ownership.',
     color: '#7c5cff',
     fields: ['pct'],
     ownerOnly: true,
     group: 'Dueño',
-    simExample: { pct: 10, ventasMes: 15, ticketProm: 2000 },
+    paquete: 'Paquete Dueño',
+    frecuencia: 'anual',
+    simExample: { pct: 5 },
   },
-  BONUS_HITOS: {
-    label: 'D5 · Bonus por Hitos de Facturación',
-    desc: 'Cuando ventas acumuladas pasan threshold (ej. 500K anual), libera bonus al dueño.',
+  REINVERSION: {
+    label: 'D4 · Reinversión Utilidades Retenidas',
+    desc: '% de utilidades que se reinvierten en el negocio para crecer el patrimonio del dueño. No es pago directo en cash.',
     color: '#7c5cff',
-    fields: ['bonusThreshold', 'cap'],
+    fields: ['pct'],
     ownerOnly: true,
     group: 'Dueño',
-    simExample: { bonusThreshold: 500000, cap: 25000, ventasMes: 50000 },
+    paquete: 'Paquete Dueño',
+    frecuencia: 'mensual',
+    simExample: { pct: 30, ventasMes: 15, ticketProm: 2000, margen: 42 },
   },
-  REEMBOLSO_GASTOS: {
-    label: 'D6 · Reembolso de Gastos Personales',
-    desc: 'Cuando el dueño paga algo del negocio con tarjeta personal, el negocio le reembolsa.',
+  CASHFLOW_ANUAL: {
+    label: 'D5 · % Cashflow Positivo Anual',
+    desc: 'Al cierre del año fiscal, X% del cashflow neto positivo se paga al dueño.',
     color: '#7c5cff',
-    fields: [],
+    fields: ['pct'],
     ownerOnly: true,
     group: 'Dueño',
-    simExample: { gastoProm: 5000 },
+    paquete: 'Paquete Dueño',
+    frecuencia: 'anual',
+    simExample: { pct: 80 },
   },
+};
+
+// Presets para "Aplicar Paquete" — genera N reglas de una vez
+const PAQUETES_PRESETS = {
+  Inversor: [
+    { tipoCompensacion: 'DIVIDENDO_PREFERENTE', pctAplicado: 8 },
+    { tipoCompensacion: 'ROYALTY_BRUTO', pctAplicado: 3, capDevolver: null },     // cap = 50% capital
+    { tipoCompensacion: 'RBF', pctAplicado: 5, capDevolver: null },               // cap = 2x capital
+  ],
+  Dueño: [
+    { tipoCompensacion: 'SALARIO_PRO_LABORE', cuotaMensual: 25000 },
+    { tipoCompensacion: 'UTILIDADES_SUBORD', pctAplicado: 70 },
+    { tipoCompensacion: 'SWEAT_EQUITY', pctAplicado: 5 },
+    { tipoCompensacion: 'REINVERSION', pctAplicado: 30 },
+    { tipoCompensacion: 'CASHFLOW_ANUAL', pctAplicado: 80 },
+  ],
 };
 
 function FormInversor({ onDone }) {
@@ -3621,7 +3619,7 @@ function FormInversor({ onDone }) {
   const [contraparte, setContraparte] = useState('');
   const [notas, setNotas] = useState('');
   const [esDueno, setEsDueno] = useState(false);
-  const [tipoComp, setTipoComp] = useState('FLAT');
+  const [tipoComp, setTipoComp] = useState('DIVIDENDO_PREFERENTE');
   const [pct, setPct] = useState('');
   const [cuotaMensual, setCuotaMensual] = useState('');
   const [bonusThreshold, setBonusThreshold] = useState('');
@@ -3632,7 +3630,7 @@ function FormInversor({ onDone }) {
   const metodosDisponibles = Object.entries(TIPO_COMPENSACION_META).filter(([_k, m]) => esDueno ? true : !m.ownerOnly);
   // Si el tipo actual es ownerOnly y dejamos de ser dueño, reset a FLAT
   useEffect(() => {
-    if (!esDueno && TIPO_COMPENSACION_META[tipoComp]?.ownerOnly) setTipoComp('FLAT');
+    if (!esDueno && TIPO_COMPENSACION_META[tipoComp]?.ownerOnly) setTipoComp('DIVIDENDO_PREFERENTE');
   }, [esDueno, tipoComp]);
   const meta = TIPO_COMPENSACION_META[tipoComp];
   const shows = (f) => meta.fields.includes(f);
@@ -4315,8 +4313,13 @@ function FinanzasPage() {
             pagado = (data.cashflow || []).filter(m => m.c === 'Pago a Inversores')
               .reduce((s, m) => s + (m.s || 0), 0);
           }
-          const tipo = ext?.tipoCompensacion || i.tipoCompensacion || 'FLAT';
-          const meta = TIPO_COMPENSACION_META[tipo] || TIPO_COMPENSACION_META.FLAT;
+          const tipo = ext?.tipoCompensacion || i.tipoCompensacion || 'DIVIDENDO_PREFERENTE';
+          const meta = TIPO_COMPENSACION_META[tipo] || {
+            label: tipo || 'Sin método',
+            color: 'var(--text-3)',
+            desc: 'Método legacy o desconocido',
+            fields: [],
+          };
           const target = tipo === 'ROYALTY' && ext?.capDevolver ? ext.capDevolver : i.balance;
           const pendiente = Math.max(0, target - pagado);
           // Velocidad: monto pagado / meses transcurridos
@@ -4520,7 +4523,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
   const [busy, setBusy] = useState(false);
   const [simReglaId, setSimReglaId] = useState(null);
   // Nueva regla state
-  const [newTipo, setNewTipo] = useState('FLAT');
+  const [newTipo, setNewTipo] = useState(esDueno ? 'SALARIO_PRO_LABORE' : 'DIVIDENDO_PREFERENTE');
   const [newMonto, setNewMonto] = useState('');
   const [newPct, setNewPct] = useState('');
   const [newCuota, setNewCuota] = useState('');
@@ -4559,6 +4562,27 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     } catch (e) { window.toastErr('No se pudo borrar', e.message?.slice(0, 120)); }
   };
 
+  // Aplicar Paquete completo: crea las 3 reglas Inversor o 5 reglas Dueño de una.
+  const handleApplyPaquete = async () => {
+    const paquete = esDueno ? 'Dueño' : 'Inversor';
+    const preset = PAQUETES_PRESETS[paquete];
+    const capital = Number(inversor.montoTotal) || 50000;
+    if (!confirm(`¿Aplicar Paquete ${paquete} a ${inversor.nombre}?\n\nCrea ${preset.length} reglas activas en paralelo. Puedes editar los % después.`)) return;
+    setBusy(true);
+    try {
+      const inversorId = Number(inversor._airtableId.slice(2));
+      for (const rule of preset) {
+        // Inyectar cap default según tipo
+        const rcopy = { ...rule };
+        if (rule.tipoCompensacion === 'ROYALTY_BRUTO' && rcopy.capDevolver == null) rcopy.capDevolver = capital * 0.5;
+        if (rule.tipoCompensacion === 'RBF' && rcopy.capDevolver == null) rcopy.capDevolver = capital * 2;
+        await window.AT_CLIENT.createCompensacion(inversorId, rcopy);
+      }
+      window.toastOk(`Paquete ${paquete} aplicado`, `${preset.length} reglas creadas a ${inversor.nombre}`);
+    } catch (e) { window.toastErr('No se pudo aplicar paquete', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
   return (
     <div style={{ marginBottom: 'var(--s-3)', padding: 'var(--s-3)', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s-2)' }}>
@@ -4568,9 +4592,17 @@ function ReglasCompensacionList({ inversor, esDueno }) {
             {reglas.length} regla(s) corriendo en paralelo · todas se pagan simultáneamente
           </div>
         </div>
-        {!adding && (
-          <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setAdding(true)}>+ Agregar regla</button>
-        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {reglas.length === 0 && (
+            <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: esDueno ? '#7c5cff' : '#0ea5e9' }}
+              disabled={busy} onClick={handleApplyPaquete}>
+              ✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}
+            </button>
+          )}
+          {!adding && (
+            <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setAdding(true)}>+ Agregar regla</button>
+          )}
+        </div>
       </div>
 
       {reglas.length === 0 && !adding && (
@@ -4675,45 +4707,54 @@ function ReglasCompensacionList({ inversor, esDueno }) {
 // y devuelve una proyección mes a mes hasta cerrar el cap (o 36 meses
 // si no hay cap). Pura lógica + UI inline, sin DB.
 function simularPagos(tipo, params, escenario) {
-  const cap = Number(escenario.cap || params.cap || params.retorno || params.montoPactado || 0);
-  const ventasMes  = Number(escenario.ventasMes  || 0);
-  const ticketProm = Number(escenario.ticketProm || 0);
-  const margen     = Number(escenario.margen     || 0) / 100;
-  const revenueMes = ventasMes * ticketProm;
+  const capital     = Number(escenario.capital || params.capital || 0);
+  const cap         = Number(escenario.cap || params.cap || params.montoPactado || 0);
+  const ventasMes   = Number(escenario.ventasMes  || 0);
+  const ticketProm  = Number(escenario.ticketProm || 0);
+  const margen      = Number(escenario.margen     || 0) / 100;
+  const revenueMes  = ventasMes * ticketProm;
   const gananciaMes = revenueMes * margen;
-  const pct        = Number(params.pct || 0) / 100;
-  const cuotaFija  = Number(params.cuotaMensual || 0);
-  const threshold  = Number(params.bonusThreshold || 0);
-  const drawdown   = Number(escenario.drawdownProm || 0);
-  const gasto      = Number(escenario.gastoProm || 0);
+  const pct         = Number(params.pct || 0) / 100;
+  const cuotaFija   = Number(params.cuotaMensual || 0);
+  // Dividendo preferente pagado este mes (para subordinacion del dueño)
+  const dividendoMes = Number(escenario.dividendoPrefMes || 0);
 
-  // Calcula pago para mes N (1-indexed)
+  // Calcula pago para mes N (1-indexed) y meta (descripcion del calculo)
   const pagoMes = (mes) => {
     switch (tipo) {
-      case 'FLAT':              return Number(escenario.pagoMensual || cap / 24); // sin regla fija
-      case 'AMORTIZACION':      return Number(params.plazo || params.plazoMeses) > 0 ? cap / Number(params.plazo || params.plazoMeses) : 0;
-      case 'PCT_GANANCIA':      return gananciaMes * pct;
-      case 'PCT_REVENUE':       return revenueMes * pct;
-      case 'CUOTA_BONUS':       return cuotaFija + (revenueMes > threshold ? (revenueMes - threshold) * pct : 0);
-      case 'ROYALTY':           return revenueMes * pct;
-      case 'SALARIO_FIJO':      return cuotaFija;
-      case 'PCT_UTILIDADES':    return gananciaMes * pct;
-      case 'DRAWDOWN_LIBRE':    return drawdown;
-      case 'PCT_REVENUE_PROP':  return revenueMes * pct;
-      case 'BONUS_HITOS': {
-        const acumulado = revenueMes * mes;
-        return acumulado >= threshold ? Number(params.cap || cap) : 0;
+      // ──── PAQUETE INVERSOR ────
+      case 'DIVIDENDO_PREFERENTE': {
+        // Trimestral: paga en meses 3,6,9,12... = capital × pct/4
+        const esTrimestre = mes % 3 === 0;
+        return esTrimestre ? capital * pct / 4 : 0;
       }
-      case 'REEMBOLSO_GASTOS':  return gasto;
+      case 'ROYALTY_BRUTO':         return revenueMes * pct;  // hasta cap (porcion del capital)
+      case 'RBF':                   return revenueMes * pct;  // hasta cap (default 2x capital)
+
+      // ──── PAQUETE DUEÑO ────
+      case 'SALARIO_PRO_LABORE':    return cuotaFija;
+      case 'UTILIDADES_SUBORD':     return Math.max(0, gananciaMes - dividendoMes) * pct;
+      case 'SWEAT_EQUITY':          return 0; // info-only, no cash
+      case 'REINVERSION':           return 0; // va al equity, no cash al dueño
+      case 'CASHFLOW_ANUAL': {
+        // Una vez al año en mes 12: % del cashflow positivo acumulado
+        if (mes !== 12) return 0;
+        const cashflowAnual = gananciaMes * 12; // proxy del cashflow operativo
+        return Math.max(0, cashflowAnual) * pct;
+      }
       default: return 0;
     }
   };
 
-  const tieneCap = ['FLAT', 'AMORTIZACION', 'PCT_GANANCIA', 'PCT_REVENUE', 'CUOTA_BONUS', 'ROYALTY'].includes(tipo) && cap > 0;
+  // ¿Esta regla tiene cap (termina al alcanzarlo)?
+  const tieneCap = ['ROYALTY_BRUTO', 'RBF'].includes(tipo) && cap > 0;
+  // Frecuencia de visualizacion
+  const esAnual = ['CASHFLOW_ANUAL', 'SWEAT_EQUITY'].includes(tipo);
+  const maxMeses = tieneCap ? 120 : (esAnual ? 36 : 24);
+
   const rows = [];
   let acumulado = 0;
   let mesesAlCierre = null;
-  const maxMeses = tieneCap ? 120 : 24;
   for (let m = 1; m <= maxMeses; m++) {
     let pago = pagoMes(m);
     if (tieneCap && acumulado + pago > cap) pago = Math.max(0, cap - acumulado);
@@ -4724,15 +4765,26 @@ function simularPagos(tipo, params, escenario) {
       break;
     }
   }
+
+  // Para SWEAT_EQUITY mostramos el equity ganado, no pagos
+  const equityAnual = tipo === 'SWEAT_EQUITY' ? Number(params.pct || 0) : 0;
+  // Para REINVERSION el "valor" agregado al patrimonio por mes
+  const reinversionMes = tipo === 'REINVERSION' ? gananciaMes * pct : 0;
+
   return {
     rows,
     cap,
+    capital,
     mesesAlCierre,
     pagoMesPromedio: rows.length > 0 ? acumulado / rows.length : 0,
-    pagoMes1: rows[0]?.pago || 0,
+    pagoMes1: rows.find(r => r.pago > 0)?.pago || rows[0]?.pago || 0,
     pagoMes12: rows.slice(0, 12).reduce((s, r) => s + r.pago, 0),
     totalProyectado: acumulado,
     sinCap: !tieneCap,
+    esAnual,
+    esInfoOnly: tipo === 'SWEAT_EQUITY' || tipo === 'REINVERSION',
+    equityAnual,
+    reinversionMes,
   };
 }
 
@@ -4791,15 +4843,23 @@ function SimuladorModal({ open, tipo, params, onClose }) {
   }, [open, tipo]);
   if (!open || !meta) return null;
 
-  const escenario = { ventasMes, ticketProm, margen, pagoMensual, drawdownProm, gastoProm };
+  // Capital invertido — solo para metodos que lo necesitan (DIVIDENDO, RBF)
+  const capitalEjemplo = meta.simExample?.capital ?? Number(params?.capital ?? 50000);
+  const [capital, setCapital] = useState(capitalEjemplo);
+  // Dividendo preferente del inversor (para subordinacion del dueño)
+  const [dividendoPrefMes, setDividendoPrefMes] = useState(0);
+
+  const escenario = { capital, cap: params?.cap, ventasMes, ticketProm, margen, pagoMensual, drawdownProm, gastoProm, dividendoPrefMes };
   const sim = simularPagos(tipo, params || meta.simExample, escenario);
 
   // ¿Qué inputs del escenario muestra cada tipo?
-  const showsVentas = ['PCT_GANANCIA', 'PCT_REVENUE', 'CUOTA_BONUS', 'ROYALTY', 'PCT_UTILIDADES', 'PCT_REVENUE_PROP', 'BONUS_HITOS'].includes(tipo);
-  const showsMargen = ['PCT_GANANCIA', 'CUOTA_BONUS', 'PCT_UTILIDADES'].includes(tipo);
-  const showsPagoMensual = tipo === 'FLAT';
-  const showsDrawdown = tipo === 'DRAWDOWN_LIBRE';
-  const showsGasto = tipo === 'REEMBOLSO_GASTOS';
+  const showsVentas = ['ROYALTY_BRUTO', 'RBF', 'UTILIDADES_SUBORD', 'REINVERSION', 'CASHFLOW_ANUAL'].includes(tipo);
+  const showsMargen = ['UTILIDADES_SUBORD', 'REINVERSION', 'CASHFLOW_ANUAL'].includes(tipo);
+  const showsCapital = ['DIVIDENDO_PREFERENTE', 'RBF', 'ROYALTY_BRUTO'].includes(tipo);
+  const showsDividendoSubord = tipo === 'UTILIDADES_SUBORD';
+  const showsPagoMensual = false;
+  const showsDrawdown = false;
+  const showsGasto = false;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -4823,6 +4883,10 @@ function SimuladorModal({ open, tipo, params, onClose }) {
           )}
         </div>
         <div className="row-3" style={{ marginBottom: 'var(--s-3)' }}>
+          {showsCapital && (
+            <div className="field"><div className="field-label">Capital invertido (RD$)</div>
+              <input className="input num" type="number" value={capital} onChange={e => setCapital(e.target.value)} /></div>
+          )}
           {showsVentas && (
             <div className="field"><div className="field-label">Ventas/mes</div>
               <input className="input num" type="number" value={ventasMes} onChange={e => setVentasMes(e.target.value)} /></div>
@@ -4835,40 +4899,70 @@ function SimuladorModal({ open, tipo, params, onClose }) {
             <div className="field"><div className="field-label">Margen % promedio</div>
               <input className="input num" type="number" value={margen} onChange={e => setMargen(e.target.value)} /></div>
           )}
-          {showsPagoMensual && (
-            <div className="field"><div className="field-label">Pago mensual asumido (RD$)</div>
-              <input className="input num" type="number" value={pagoMensual} onChange={e => setPagoMensual(e.target.value)} />
-              <div className="field-hint">FLAT no tiene cuota fija — esto es un supuesto</div></div>
-          )}
-          {showsDrawdown && (
-            <div className="field"><div className="field-label">Drawdown promedio (RD$/mes)</div>
-              <input className="input num" type="number" value={drawdownProm} onChange={e => setDrawdownProm(e.target.value)} /></div>
-          )}
-          {showsGasto && (
-            <div className="field"><div className="field-label">Gasto promedio (RD$/mes)</div>
-              <input className="input num" type="number" value={gastoProm} onChange={e => setGastoProm(e.target.value)} /></div>
+          {showsDividendoSubord && (
+            <div className="field"><div className="field-label">Dividendo preferente del mes (RD$)</div>
+              <input className="input num" type="number" value={dividendoPrefMes} onChange={e => setDividendoPrefMes(e.target.value)} />
+              <div className="field-hint">Cuánto se pagó al inversor primero</div></div>
           )}
         </div>
 
         {/* Resultados sumario */}
-        <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
-          <div className="stat-card">
-            <div className="stat-label">Pago mes 1</div>
-            <div className="stat-value" style={{ color: meta.color }}>{fmtCurrency(sim.pagoMes1)}</div>
+        {sim.esInfoOnly ? (
+          <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', borderLeft: `3px solid ${meta.color}` }}>
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginBottom: 8, fontWeight: 600 }}>⚠ NO ES PAGO EN CASH</div>
+            {tipo === 'SWEAT_EQUITY' && (
+              <div className="grid-3">
+                <div className="stat-card">
+                  <div className="stat-label">Equity ganado/año</div>
+                  <div className="stat-value" style={{ color: meta.color }}>{sim.equityAnual}%</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">A 5 años</div>
+                  <div className="stat-value">{(sim.equityAnual * 5).toFixed(1)}%</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">A 10 años</div>
+                  <div className="stat-value">{(sim.equityAnual * 10).toFixed(1)}%</div>
+                </div>
+              </div>
+            )}
+            {tipo === 'REINVERSION' && (
+              <div className="grid-3">
+                <div className="stat-card">
+                  <div className="stat-label">Reinvertido/mes</div>
+                  <div className="stat-value" style={{ color: meta.color }}>{fmtCurrency(sim.reinversionMes)}</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">Año 1 al patrimonio</div>
+                  <div className="stat-value">{fmtCurrency(sim.reinversionMes * 12)}</div>
+                </div>
+                <div className="stat-card">
+                  <div className="stat-label">A 5 años</div>
+                  <div className="stat-value">{fmtCurrency(sim.reinversionMes * 60)}</div>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="stat-card">
-            <div className="stat-label">Total año 1</div>
-            <div className="stat-value">{fmtCurrency(sim.pagoMes12)}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">{sim.sinCap ? 'Pago mensual prom.' : 'Meses al cierre'}</div>
-            <div className="stat-value">
-              {sim.sinCap
-                ? fmtCurrency(sim.pagoMesPromedio)
-                : (sim.mesesAlCierre ? `${sim.mesesAlCierre} meses` : '>10 años')}
+        ) : (
+          <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
+            <div className="stat-card">
+              <div className="stat-label">{sim.esAnual ? 'Primer pago anual' : 'Primer pago'}</div>
+              <div className="stat-value" style={{ color: meta.color }}>{fmtCurrency(sim.pagoMes1)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Total año 1</div>
+              <div className="stat-value">{fmtCurrency(sim.pagoMes12)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">{sim.sinCap ? (sim.esAnual ? 'Total a 3 años' : 'Pago mensual prom.') : 'Meses al cierre'}</div>
+              <div className="stat-value">
+                {sim.sinCap
+                  ? (sim.esAnual ? fmtCurrency(sim.totalProyectado) : fmtCurrency(sim.pagoMesPromedio))
+                  : (sim.mesesAlCierre ? `${sim.mesesAlCierre} meses` : '>10 años')}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Tabla proyección */}
         <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
