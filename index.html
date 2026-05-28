@@ -3613,46 +3613,15 @@ function FormInversor({ onDone }) {
   const yaHayDueno = (data.financiero || []).some(f => /inversor/i.test(f.tipo) && f.esDueno);
   const [nombre, setNombre] = useState('');
   const [capital, setCapital] = useState('');
-  const [retorno, setRetorno] = useState('');
-  const [fechaInicio, setFechaInicio] = useState('');
-  const [plazo, setPlazo] = useState('');
+  const [fechaInicio, setFechaInicio] = useState(window.HOY || new Date().toISOString().slice(0, 10));
   const [contraparte, setContraparte] = useState('');
   const [notas, setNotas] = useState('');
   const [esDueno, setEsDueno] = useState(false);
-  const [tipoComp, setTipoComp] = useState('DIVIDENDO_PREFERENTE');
-  const [pct, setPct] = useState('');
-  const [cuotaMensual, setCuotaMensual] = useState('');
-  const [bonusThreshold, setBonusThreshold] = useState('');
-  const [cap, setCap] = useState('');
   const [busy, setBusy] = useState(false);
-  const [simOpen, setSimOpen] = useState(false);
-  // Filtra metodos disponibles segun si es dueño o no
-  const metodosDisponibles = Object.entries(TIPO_COMPENSACION_META).filter(([_k, m]) => esDueno ? true : !m.ownerOnly);
-  // Si el tipo actual es ownerOnly y dejamos de ser dueño, reset a FLAT
-  useEffect(() => {
-    if (!esDueno && TIPO_COMPENSACION_META[tipoComp]?.ownerOnly) setTipoComp('DIVIDENDO_PREFERENTE');
-  }, [esDueno, tipoComp]);
-  const meta = TIPO_COMPENSACION_META[tipoComp];
-  const shows = (f) => meta.fields.includes(f);
+  const paquete = esDueno ? 'Dueño' : 'Inversor';
+  const preset = PAQUETES_PRESETS[paquete];
+  const paqueteColor = esDueno ? '#7c5cff' : '#0ea5e9';
   const valid = nombre.length > 1 && (esDueno || Number(capital) > 0);
-
-  // Para AMORTIZACION: auto-calc cuota si retorno + plazo
-  const cuotaCalculada = tipoComp === 'AMORTIZACION' && Number(retorno) > 0 && Number(plazo) > 0
-    ? (Number(retorno) / Number(plazo)).toFixed(2)
-    : null;
-  // Velocidad estimada
-  const velocidadHint = (() => {
-    const cap_ = Number(capital) || 0;
-    const ret_ = Number(retorno) || cap_ * 2;
-    const pct_ = Number(pct) || 0;
-    if (tipoComp === 'AMORTIZACION' && Number(plazo) > 0) return `~${plazo} meses · cuota RD$${(ret_/plazo).toFixed(0)}/mes`;
-    if (tipoComp === 'PCT_GANANCIA' && pct_ > 0) return `A 15 ventas/mes con ganancia RD$800: ~${Math.ceil(ret_/(pct_/100*800*15))} meses`;
-    if (tipoComp === 'PCT_REVENUE'  && pct_ > 0) return `A 15 ventas/mes de RD$2000: ~${Math.ceil(ret_/(pct_/100*2000*15))} meses`;
-    if (tipoComp === 'CUOTA_BONUS' && Number(cuotaMensual) > 0) return `Cuota piso RD$${cuotaMensual}/mes + bonus`;
-    if (tipoComp === 'ROYALTY' && pct_ > 0) return `A 15 ventas/mes de RD$2000: ~${Math.ceil((Number(cap)||ret_)/(pct_/100*2000*15))} meses al cap`;
-    if (tipoComp === 'FLAT') return 'Sin plazo · ritmo libre';
-    return '';
-  })();
 
   const onSubmit = async () => {
     setBusy(true);
@@ -3662,40 +3631,32 @@ function FormInversor({ onDone }) {
         setBusy(false);
         return;
       }
+      const capNum = Number(capital) || 0;
       const ins = await window.AT_CLIENT.createInversor({
         nombre,
-        capitalInvertido: Number(capital) || 0,
-        montoPactadoDevolver: Number(retorno) || Number(capital) * 2,
+        capitalInvertido: capNum,
+        montoPactadoDevolver: capNum * 2,
         fechaInicio: fechaInicio || null,
-        plazoMeses: plazo || null,
         contraparteId: contraparte || null,
         notas,
         esDueno: esDueno,
-        tipoCompensacion: tipoComp,
-        pctAplicado:    shows('pct') ? pct : null,
-        cuotaMensual:   shows('cuotaMensual') ? cuotaMensual : (tipoComp === 'AMORTIZACION' && cuotaCalculada ? cuotaCalculada : null),
-        bonusThreshold: shows('bonusThreshold') ? bonusThreshold : null,
-        capDevolver:    shows('cap') ? cap : null,
       });
-      // Crear ademas la primera regla en compensaciones_inversor
+      // Aplicar paquete completo: crear todas las reglas del preset en una
       if (ins?.id) {
-        await window.AT_CLIENT.createCompensacion(ins.id, {
-          tipoCompensacion: tipoComp,
-          montoPactado:   shows('retorno') ? (retorno || Number(capital) * 2) : null,
-          pctAplicado:    shows('pct') ? pct : null,
-          cuotaMensual:   shows('cuotaMensual') ? cuotaMensual : (tipoComp === 'AMORTIZACION' && cuotaCalculada ? cuotaCalculada : null),
-          bonusThreshold: shows('bonusThreshold') ? bonusThreshold : null,
-          capDevolver:    shows('cap') ? cap : null,
-          fechaInicio:    fechaInicio || null,
-        });
+        for (const rule of preset) {
+          const rcopy = { ...rule, fechaInicio: fechaInicio || null };
+          if (rule.tipoCompensacion === 'ROYALTY_BRUTO' && rcopy.capDevolver == null) rcopy.capDevolver = capNum * 0.5;
+          if (rule.tipoCompensacion === 'RBF' && rcopy.capDevolver == null) rcopy.capDevolver = capNum * 2;
+          await window.AT_CLIENT.createCompensacion(ins.id, rcopy);
+        }
       }
-      window.toastOk(esDueno ? 'Dueño registrado' : 'Inversor creado', `${nombre} · ${meta.label}`);
-      setNombre(''); setCapital(''); setRetorno(''); setNotas(''); setEsDueno(false);
-      setPct(''); setCuotaMensual(''); setBonusThreshold(''); setCap('');
+      window.toastOk(esDueno ? 'Dueño registrado' : 'Inversor creado', `${nombre} · Paquete ${paquete} aplicado (${preset.length} reglas)`);
+      setNombre(''); setCapital(''); setNotas(''); setEsDueno(false);
       onDone?.();
     } catch (e) { window.toastErr('No se pudo crear', e.message?.slice(0, 120)); }
     setBusy(false);
   };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
       <div className="row">
@@ -3708,47 +3669,20 @@ function FormInversor({ onDone }) {
           </select></div>
       </div>
 
-      <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: esDueno ? '1px solid #7c5cff' : '1px solid var(--border)' }}>
+      <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${paqueteColor}` }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: yaHayDueno && !esDueno ? 'not-allowed' : 'pointer', opacity: yaHayDueno && !esDueno ? 0.5 : 1 }}>
           <input type="checkbox" checked={esDueno} disabled={yaHayDueno && !esDueno}
             onChange={e => setEsDueno(e.target.checked)} />
-          <span style={{ fontWeight: 600, color: esDueno ? '#7c5cff' : 'var(--text)' }}>👤 Es el dueño del negocio</span>
+          <span style={{ fontWeight: 600, color: paqueteColor }}>👤 Es el dueño del negocio</span>
         </label>
         <div className="field-hint" style={{ marginTop: 4, fontSize: 11 }}>
           {yaHayDueno && !esDueno
             ? '⚠ Ya hay un dueño marcado. Solo se permite uno.'
             : esDueno
-              ? 'Desbloquea métodos exclusivos (Salario, % Utilidades, Drawdown, etc).'
-              : 'Marca como dueño para desbloquear métodos especiales de compensación.'}
+              ? 'Recibirá el Paquete Dueño (5 reglas).'
+              : 'Recibirá el Paquete Inversor (3 reglas).'}
         </div>
       </div>
-
-      <div className="field">
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-          <div className="field-label" style={{ margin: 0 }}>Método de compensación{esDueno ? ' · incluye métodos del dueño' : ''}</div>
-          <button type="button" className="btn ghost" style={{ fontSize: 11, padding: '4px 10px' }}
-            onClick={() => setSimOpen(true)}>🧮 Simular pagos</button>
-        </div>
-        <select className="select" value={tipoComp} onChange={e => setTipoComp(e.target.value)}>
-          <optgroup label="Universal">
-            {metodosDisponibles.filter(([_k, m]) => m.group === 'Universal').map(([k, m]) => (
-              <option key={k} value={k}>{m.label}</option>
-            ))}
-          </optgroup>
-          {esDueno && (
-            <optgroup label="Solo Dueño">
-              {metodosDisponibles.filter(([_k, m]) => m.group === 'Dueño').map(([k, m]) => (
-                <option key={k} value={k}>{m.label}</option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-        <div className="field-hint" style={{ color: meta.color, fontWeight: 500, marginTop: 4 }}>{meta.desc}</div>
-      </div>
-
-      <SimuladorModal open={simOpen} tipo={tipoComp}
-        params={{ pct, cuotaMensual, bonusThreshold, cap, retorno, plazo, montoPactado: retorno }}
-        onClose={() => setSimOpen(false)} />
 
       <div className="row-2">
         <div className="field"><div className="field-label">Capital invertido (RD$)</div>
@@ -3757,56 +3691,33 @@ function FormInversor({ onDone }) {
           <input className="input num" type="date" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} /></div>
       </div>
 
-      {/* Campos contextuales según método */}
-      {(shows('retorno') || shows('plazo') || shows('pct') || shows('cap') || shows('cuotaMensual') || shows('bonusThreshold')) && (
-        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${meta.color}` }}>
-          <div style={{ fontSize: 11, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 8 }}>
-            Parámetros · {meta.label}
-          </div>
-          <div className="row-3">
-            {shows('retorno') && (
-              <div className="field"><div className="field-label">Monto total a devolver (cap)</div>
-                <input className="input num" type="number" value={retorno} onChange={e => setRetorno(e.target.value)} placeholder={capital ? String(capital * 2) : '100000'} />
-                <div className="field-hint">Default 2× capital</div></div>
-            )}
-            {shows('cap') && (
-              <div className="field"><div className="field-label">Cap máximo (RD$)</div>
-                <input className="input num" type="number" value={cap} onChange={e => setCap(e.target.value)} placeholder={capital ? String(capital * 3) : '150000'} />
-                <div className="field-hint">Royalty termina al llegar aquí</div></div>
-            )}
-            {shows('plazo') && (
-              <div className="field"><div className="field-label">Plazo (meses)</div>
-                <input className="input num" type="number" value={plazo} onChange={e => setPlazo(e.target.value)} placeholder="24" />
-                {cuotaCalculada && <div className="field-hint">Cuota auto: RD${cuotaCalculada}/mes</div>}</div>
-            )}
-            {shows('pct') && (
-              <div className="field"><div className="field-label">{tipoComp === 'CUOTA_BONUS' ? 'Bonus % de ganancia' : '% aplicado'}</div>
-                <input className="input num" type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} placeholder={tipoComp === 'ROYALTY' ? '3' : '15'} />
-                <div className="field-hint">{tipoComp === 'PCT_REVENUE' ? '% del precio' : tipoComp === 'PCT_GANANCIA' ? '% de la ganancia' : tipoComp === 'ROYALTY' ? '% de revenue indefinido' : '% extra cuando supera threshold'}</div></div>
-            )}
-            {shows('cuotaMensual') && (
-              <div className="field"><div className="field-label">Cuota piso mensual (RD$)</div>
-                <input className="input num" type="number" value={cuotaMensual} onChange={e => setCuotaMensual(e.target.value)} placeholder="2000" /></div>
-            )}
-            {shows('bonusThreshold') && (
-              <div className="field"><div className="field-label">Target ventas/mes (RD$)</div>
-                <input className="input num" type="number" value={bonusThreshold} onChange={e => setBonusThreshold(e.target.value)} placeholder="40000" />
-                <div className="field-hint">Bonus activa al superar</div></div>
-            )}
-          </div>
-          {velocidadHint && (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
-              <b>Velocidad estimada:</b> {velocidadHint}
-            </div>
-          )}
+      {/* Preview del paquete que se aplicará */}
+      <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${paqueteColor}` }}>
+        <div style={{ fontSize: 11, color: paqueteColor, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 8 }}>
+          ✨ Se aplicará: Paquete {paquete} ({preset.length} reglas)
         </div>
-      )}
+        {preset.map((rule, i) => {
+          const m = TIPO_COMPENSACION_META[rule.tipoCompensacion];
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 12 }}>
+              <span className="badge" style={{ background: m.color, color: 'white', fontSize: 9 }}>{m.label}</span>
+              <span style={{ color: 'var(--text-3)' }}>
+                {rule.pctAplicado != null && `${rule.pctAplicado}%`}
+                {rule.cuotaMensual != null && `RD$${rule.cuotaMensual}/mes`}
+              </span>
+            </div>
+          );
+        })}
+        <div className="field-hint" style={{ marginTop: 6, fontSize: 11 }}>
+          💡 Editas los % y montos individualmente después con el ✎ de cada regla.
+        </div>
+      </div>
 
       <div className="field"><div className="field-label">Notas</div>
         <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="opcional" /></div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear inversor'}</button>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : `Crear + aplicar Paquete ${paquete}`}</button>
       </div>
     </div>
   );
@@ -4519,40 +4430,9 @@ function ToastStack() {
 function ReglasCompensacionList({ inversor, esDueno }) {
   const data = useATData();
   const reglas = inversor.compensaciones || [];
-  const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [simReglaId, setSimReglaId] = useState(null);
-  // Nueva regla state
-  const [newTipo, setNewTipo] = useState(esDueno ? 'SALARIO_PRO_LABORE' : 'DIVIDENDO_PREFERENTE');
-  const [newMonto, setNewMonto] = useState('');
-  const [newPct, setNewPct] = useState('');
-  const [newCuota, setNewCuota] = useState('');
-  const [newThreshold, setNewThreshold] = useState('');
-  const [newCap, setNewCap] = useState('');
-
-  const metodosDisponibles = Object.entries(TIPO_COMPENSACION_META).filter(([_k, m]) => esDueno ? true : !m.ownerOnly);
-  const metaNew = TIPO_COMPENSACION_META[newTipo] || {};
-  const showsNew = (f) => (metaNew.fields || []).includes(f);
-
-  const handleAdd = async () => {
-    setBusy(true);
-    try {
-      const inversorId = Number(inversor._airtableId.slice(2));
-      await window.AT_CLIENT.createCompensacion(inversorId, {
-        tipoCompensacion: newTipo,
-        montoPactado:   showsNew('retorno') ? newMonto : null,
-        pctAplicado:    showsNew('pct') ? newPct : null,
-        cuotaMensual:   showsNew('cuotaMensual') ? newCuota : null,
-        bonusThreshold: showsNew('bonusThreshold') ? newThreshold : null,
-        capDevolver:    showsNew('cap') ? newCap : null,
-      });
-      window.toastOk('Regla agregada', `${inversor.nombre} · ${metaNew.label}`);
-      setAdding(false);
-      setNewTipo('FLAT'); setNewMonto(''); setNewPct('');
-      setNewCuota(''); setNewThreshold(''); setNewCap('');
-    } catch (e) { window.toastErr('No se pudo agregar', e.message?.slice(0, 120)); }
-    setBusy(false);
-  };
+  const [editReglaId, setEditReglaId] = useState(null);
 
   const handleRemove = async (reglaId) => {
     if (!confirm(`¿Borrar esta regla de compensación? La data histórica de pagos no se pierde.`)) return;
@@ -4583,117 +4463,165 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     setBusy(false);
   };
 
+  // Capital del inversor (para reglas que lo usan, ej. DIVIDENDO_PREFERENTE)
+  const capital = Number(inversor.montoTotal) || 0;
+  const HOY_REAL = new Date(window.HOY || new Date().toISOString().slice(0, 10));
+
+  // ─── Computa "monto generado a fecha" automatico por regla ───
+  const computeDevengado = (regla) => {
+    const tipo = regla.tipoCompensacion;
+    const pct = Number(regla.pctAplicado || 0) / 100;
+    const cuota = Number(regla.cuotaMensual || 0);
+    const cap = Number(regla.capDevolver || regla.montoPactado || 0);
+    const inicio = regla.fechaInicio ? new Date(regla.fechaInicio) : (inversor.fechaInicio ? new Date(inversor.fechaInicio) : null);
+    if (!inicio) return { generado: 0, detalle: 'Sin fecha de inicio' };
+    const ms = HOY_REAL - inicio;
+    const dias = Math.max(0, ms / 86400000);
+    const meses = Math.max(0, dias / 30.4);
+    const trimestres = Math.floor(meses / 3);
+    const años = meses / 12;
+
+    // Ventas dentro del periodo de la regla
+    const ventas = (data.ventas || []).filter(v => {
+      const f = v.fecha ? new Date(v.fecha) : null;
+      return f && f >= inicio && f <= HOY_REAL;
+    });
+    const revenueDesdeInicio = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+    const gananciaDesdeInicio = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+
+    let generado = 0, detalle = '';
+    switch (tipo) {
+      case 'DIVIDENDO_PREFERENTE':
+        generado = capital * pct * (trimestres / 4);
+        detalle = `${trimestres} trim × (${capital.toFixed(0)} × ${(pct*100).toFixed(1)}% / 4)`;
+        break;
+      case 'ROYALTY_BRUTO':
+      case 'RBF':
+        generado = Math.min(cap || Infinity, revenueDesdeInicio * pct);
+        detalle = `${(pct*100).toFixed(1)}% × RD$${revenueDesdeInicio.toFixed(0)} revenue${cap ? ` (cap RD$${cap.toFixed(0)})` : ''}`;
+        break;
+      case 'SALARIO_PRO_LABORE':
+        generado = cuota * meses;
+        detalle = `RD$${cuota}/mes × ${meses.toFixed(1)} meses`;
+        break;
+      case 'UTILIDADES_SUBORD':
+        // Asumimos dividendo preferente del inversor ya pagado: por ahora 0 (placeholder)
+        generado = Math.max(0, gananciaDesdeInicio) * pct;
+        detalle = `${(pct*100).toFixed(1)}% × RD$${gananciaDesdeInicio.toFixed(0)} utilidad`;
+        break;
+      case 'SWEAT_EQUITY':
+        generado = pct * 100 * años;
+        detalle = `${(pct*100).toFixed(1)}% × ${años.toFixed(1)} años = ${generado.toFixed(2)}% equity`;
+        break;
+      case 'REINVERSION':
+        generado = gananciaDesdeInicio * pct;
+        detalle = `${(pct*100).toFixed(1)}% × RD$${gananciaDesdeInicio.toFixed(0)} (al patrimonio)`;
+        break;
+      case 'CASHFLOW_ANUAL': {
+        const yearsCompleted = Math.floor(años);
+        // Aproxima cashflow anual = ganancia anual proxy
+        generado = (gananciaDesdeInicio / Math.max(1, años)) * yearsCompleted * pct;
+        detalle = `${yearsCompleted} año(s) cerrados × ${(pct*100).toFixed(0)}% del cashflow`;
+        break;
+      }
+      default: detalle = '—';
+    }
+    const esInfoOnly = tipo === 'SWEAT_EQUITY' || tipo === 'REINVERSION';
+    return { generado, detalle, esInfoOnly };
+  };
+
+  // ─── Edit modal state + handler ───
+  const editRegla = reglas.find(r => r.id === editReglaId);
+  const handleSaveEdit = async (values) => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.updateCompensacion(editReglaId, {
+        pctAplicado:    values.pctAplicado    === '' ? null : values.pctAplicado,
+        cuotaMensual:   values.cuotaMensual   === '' ? null : values.cuotaMensual,
+        bonusThreshold: values.bonusThreshold === '' ? null : values.bonusThreshold,
+        capDevolver:    values.capDevolver    === '' ? null : values.capDevolver,
+        montoPactado:   values.montoPactado   === '' ? null : values.montoPactado,
+      });
+      window.toastOk('Regla actualizada', '');
+      setEditReglaId(null);
+    } catch (e) { window.toastErr('No se pudo actualizar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
   return (
     <div style={{ marginBottom: 'var(--s-3)', padding: 'var(--s-3)', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s-2)' }}>
         <div>
           <div className="section-title" style={{ fontSize: 14 }}>📋 Reglas de compensación activas</div>
           <div className="section-desc" style={{ fontSize: 11 }}>
-            {reglas.length} regla(s) corriendo en paralelo · todas se pagan simultáneamente
+            Paquete {esDueno ? 'Dueño' : 'Inversor'} · {reglas.length} regla(s) en paralelo · montos calculados automático
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {reglas.length === 0 && (
-            <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: esDueno ? '#7c5cff' : '#0ea5e9' }}
-              disabled={busy} onClick={handleApplyPaquete}>
-              ✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}
-            </button>
-          )}
-          {!adding && (
-            <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setAdding(true)}>+ Agregar regla</button>
-          )}
-        </div>
+        {reglas.length === 0 && (
+          <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: esDueno ? '#7c5cff' : '#0ea5e9' }}
+            disabled={busy} onClick={handleApplyPaquete}>
+            ✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}
+          </button>
+        )}
       </div>
 
-      {reglas.length === 0 && !adding && (
+      {reglas.length === 0 && (
         <div className="empty" style={{ padding: 'var(--s-4)' }}>
-          Sin reglas configuradas · click "+ Agregar regla"
+          Sin reglas configuradas · click "✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}"
         </div>
       )}
 
       {reglas.map(r => {
-        const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || {};
+        const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || { label: r.tipoCompensacion, color: 'var(--text-3)' };
+        const dev = computeDevengado(r);
         return (
-          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 4, borderRadius: 3 }}>
-            <span className="badge" style={{ background: m.color, color: 'white', fontSize: 10 }}>{m.label}</span>
-            <span style={{ flex: 1, fontSize: 11, color: 'var(--text-2)' }}>
-              {r.montoPactado != null && <span>Target {fmtCurrency(r.montoPactado)} · </span>}
-              {r.pctAplicado != null && <span>{r.pctAplicado}% · </span>}
-              {r.cuotaMensual != null && <span>RD${r.cuotaMensual}/mo · </span>}
-              {r.bonusThreshold != null && <span>Umbral RD${r.bonusThreshold} · </span>}
-              {r.capDevolver != null && <span>Cap {fmtCurrency(r.capDevolver)} · </span>}
-              {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 60)}…</span>}
-            </span>
-            <button className="icon-btn" title="Simular pagos" onClick={() => setSimReglaId(r.id)}>🧮</button>
-            <button className="icon-btn danger" title="Eliminar regla" onClick={() => handleRemove(r.id)}>×</button>
+          <div key={r.id} style={{ padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 6, borderRadius: 3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="badge" style={{ background: m.color, color: 'white', fontSize: 10 }}>{m.label}</span>
+              <span style={{ flex: 1, fontSize: 11, color: 'var(--text-2)' }}>
+                {r.pctAplicado != null && <span><b>{r.pctAplicado}%</b> · </span>}
+                {r.cuotaMensual != null && <span><b>RD${Number(r.cuotaMensual).toLocaleString()}/mo</b> · </span>}
+                {r.bonusThreshold != null && <span>Umbral RD${r.bonusThreshold} · </span>}
+                {r.capDevolver != null && <span>Cap {fmtCurrency(r.capDevolver)} · </span>}
+                {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 50)}…</span>}
+              </span>
+              <button className="icon-btn" title="Editar valores" onClick={() => setEditReglaId(r.id)}>✎</button>
+              <button className="icon-btn" title="Simular pagos" onClick={() => setSimReglaId(r.id)}>🧮</button>
+              <button className="icon-btn danger" title="Eliminar regla" onClick={() => handleRemove(r.id)}>×</button>
+            </div>
+            <div style={{ marginTop: 4, padding: '4px 8px', background: 'var(--surface)', borderRadius: 3, fontSize: 10, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{dev.detalle}</span>
+              <span style={{ color: m.color, fontWeight: 600 }}>
+                {dev.esInfoOnly ? '📊 Acumulado: ' : '💰 Devengado a hoy: '}
+                {dev.esInfoOnly && r.tipoCompensacion === 'SWEAT_EQUITY'
+                  ? `${dev.generado.toFixed(2)}% equity`
+                  : fmtCurrency(dev.generado)}
+              </span>
+            </div>
           </div>
         );
       })}
 
-      {adding && (
-        <div style={{ marginTop: 'var(--s-3)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: `1px solid ${metaNew.color || 'var(--border)'}` }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>Nueva regla de compensación</div>
-          <div className="row-2">
-            <div className="field">
-              <div className="field-label">Método</div>
-              <select className="select" value={newTipo} onChange={e => setNewTipo(e.target.value)}>
-                <optgroup label="Universal">
-                  {metodosDisponibles.filter(([_k, m]) => m.group === 'Universal').map(([k, m]) => (
-                    <option key={k} value={k}>{m.label}</option>
-                  ))}
-                </optgroup>
-                {esDueno && (
-                  <optgroup label="Solo Dueño">
-                    {metodosDisponibles.filter(([_k, m]) => m.group === 'Dueño').map(([k, m]) => (
-                      <option key={k} value={k}>{m.label}</option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              <div className="field-hint" style={{ color: metaNew.color, marginTop: 4, fontSize: 11 }}>{metaNew.desc}</div>
-            </div>
-          </div>
-          <div className="row-3" style={{ marginTop: 'var(--s-2)' }}>
-            {showsNew('retorno') && (
-              <div className="field"><div className="field-label">Monto a devolver</div>
-                <input className="input num" type="number" value={newMonto} onChange={e => setNewMonto(e.target.value)} placeholder="100000" /></div>
-            )}
-            {showsNew('cap') && (
-              <div className="field"><div className="field-label">Cap máximo</div>
-                <input className="input num" type="number" value={newCap} onChange={e => setNewCap(e.target.value)} placeholder="150000" /></div>
-            )}
-            {showsNew('pct') && (
-              <div className="field"><div className="field-label">% aplicado</div>
-                <input className="input num" type="number" step="0.1" value={newPct} onChange={e => setNewPct(e.target.value)} placeholder="15" /></div>
-            )}
-            {showsNew('cuotaMensual') && (
-              <div className="field"><div className="field-label">Cuota mensual</div>
-                <input className="input num" type="number" value={newCuota} onChange={e => setNewCuota(e.target.value)} placeholder="2000" /></div>
-            )}
-            {showsNew('bonusThreshold') && (
-              <div className="field"><div className="field-label">Threshold (RD$)</div>
-                <input className="input num" type="number" value={newThreshold} onChange={e => setNewThreshold(e.target.value)} placeholder="40000" /></div>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 'var(--s-2)' }}>
-            <button className="btn" disabled={busy} onClick={handleAdd}>{busy ? 'Guardando…' : 'Agregar'}</button>
-            <button className="btn ghost" disabled={busy} onClick={() => setAdding(false)}>Cancelar</button>
-            <button type="button" className="btn ghost" style={{ marginLeft: 'auto' }}
-              onClick={() => setSimReglaId('preview')}>🧮 Simular antes de guardar</button>
-          </div>
-        </div>
-      )}
+      {/* Modal de edicion para una regla */}
+      {editRegla && (() => {
+        const m = TIPO_COMPENSACION_META[editRegla.tipoCompensacion] || {};
+        const editFields = [];
+        if ((m.fields || []).includes('pct')) editFields.push({ name: 'pctAplicado', label: '% aplicado', type: 'number', value: editRegla.pctAplicado ?? '' });
+        if ((m.fields || []).includes('cuotaMensual')) editFields.push({ name: 'cuotaMensual', label: 'Cuota mensual (RD$)', type: 'number', value: editRegla.cuotaMensual ?? '' });
+        if ((m.fields || []).includes('cap')) editFields.push({ name: 'capDevolver', label: 'Cap máximo (RD$)', type: 'number', value: editRegla.capDevolver ?? '' });
+        if ((m.fields || []).includes('bonusThreshold')) editFields.push({ name: 'bonusThreshold', label: 'Umbral bonus (RD$)', type: 'number', value: editRegla.bonusThreshold ?? '' });
+        if ((m.fields || []).includes('retorno')) editFields.push({ name: 'montoPactado', label: 'Monto target (RD$)', type: 'number', value: editRegla.montoPactado ?? '' });
+        if (editFields.length === 0) editFields.push({ name: '_info', label: 'Sin parámetros editables', value: 'Esta regla no tiene valores numéricos para editar' });
+        return <EditModal open={true} title={`Editar regla · ${m.label}`}
+          fields={editFields} busy={busy}
+          onCancel={() => setEditReglaId(null)} onSave={handleSaveEdit} />;
+      })()}
 
       {simReglaId && (() => {
-        if (simReglaId === 'preview') {
-          return <SimuladorModal open={true} tipo={newTipo}
-            params={{ pct: newPct, cuotaMensual: newCuota, bonusThreshold: newThreshold, cap: newCap, retorno: newMonto, montoPactado: newMonto }}
-            onClose={() => setSimReglaId(null)} />;
-        }
         const r = reglas.find(x => x.id === simReglaId);
         if (!r) return null;
         return <SimuladorModal open={true} tipo={r.tipoCompensacion}
-          params={{ pct: r.pctAplicado, cuotaMensual: r.cuotaMensual, bonusThreshold: r.bonusThreshold, cap: r.capDevolver, retorno: r.montoPactado, montoPactado: r.montoPactado }}
+          params={{ pct: r.pctAplicado, cuotaMensual: r.cuotaMensual, bonusThreshold: r.bonusThreshold, cap: r.capDevolver, retorno: r.montoPactado, montoPactado: r.montoPactado, capital: capital }}
           onClose={() => setSimReglaId(null)} />;
       })()}
     </div>
