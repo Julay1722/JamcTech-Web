@@ -3555,16 +3555,16 @@ const TIPO_COMPENSACION_META = {
     frecuencia: 'mensual',
     simExample: { pct: 70, ventasMes: 15, ticketProm: 2000, margen: 42 },
   },
-  SWEAT_EQUITY: {
-    label: 'D3 · Sweat Equity',
-    desc: '% adicional de participación accionaria ganado por aportar trabajo y gestión. No es pago en cash — incrementa tu ownership.',
+  COMISION_SKU: {
+    label: 'D3 · Comisión por SKU Vendido',
+    desc: 'Monto fijo por cada unidad vendida ese mes. Como una "salesperson commission" para ti mismo. 100 ud × RD$50 = RD$5,000/mes.',
     color: '#7c5cff',
-    fields: ['pct'],
+    fields: ['montoPorUnidad'],
     ownerOnly: true,
     group: 'Dueño',
     paquete: 'Paquete Dueño',
-    frecuencia: 'anual',
-    simExample: { pct: 5 },
+    frecuencia: 'mensual',
+    simExample: { montoPorUnidad: 100 },
   },
   REINVERSION: {
     label: 'D4 · Reinversión Utilidades Retenidas',
@@ -3600,7 +3600,7 @@ const PAQUETES_PRESETS = {
   Dueño: [
     { tipoCompensacion: 'SALARIO_PRO_LABORE', cuotaMensual: 25000 },
     { tipoCompensacion: 'UTILIDADES_SUBORD', pctAplicado: 70 },
-    { tipoCompensacion: 'SWEAT_EQUITY', pctAplicado: 5 },
+    { tipoCompensacion: 'COMISION_SKU', montoPorUnidad: 100 },
     { tipoCompensacion: 'REINVERSION', pctAplicado: 30 },
     { tipoCompensacion: 'CASHFLOW_ANUAL', pctAplicado: 80 },
   ],
@@ -4204,14 +4204,33 @@ function FinanzasPage() {
         const aportesDueno  = allInv.filter(i =>  isDueno(i));
         const yaHayDueno = aportesDueno.length > 0;
         const toggleDueno = async (i) => {
+          const willMark = !isDueno(i);
+          if (willMark && yaHayDueno) {
+            window.toastErr('Solo puede haber un dueño', `Ya esta marcado: ${aportesDueno[0].nombre}`);
+            return;
+          }
+          // Confirmacion explicita por el cambio de tipo (afecta paquete y métodos).
+          const accion = willMark ? 'MARCAR como dueño' : 'DESMARCAR como dueño';
+          const consecuencias = willMark
+            ? `${i.nombre} pasará al Paquete Dueño (5 reglas distintas).\n\n` +
+              `• Capital = equity acumulado (crece con reinversiones)\n` +
+              `• Target = ∞ (no hay tope)\n` +
+              `• Las reglas actuales del Paquete Inversor se eliminan.`
+            : `${i.nombre} volverá al Paquete Inversor.\n\n` +
+              `• Capital = aportes\n` +
+              `• Target = 2× capital\n` +
+              `• Las reglas actuales del Paquete Dueño se eliminan.`;
+          if (!confirm(`¿${accion} a ${i.nombre}?\n\n${consecuencias}\n\nLa data histórica de pagos se preserva.`)) return;
           try {
-            const willMark = !isDueno(i);
-            if (willMark && yaHayDueno) {
-              window.toastErr('Solo puede haber un dueño', `Ya esta marcado: ${aportesDueno[0].nombre}`);
-              return;
+            const id = Number(i._airtableId.slice(2));
+            // Borrar reglas existentes (el paquete del otro tipo no aplica)
+            const reglasActuales = i.compensaciones || [];
+            for (const r of reglasActuales) {
+              try { await window.AT_CLIENT.removeCompensacion(r.id); } catch {}
             }
-            await window.AT_CLIENT.updateInversor(Number(i._airtableId.slice(2)), { esDueno: willMark });
-            window.toastOk(willMark ? 'Marcado como dueño' : 'Desmarcado como dueño', i.nombre);
+            await window.AT_CLIENT.updateInversor(id, { esDueno: willMark });
+            window.toastOk(willMark ? 'Marcado como dueño' : 'Desmarcado como dueño',
+              `${i.nombre} · Aplicá el nuevo Paquete cuando quieras`);
           } catch (e) { window.toastErr('No se pudo marcar', e.message?.slice(0, 120)); }
         };
         // Compute pendiente real + pagado real + ETA + velocidad por inversor
@@ -4272,8 +4291,14 @@ function FinanzasPage() {
                         </span>
                       )}
                     </td>
-                    <td className="num right">{fmtCurrency(i.montoTotal)}</td>
-                    <td className="num right">{dueno ? '—' : fmtCurrency(m.target)}</td>
+                    <td className="num right">
+                      {fmtCurrency(i.montoTotal)}
+                      {dueno && <div style={{ fontSize: 9, color: 'var(--text-3)' }}>equity acumulado</div>}
+                    </td>
+                    <td className="num right">
+                      {dueno ? <span style={{ fontSize: 18, color: 'var(--text-3)' }}>∞</span> : fmtCurrency(m.target)}
+                      {!dueno && <div style={{ fontSize: 9, color: 'var(--text-3)' }}>2× capital</div>}
+                    </td>
                     <td className="num right pos">{fmtCurrency(m.pagado)}</td>
                     <td className="num right">
                       {dueno ? '—' : (
@@ -4424,6 +4449,288 @@ function ToastStack() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Modal "Simular paquete completo" — toma TODAS las reglas del
+// inversor + últimos 12 meses de data real del negocio y proyecta
+// los pagos consolidados mes a mes.
+// ════════════════════════════════════════════════════════════════
+function SimuladorPaqueteModal({ open, inversor, reglas, onClose }) {
+  const data = useATData();
+  if (!open || !inversor) return null;
+
+  // Últimos 12 meses de data real
+  const ventasReales = (data.ventas || []).filter(v => v.idVenta !== 'V-LEG-0000');
+  // Agrupa por mes los ULTIMOS 12
+  const mesesData = {};
+  ventasReales.forEach(v => {
+    const ym = (v.fecha || '').slice(0, 7);
+    if (!mesesData[ym]) mesesData[ym] = { ventas: 0, revenue: 0, ganancia: 0, unidades: 0 };
+    mesesData[ym].ventas += 1;
+    mesesData[ym].revenue += v.precioFacturadoTotal || 0;
+    mesesData[ym].ganancia += v.gananciaTotal || 0;
+    mesesData[ym].unidades += v.cantidadTotal || 0;
+  });
+  const mesesArr = Object.keys(mesesData).sort().slice(-12);
+  const last12 = mesesArr.map(ym => ({ ym, ...mesesData[ym] }));
+  const totalRev = last12.reduce((s, m) => s + m.revenue, 0);
+  const totalGan = last12.reduce((s, m) => s + m.ganancia, 0);
+  const totalUd = last12.reduce((s, m) => s + m.unidades, 0);
+  const totalVentas = last12.reduce((s, m) => s + m.ventas, 0);
+
+  // Para cada mes, calcula el pago consolidado de TODAS las reglas
+  const capital = Number(inversor.montoTotal) || 0;
+  const proyeccion = last12.map((m, idx) => {
+    let cash = 0, equity = 0;
+    let dividendoMesPagado = 0;
+
+    // Primero calcula dividendo preferente (orden de prelación)
+    reglas.forEach(r => {
+      if (r.tipoCompensacion === 'DIVIDENDO_PREFERENTE') {
+        const pct = Number(r.pctAplicado || 0) / 100;
+        // Trimestral: paga en mes 3, 6, 9, 12 (idx 2, 5, 8, 11)
+        if ((idx + 1) % 3 === 0) {
+          const pago = capital * pct / 4;
+          cash += pago;
+          dividendoMesPagado += pago;
+        }
+      }
+    });
+
+    // Luego el resto
+    reglas.forEach(r => {
+      const pct = Number(r.pctAplicado || 0) / 100;
+      const cuota = Number(r.cuotaMensual || 0);
+      const monto = Number(r.montoPorUnidad || 0);
+      switch (r.tipoCompensacion) {
+        case 'ROYALTY_BRUTO':
+        case 'RBF':                  cash += m.revenue * pct; break;
+        case 'SALARIO_PRO_LABORE':   cash += cuota; break;
+        case 'UTILIDADES_SUBORD':    cash += Math.max(0, m.ganancia - dividendoMesPagado) * pct; break;
+        case 'COMISION_SKU':         cash += m.unidades * monto; break;
+        case 'REINVERSION':          equity += m.ganancia * pct; break;
+        case 'CASHFLOW_ANUAL':       if (idx === last12.length - 1) cash += totalGan * pct; break;
+      }
+    });
+
+    return { ...m, cash, equity, total: cash + equity };
+  });
+
+  const totalCash = proyeccion.reduce((s, p) => s + p.cash, 0);
+  const totalEquity = proyeccion.reduce((s, p) => s + p.equity, 0);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 920 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">🧮 Simulador del Paquete · {inversor.nombre}</div>
+
+        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', fontSize: 12, color: 'var(--text-2)' }}>
+          Proyección de TODAS las reglas ({reglas.length}) aplicadas a los <b>últimos {last12.length} meses</b> reales del negocio.
+          <br /><span style={{ fontSize: 11, color: 'var(--text-3)' }}>{totalVentas} ventas · {totalUd} ud · revenue RD${totalRev.toLocaleString()} · ganancia RD${totalGan.toLocaleString()}</span>
+        </div>
+
+        <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
+          <div className="stat-card">
+            <div className="stat-label">💵 Total cash 12 meses</div>
+            <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(totalCash)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">📊 Total al equity</div>
+            <div className="stat-value" style={{ color: 'var(--success)' }}>+{fmtCurrency(totalEquity)}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Promedio cash/mes</div>
+            <div className="stat-value">{fmtCurrency(totalCash / Math.max(1, last12.length))}</div>
+          </div>
+        </div>
+
+        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+          <table className="data" style={{ fontSize: 11 }}>
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+              <tr>
+                <th>Mes</th>
+                <th className="right">Ventas</th>
+                <th className="right">Revenue</th>
+                <th className="right">Ganancia</th>
+                <th className="right">💵 Cash</th>
+                <th className="right">📊 Equity</th>
+                <th className="right">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proyeccion.map(p => (
+                <tr key={p.ym}>
+                  <td>{p.ym}</td>
+                  <td className="num right">{p.ventas}</td>
+                  <td className="num right">{fmtCurrency(p.revenue)}</td>
+                  <td className="num right">{fmtCurrency(p.ganancia)}</td>
+                  <td className="num right" style={{ color: 'var(--danger)' }}>{fmtCurrency(p.cash)}</td>
+                  <td className="num right" style={{ color: 'var(--success)' }}>+{fmtCurrency(p.equity)}</td>
+                  <td className="num right"><b>{fmtCurrency(p.total)}</b></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="modal-actions" style={{ marginTop: 'var(--s-3)' }}>
+          <button className="btn ghost" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Modal "Registrar pago del mes" — un solo flujo por inversor que
+// procesa TODAS las reglas activas (Salario + Comisión + Utilidades…).
+// Para REINVERSION incrementa capital del dueño en vez de cash out.
+// Para los demás crea un movimiento PAGO_INVERSOR / APORTE_DUENO.
+// ════════════════════════════════════════════════════════════════
+function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, onClose }) {
+  // Monto editable por regla, pre-llenado con el devengado.
+  const [montos, setMontos] = useState({});
+  const [fechaPago, setFechaPago] = useState(window.HOY || new Date().toISOString().slice(0, 10));
+  const [cuenta, setCuenta] = useState('BHD Debito');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      const init = {};
+      reglas.forEach(r => {
+        const dev = computeDevengado(r);
+        init[r.id] = dev.generado.toFixed(2);
+      });
+      setMontos(init);
+    }
+  }, [open, reglas]);
+
+  if (!open || !inversor) return null;
+
+  const total = reglas.reduce((s, r) => s + (Number(montos[r.id]) || 0), 0);
+  const totalCash = reglas.filter(r => r.tipoCompensacion !== 'REINVERSION')
+    .reduce((s, r) => s + (Number(montos[r.id]) || 0), 0);
+  const totalEquity = reglas.filter(r => r.tipoCompensacion === 'REINVERSION')
+    .reduce((s, r) => s + (Number(montos[r.id]) || 0), 0);
+
+  const handlePagar = async () => {
+    if (totalCash <= 0 && totalEquity <= 0) {
+      window.toastErr('Sin montos a pagar', 'Todos los montos están en 0');
+      return;
+    }
+    setBusy(true);
+    try {
+      const inversorId = Number(inversor._airtableId.slice(2));
+      let cashRegistrados = 0;
+      let equityIncrementado = 0;
+
+      for (const r of reglas) {
+        const monto = Number(montos[r.id]) || 0;
+        if (monto <= 0) continue;
+        const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || {};
+
+        if (r.tipoCompensacion === 'REINVERSION') {
+          // Incrementa capital_invertido del dueño (no afecta cash)
+          equityIncrementado += monto;
+        } else {
+          // Movimiento cash normal
+          const conceptoMap = {
+            DIVIDENDO_PREFERENTE: 'Dividendo Preferente',
+            ROYALTY_BRUTO:        'Royalty Inversor',
+            RBF:                  'Revenue-Based Financing',
+            SALARIO_PRO_LABORE:   'Salario Dueño',
+            UTILIDADES_SUBORD:    'Reparto Utilidades',
+            COMISION_SKU:         'Comisión SKU',
+            CASHFLOW_ANUAL:       'Bonus Cashflow Anual',
+          };
+          const concepto = conceptoMap[r.tipoCompensacion] || m.label;
+          const tipo = esDueno ? 'APORTE_DUENO' : 'PAGO_INVERSOR';
+          await window.AT_CLIENT.create('cashflow', {
+            fecha: fechaPago,
+            cuenta,
+            concepto: esDueno ? `Pago Dueño · ${concepto}` : 'Pago a Inversores',
+            tipo,
+            auxiliar: inversor.nombre,
+            entrada: esDueno ? monto : 0,
+            salida:  esDueno ? 0 : monto,
+            notas: `${m.label} · regla #${r.id}`,
+          });
+          cashRegistrados += monto;
+        }
+      }
+
+      // Incrementar capital del dueño si hubo reinversión
+      if (equityIncrementado > 0) {
+        const nuevoCapital = (Number(inversor.montoTotal) || 0) + equityIncrementado;
+        await window.AT_CLIENT.updateInversor(inversorId, {
+          capitalInvertido: nuevoCapital,
+        });
+      }
+
+      const msg = [];
+      if (cashRegistrados > 0) msg.push(`Cash RD$${cashRegistrados.toLocaleString()}`);
+      if (equityIncrementado > 0) msg.push(`Equity +RD$${equityIncrementado.toLocaleString()}`);
+      window.toastOk('Pago registrado', `${inversor.nombre} · ${msg.join(' · ')}`);
+      onClose?.();
+    } catch (e) { window.toastErr('Error al pagar', e.message?.slice(0, 120)); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 720 }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">💸 Registrar pago del mes · {inversor.nombre}</div>
+
+        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', fontSize: 12, color: 'var(--text-2)' }}>
+          Cada monto está pre-llenado con lo <b>devengado a hoy</b>. Editás si querés pagar menos/más.
+          Las reglas de tipo <b>Reinversión</b> no salen del banco — se suman al capital del dueño.
+        </div>
+
+        <div className="row-2" style={{ marginBottom: 'var(--s-3)' }}>
+          <div className="field">
+            <div className="field-label">Fecha del pago</div>
+            <input className="input num" type="date" value={fechaPago} onChange={e => setFechaPago(e.target.value)} />
+          </div>
+          <div className="field">
+            <div className="field-label">Cuenta origen</div>
+            <input className="input" value={cuenta} onChange={e => setCuenta(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 8 }}>Reglas a pagar ({reglas.length})</div>
+        {reglas.map(r => {
+          const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || {};
+          const dev = computeDevengado(r);
+          const esReinv = r.tipoCompensacion === 'REINVERSION';
+          return (
+            <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 4, borderRadius: 3 }}>
+              <div style={{ flex: 1 }}>
+                <span className="badge" style={{ background: m.color, color: 'white', fontSize: 10, marginRight: 6 }}>{m.label}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{dev.detalle}</span>
+              </div>
+              {esReinv && <span className="badge" style={{ background: 'var(--warning)', color: 'var(--bg)', fontSize: 9 }}>→ capital</span>}
+              <input className="input num" type="number" style={{ width: 120 }}
+                value={montos[r.id] ?? ''} onChange={e => setMontos({ ...montos, [r.id]: e.target.value })} />
+            </div>
+          );
+        })}
+
+        <div style={{ marginTop: 'var(--s-3)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4 }}>
+          <div className="grid-3" style={{ fontSize: 12 }}>
+            <div><span className="muted">💵 A salir del banco:</span> <b style={{ color: 'var(--danger)' }}>{fmtCurrency(totalCash)}</b></div>
+            <div><span className="muted">📊 Al capital dueño:</span> <b style={{ color: 'var(--success)' }}>+{fmtCurrency(totalEquity)}</b></div>
+            <div><span className="muted">Total devengado:</span> <b>{fmtCurrency(total)}</b></div>
+          </div>
+        </div>
+
+        <div className="modal-actions" style={{ marginTop: 'var(--s-3)' }}>
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={busy} onClick={handlePagar}>{busy ? 'Procesando…' : `Confirmar pago · ${fmtCurrency(total)}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // Lista de reglas de compensación por inversor (multi-comp)
 // ════════════════════════════════════════════════════════════════
 // Permite ver/agregar/borrar reglas. Filtra ownerOnly segun esDueno.
@@ -4433,6 +4740,8 @@ function ReglasCompensacionList({ inversor, esDueno }) {
   const [busy, setBusy] = useState(false);
   const [simReglaId, setSimReglaId] = useState(null);
   const [editReglaId, setEditReglaId] = useState(null);
+  const [pagoOpen, setPagoOpen] = useState(false);
+  const [simPaqueteOpen, setSimPaqueteOpen] = useState(false);
 
   const handleRemove = async (reglaId) => {
     if (!confirm(`¿Borrar esta regla de compensación? La data histórica de pagos no se pierde.`)) return;
@@ -4473,6 +4782,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     const pct = Number(regla.pctAplicado || 0) / 100;
     const cuota = Number(regla.cuotaMensual || 0);
     const cap = Number(regla.capDevolver || regla.montoPactado || 0);
+    const montoPorUnidad = Number(regla.montoPorUnidad || 0);
     const inicio = regla.fechaInicio ? new Date(regla.fechaInicio) : (inversor.fechaInicio ? new Date(inversor.fechaInicio) : null);
     if (!inicio) return { generado: 0, detalle: 'Sin fecha de inicio' };
     const ms = HOY_REAL - inicio;
@@ -4488,6 +4798,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     });
     const revenueDesdeInicio = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
     const gananciaDesdeInicio = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const unidadesDesdeInicio = ventas.reduce((s, v) => s + (v.cantidadTotal || 0), 0);
 
     let generado = 0, detalle = '';
     switch (tipo) {
@@ -4505,13 +4816,12 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         detalle = `RD$${cuota}/mes × ${meses.toFixed(1)} meses`;
         break;
       case 'UTILIDADES_SUBORD':
-        // Asumimos dividendo preferente del inversor ya pagado: por ahora 0 (placeholder)
         generado = Math.max(0, gananciaDesdeInicio) * pct;
         detalle = `${(pct*100).toFixed(1)}% × RD$${gananciaDesdeInicio.toFixed(0)} utilidad`;
         break;
-      case 'SWEAT_EQUITY':
-        generado = pct * 100 * años;
-        detalle = `${(pct*100).toFixed(1)}% × ${años.toFixed(1)} años = ${generado.toFixed(2)}% equity`;
+      case 'COMISION_SKU':
+        generado = unidadesDesdeInicio * montoPorUnidad;
+        detalle = `${unidadesDesdeInicio} ud × RD$${montoPorUnidad}/u`;
         break;
       case 'REINVERSION':
         generado = gananciaDesdeInicio * pct;
@@ -4519,14 +4829,13 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         break;
       case 'CASHFLOW_ANUAL': {
         const yearsCompleted = Math.floor(años);
-        // Aproxima cashflow anual = ganancia anual proxy
         generado = (gananciaDesdeInicio / Math.max(1, años)) * yearsCompleted * pct;
         detalle = `${yearsCompleted} año(s) cerrados × ${(pct*100).toFixed(0)}% del cashflow`;
         break;
       }
       default: detalle = '—';
     }
-    const esInfoOnly = tipo === 'SWEAT_EQUITY' || tipo === 'REINVERSION';
+    const esInfoOnly = tipo === 'REINVERSION';
     return { generado, detalle, esInfoOnly };
   };
 
@@ -4557,12 +4866,26 @@ function ReglasCompensacionList({ inversor, esDueno }) {
             Paquete {esDueno ? 'Dueño' : 'Inversor'} · {reglas.length} regla(s) en paralelo · montos calculados automático
           </div>
         </div>
-        {reglas.length === 0 && (
-          <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: esDueno ? '#7c5cff' : '#0ea5e9' }}
-            disabled={busy} onClick={handleApplyPaquete}>
-            ✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {reglas.length === 0 && (
+            <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: esDueno ? '#7c5cff' : '#0ea5e9' }}
+              disabled={busy} onClick={handleApplyPaquete}>
+              ✨ Aplicar Paquete {esDueno ? 'Dueño' : 'Inversor'}
+            </button>
+          )}
+          {reglas.length > 0 && (
+            <>
+              <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }}
+                onClick={() => setSimPaqueteOpen(true)}>
+                🧮 Simular paquete
+              </button>
+              <button className="btn" style={{ fontSize: 12, padding: '4px 12px', background: 'var(--success)' }}
+                onClick={() => setPagoOpen(true)}>
+                💸 Registrar pago del mes
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {reglas.length === 0 && (
@@ -4593,9 +4916,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
               <span>{dev.detalle}</span>
               <span style={{ color: m.color, fontWeight: 600 }}>
                 {dev.esInfoOnly ? '📊 Acumulado: ' : '💰 Devengado a hoy: '}
-                {dev.esInfoOnly && r.tipoCompensacion === 'SWEAT_EQUITY'
-                  ? `${dev.generado.toFixed(2)}% equity`
-                  : fmtCurrency(dev.generado)}
+                {fmtCurrency(dev.generado)}
               </span>
             </div>
           </div>
@@ -4621,9 +4942,16 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         const r = reglas.find(x => x.id === simReglaId);
         if (!r) return null;
         return <SimuladorModal open={true} tipo={r.tipoCompensacion}
-          params={{ pct: r.pctAplicado, cuotaMensual: r.cuotaMensual, bonusThreshold: r.bonusThreshold, cap: r.capDevolver, retorno: r.montoPactado, montoPactado: r.montoPactado, capital: capital }}
+          params={{ pct: r.pctAplicado, cuotaMensual: r.cuotaMensual, bonusThreshold: r.bonusThreshold, cap: r.capDevolver, montoPorUnidad: r.montoPorUnidad, retorno: r.montoPactado, montoPactado: r.montoPactado, capital: capital }}
           onClose={() => setSimReglaId(null)} />;
       })()}
+
+      <PagoMensualModal open={pagoOpen} inversor={inversor} esDueno={esDueno}
+        reglas={reglas} computeDevengado={computeDevengado}
+        onClose={() => setPagoOpen(false)} />
+
+      <SimuladorPaqueteModal open={simPaqueteOpen} inversor={inversor}
+        reglas={reglas} onClose={() => setSimPaqueteOpen(false)} />
     </div>
   );
 }
@@ -4662,7 +4990,7 @@ function simularPagos(tipo, params, escenario) {
       // ──── PAQUETE DUEÑO ────
       case 'SALARIO_PRO_LABORE':    return cuotaFija;
       case 'UTILIDADES_SUBORD':     return Math.max(0, gananciaMes - dividendoMes) * pct;
-      case 'SWEAT_EQUITY':          return 0; // info-only, no cash
+      case 'COMISION_SKU':          return ventasMes * Number(params.montoPorUnidad || 0);
       case 'REINVERSION':           return 0; // va al equity, no cash al dueño
       case 'CASHFLOW_ANUAL': {
         // Una vez al año en mes 12: % del cashflow positivo acumulado
@@ -4677,7 +5005,7 @@ function simularPagos(tipo, params, escenario) {
   // ¿Esta regla tiene cap (termina al alcanzarlo)?
   const tieneCap = ['ROYALTY_BRUTO', 'RBF'].includes(tipo) && cap > 0;
   // Frecuencia de visualizacion
-  const esAnual = ['CASHFLOW_ANUAL', 'SWEAT_EQUITY'].includes(tipo);
+  const esAnual = tipo === 'CASHFLOW_ANUAL';
   const maxMeses = tieneCap ? 120 : (esAnual ? 36 : 24);
 
   const rows = [];
@@ -4694,8 +5022,6 @@ function simularPagos(tipo, params, escenario) {
     }
   }
 
-  // Para SWEAT_EQUITY mostramos el equity ganado, no pagos
-  const equityAnual = tipo === 'SWEAT_EQUITY' ? Number(params.pct || 0) : 0;
   // Para REINVERSION el "valor" agregado al patrimonio por mes
   const reinversionMes = tipo === 'REINVERSION' ? gananciaMes * pct : 0;
 
@@ -4710,8 +5036,7 @@ function simularPagos(tipo, params, escenario) {
     totalProyectado: acumulado,
     sinCap: !tieneCap,
     esAnual,
-    esInfoOnly: tipo === 'SWEAT_EQUITY' || tipo === 'REINVERSION',
-    equityAnual,
+    esInfoOnly: tipo === 'REINVERSION',
     reinversionMes,
   };
 }
@@ -4781,7 +5106,7 @@ function SimuladorModal({ open, tipo, params, onClose }) {
   const sim = simularPagos(tipo, params || meta.simExample, escenario);
 
   // ¿Qué inputs del escenario muestra cada tipo?
-  const showsVentas = ['ROYALTY_BRUTO', 'RBF', 'UTILIDADES_SUBORD', 'REINVERSION', 'CASHFLOW_ANUAL'].includes(tipo);
+  const showsVentas = ['ROYALTY_BRUTO', 'RBF', 'UTILIDADES_SUBORD', 'REINVERSION', 'CASHFLOW_ANUAL', 'COMISION_SKU'].includes(tipo);
   const showsMargen = ['UTILIDADES_SUBORD', 'REINVERSION', 'CASHFLOW_ANUAL'].includes(tipo);
   const showsCapital = ['DIVIDENDO_PREFERENTE', 'RBF', 'ROYALTY_BRUTO'].includes(tipo);
   const showsDividendoSubord = tipo === 'UTILIDADES_SUBORD';
@@ -4837,23 +5162,7 @@ function SimuladorModal({ open, tipo, params, onClose }) {
         {/* Resultados sumario */}
         {sim.esInfoOnly ? (
           <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', borderLeft: `3px solid ${meta.color}` }}>
-            <div style={{ fontSize: 11, color: 'var(--warning)', marginBottom: 8, fontWeight: 600 }}>⚠ NO ES PAGO EN CASH</div>
-            {tipo === 'SWEAT_EQUITY' && (
-              <div className="grid-3">
-                <div className="stat-card">
-                  <div className="stat-label">Equity ganado/año</div>
-                  <div className="stat-value" style={{ color: meta.color }}>{sim.equityAnual}%</div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-label">A 5 años</div>
-                  <div className="stat-value">{(sim.equityAnual * 5).toFixed(1)}%</div>
-                </div>
-                <div className="stat-card">
-                  <div className="stat-label">A 10 años</div>
-                  <div className="stat-value">{(sim.equityAnual * 10).toFixed(1)}%</div>
-                </div>
-              </div>
-            )}
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginBottom: 8, fontWeight: 600 }}>⚠ NO ES PAGO EN CASH — se acumula al capital del dueño</div>
             {tipo === 'REINVERSION' && (
               <div className="grid-3">
                 <div className="stat-card">

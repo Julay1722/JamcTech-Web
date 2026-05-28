@@ -419,6 +419,8 @@ async function loadFinanciero() {
         cuotaMensual:    c.cuota_mensual    != null ? parseFloat(c.cuota_mensual)    : null,
         bonusThreshold:  c.bonus_threshold  != null ? parseFloat(c.bonus_threshold)  : null,
         capDevolver:     c.cap_devolver     != null ? parseFloat(c.cap_devolver)     : null,
+        montoPorUnidad:  c.monto_por_unidad != null ? parseFloat(c.monto_por_unidad) : null,
+        diaPago:         c.dia_pago != null ? parseInt(c.dia_pago) : 17,
         fechaInicio:     c.fecha_inicio || null,
         fechaFin:        c.fecha_fin    || null,
         notas:           c.notas || '',
@@ -1512,6 +1514,8 @@ async function createCompensacion(inversorId, data) {
     cuota_mensual:     data.cuotaMensual    != null && data.cuotaMensual    !== '' ? Number(data.cuotaMensual)    : null,
     bonus_threshold:   data.bonusThreshold  != null && data.bonusThreshold  !== '' ? Number(data.bonusThreshold)  : null,
     cap_devolver:      data.capDevolver     != null && data.capDevolver     !== '' ? Number(data.capDevolver)     : null,
+    monto_por_unidad:  data.montoPorUnidad  != null && data.montoPorUnidad  !== '' ? Number(data.montoPorUnidad)  : null,
+    dia_pago:          data.diaPago         != null && data.diaPago         !== '' ? Number(data.diaPago)         : 17,
     fecha_inicio:      data.fechaInicio || null,
     fecha_fin:         data.fechaFin    || null,
     activa:            data.activa !== false,
@@ -1532,6 +1536,8 @@ async function updateCompensacion(id, patch) {
   if (patch.cuotaMensual     !== undefined) row.cuota_mensual    = patch.cuotaMensual    === '' || patch.cuotaMensual    == null ? null : Number(patch.cuotaMensual);
   if (patch.bonusThreshold   !== undefined) row.bonus_threshold  = patch.bonusThreshold  === '' || patch.bonusThreshold  == null ? null : Number(patch.bonusThreshold);
   if (patch.capDevolver      !== undefined) row.cap_devolver     = patch.capDevolver     === '' || patch.capDevolver     == null ? null : Number(patch.capDevolver);
+  if (patch.montoPorUnidad   !== undefined) row.monto_por_unidad = patch.montoPorUnidad  === '' || patch.montoPorUnidad  == null ? null : Number(patch.montoPorUnidad);
+  if (patch.diaPago          !== undefined) row.dia_pago         = patch.diaPago         === '' || patch.diaPago         == null ? 17   : Number(patch.diaPago);
   if (patch.fechaInicio      !== undefined) row.fecha_inicio     = patch.fechaInicio || null;
   if (patch.fechaFin         !== undefined) row.fecha_fin        = patch.fechaFin    || null;
   if (patch.activa           !== undefined) row.activa           = !!patch.activa;
