@@ -2761,25 +2761,40 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
             <tr>
-              <th>Fecha</th><th>Concepto</th><th>Contraparte</th>
+              <th>Fecha</th><th>Método</th><th>Concepto</th><th>Contraparte</th>
               <th className="right">{esDueno ? 'Aporte' : 'Pago'}</th>
               <th className="right">{esDueno ? 'Acumulado aportado' : 'Pendiente'}</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i}>
-                <td>{fmtDate(r.f)}</td>
-                <td className="muted">{r.c}</td>
-                <td className="muted">{r.a || '—'}</td>
-                <td className="num right pos">{fmtCurrency(r.monto)}</td>
-                <td className="num right">{fmtCurrency(Math.max(0, r.saldoDespues))}</td>
-              </tr>
-            ))}
+            {rows.map((r, i) => {
+              // Parsea "regla #X" del notas para mostrar badge del método
+              const reglaMatch = (r.notas || '').match(/regla #(\d+)/);
+              const reglaId = reglaMatch ? parseInt(reglaMatch[1]) : null;
+              const regla = reglaId && (item.compensaciones || []).find(c => c.id === reglaId);
+              const metodoMeta = regla && TIPO_COMPENSACION_META[regla.tipoCompensacion];
+              return (
+                <tr key={i}>
+                  <td>{fmtDate(r.f)}</td>
+                  <td>
+                    {metodoMeta ? (
+                      <span className="badge" style={{ background: metodoMeta.color, color: 'white', fontSize: 9, fontWeight: 600 }}>
+                        {metodoMeta.label.replace(/^[ID]\d+\s·\s/, '')}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-3)', fontSize: 10 }}>—</span>
+                    )}
+                  </td>
+                  <td className="muted">{r.c}</td>
+                  <td className="muted">{r.a || '—'}</td>
+                  <td className="num right pos">{fmtCurrency(r.monto)}</td>
+                  <td className="num right">{fmtCurrency(Math.max(0, r.saldoDespues))}</td>
+                </tr>
+              );
+            })}
             {rows.length === 0 && (
-              <tr><td colSpan="5" className="empty" style={{ padding: 'var(--s-6)' }}>
-                Sin movimientos. Registra el {esDueno ? 'aporte propio' : 'pago al inversor'} en Movimientos con
-                concepto "{concepto}" y contraparte = "{item.nombre}".
+              <tr><td colSpan="6" className="empty" style={{ padding: 'var(--s-6)' }}>
+                Sin movimientos. Registra el {esDueno ? 'aporte propio' : 'pago al inversor'} usando "💸 Registrar pago del mes".
               </td></tr>
             )}
           </tbody>
@@ -4641,17 +4656,20 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
             COMISION_SKU:         'Comisión SKU',
             CASHFLOW_ANUAL:       'Bonus Cashflow Anual',
           };
-          const concepto = conceptoMap[r.tipoCompensacion] || m.label;
+          const conceptoEspecifico = conceptoMap[r.tipoCompensacion] || m.label;
           const tipo = esDueno ? 'APORTE_DUENO' : 'PAGO_INVERSOR';
+          // El concepto base coincide con lo que filtra DetalleInversorMovs
+          // ('Aportes para negocio' para dueño, 'Pago a Inversores' para inversor).
+          // El método específico va en notas como tag para resolverlo después.
           await window.AT_CLIENT.create('cashflow', {
             fecha: fechaPago,
             cuenta,
-            concepto: esDueno ? `Pago Dueño · ${concepto}` : 'Pago a Inversores',
+            concepto: esDueno ? 'Aportes para negocio' : 'Pago a Inversores',
             tipo,
             auxiliar: inversor.nombre,
             entrada: esDueno ? monto : 0,
             salida:  esDueno ? 0 : monto,
-            notas: `${m.label} · regla #${r.id}`,
+            notas: `${conceptoEspecifico} · regla #${r.id}`,
           });
           cashRegistrados += monto;
         }
@@ -4776,6 +4794,18 @@ function ReglasCompensacionList({ inversor, esDueno }) {
   const capital = Number(inversor.montoTotal) || 0;
   const HOY_REAL = new Date(window.HOY || new Date().toISOString().slice(0, 10));
 
+  // ─── Computa "monto pagado a fecha" por regla (filtra cashflow por notas) ──
+  // Cuando PagoMensualModal crea movimientos, mete "regla #ID" en las notas.
+  // Eso es nuestro tag para asociar movimientos a su regla origen.
+  const computePagado = (regla) => {
+    const movs = (data.cashflow || []).filter(m =>
+      typeof m.notas === 'string' && m.notas.includes(`regla #${regla.id}`)
+    );
+    const cashOut = movs.reduce((s, m) => s + (m.s || 0), 0); // pagos inversor
+    const cashIn  = movs.reduce((s, m) => s + (m.e || 0), 0); // aportes dueño
+    return { pagado: cashOut + cashIn, count: movs.length };
+  };
+
   // ─── Computa "monto generado a fecha" automatico por regla ───
   const computeDevengado = (regla) => {
     const tipo = regla.tipoCompensacion;
@@ -4897,6 +4927,8 @@ function ReglasCompensacionList({ inversor, esDueno }) {
       {reglas.map(r => {
         const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || { label: r.tipoCompensacion, color: 'var(--text-3)' };
         const dev = computeDevengado(r);
+        const pag = computePagado(r);
+        const pendiente = Math.max(0, dev.generado - pag.pagado);
         return (
           <div key={r.id} style={{ padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 6, borderRadius: 3 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -4904,19 +4936,23 @@ function ReglasCompensacionList({ inversor, esDueno }) {
               <span style={{ flex: 1, fontSize: 11, color: 'var(--text-2)' }}>
                 {r.pctAplicado != null && <span><b>{r.pctAplicado}%</b> · </span>}
                 {r.cuotaMensual != null && <span><b>RD${Number(r.cuotaMensual).toLocaleString()}/mo</b> · </span>}
+                {r.montoPorUnidad != null && <span><b>RD${Number(r.montoPorUnidad).toLocaleString()}/u</b> · </span>}
                 {r.bonusThreshold != null && <span>Umbral RD${r.bonusThreshold} · </span>}
                 {r.capDevolver != null && <span>Cap {fmtCurrency(r.capDevolver)} · </span>}
-                {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 50)}…</span>}
+                {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 45)}…</span>}
               </span>
               <button className="icon-btn" title="Editar valores" onClick={() => setEditReglaId(r.id)}>✎</button>
               <button className="icon-btn" title="Simular pagos" onClick={() => setSimReglaId(r.id)}>🧮</button>
               <button className="icon-btn danger" title="Eliminar regla" onClick={() => handleRemove(r.id)}>×</button>
             </div>
-            <div style={{ marginTop: 4, padding: '4px 8px', background: 'var(--surface)', borderRadius: 3, fontSize: 10, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>{dev.detalle}</span>
-              <span style={{ color: m.color, fontWeight: 600 }}>
-                {dev.esInfoOnly ? '📊 Acumulado: ' : '💰 Devengado a hoy: '}
-                {fmtCurrency(dev.generado)}
+            <div style={{ marginTop: 4, padding: '4px 8px', background: 'var(--surface)', borderRadius: 3, fontSize: 10, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dev.detalle}</span>
+              <span style={{ display: 'flex', gap: 14, flexShrink: 0 }}>
+                <span><span style={{ color: 'var(--text-3)' }}>{dev.esInfoOnly ? '📊 Acumulado:' : '💰 Devengado:'}</span> <b style={{ color: m.color }}>{fmtCurrency(dev.generado)}</b></span>
+                <span><span style={{ color: 'var(--text-3)' }}>{dev.esInfoOnly ? '🔄 Reinvertido:' : '✓ Pagado:'}</span> <b style={{ color: 'var(--success)' }}>{fmtCurrency(pag.pagado)}</b>{pag.count > 0 && <span style={{ color: 'var(--text-3)' }}> ({pag.count})</span>}</span>
+                {!dev.esInfoOnly && (
+                  <span><span style={{ color: 'var(--text-3)' }}>⏳ Pendiente:</span> <b style={{ color: pendiente > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{fmtCurrency(pendiente)}</b></span>
+                )}
               </span>
             </div>
           </div>
