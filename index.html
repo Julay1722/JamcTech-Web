@@ -3633,6 +3633,17 @@ function FormInversor({ onDone }) {
   const [notas, setNotas] = useState('');
   const [esDueno, setEsDueno] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Cuando marca dueño, sugiere la fecha del PRIMER movimiento del negocio
+  // (porque el dueño está desde el inicio). Para inversor externo, hoy.
+  const fechaPrimerMov = (data.cashflow || [])
+    .map(m => m.f).filter(Boolean).sort()[0];
+  useEffect(() => {
+    if (esDueno && fechaPrimerMov) {
+      setFechaInicio(fechaPrimerMov);
+    } else if (!esDueno) {
+      setFechaInicio(window.HOY || new Date().toISOString().slice(0, 10));
+    }
+  }, [esDueno, fechaPrimerMov]);
   const paquete = esDueno ? 'Dueño' : 'Inversor';
   const preset = PAQUETES_PRESETS[paquete];
   const paqueteColor = esDueno ? '#7c5cff' : '#0ea5e9';
