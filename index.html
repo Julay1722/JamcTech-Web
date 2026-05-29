@@ -4869,9 +4869,30 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         detalle = `${(pct*100).toFixed(1)}% × RD$${gananciaDesdeInicio.toFixed(0)} (al patrimonio)`;
         break;
       case 'CASHFLOW_ANUAL': {
+        // Cuenta años desde fecha_inicio del inversor (Opción C: aniversario).
+        // Por cada año completo, suma la ganancia REAL de ese año (no promedio)
+        // × pct. Los años parciales no cuentan hasta cierre.
         const yearsCompleted = Math.floor(años);
-        generado = (gananciaDesdeInicio / Math.max(1, años)) * yearsCompleted * pct;
-        detalle = `${yearsCompleted} año(s) cerrados × ${(pct*100).toFixed(0)}% del cashflow`;
+        let acumulado = 0;
+        for (let k = 0; k < yearsCompleted; k++) {
+          const desde = new Date(inicio); desde.setFullYear(desde.getFullYear() + k);
+          const hasta = new Date(inicio); hasta.setFullYear(hasta.getFullYear() + k + 1);
+          const ventasAño = (data.ventas || []).filter(v => {
+            const f = v.fecha ? new Date(v.fecha) : null;
+            return f && f >= desde && f < hasta;
+          });
+          const gananciaAño = ventasAño.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+          acumulado += Math.max(0, gananciaAño) * pct;
+        }
+        generado = acumulado;
+        // Próximo cierre fiscal = aniversario siguiente del inicio
+        const nextCierre = new Date(inicio);
+        nextCierre.setFullYear(nextCierre.getFullYear() + yearsCompleted + 1);
+        const nextStr = nextCierre.toISOString().slice(0, 10);
+        const diasFaltantes = Math.ceil((nextCierre - HOY_REAL) / 86400000);
+        detalle = yearsCompleted > 0
+          ? `${yearsCompleted} año(s) cerrados · próximo cierre ${nextStr} (en ${diasFaltantes}d)`
+          : `Próximo cierre fiscal: ${nextStr} (en ${diasFaltantes}d) · ${(pct*100).toFixed(0)}% del cashflow`;
         break;
       }
       default: detalle = '—';
