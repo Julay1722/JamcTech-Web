@@ -220,8 +220,10 @@ async function loadVentas() {
           skuRef:      l.sku_id,
           skuLinked:   l.sku_id,
           qty:         parseFloat(l.cantidad) || 0,
+          precio:      parseFloat(l.precio_unitario) || 0,
           costoUd:     parseFloat(l.cpp_historico) || 0,
           ganancia:    parseFloat(l.ganancia_total) || 0,
+          subtotal:    parseFloat(l.subtotal) || (parseFloat(l.precio_unitario) || 0) * (parseFloat(l.cantidad) || 0),
           baseCost:    (parseFloat(l.cpp_historico) || 0) * (parseFloat(l.cantidad) || 0),
         })),
       };
@@ -1123,6 +1125,31 @@ async function updateVentaHeader(idVenta, patch) {
   if (patch.envio != null) venta.envio = Number(patch.envio) || 0;
   _dispatch('ventas', (window.__AIRTABLE_DATA__.ventas || []).length);
   return { idVenta, updatedCount: (venta.lineas || []).length };
+}
+
+// Actualiza líneas (ventas_items) de una venta. lineas = [{ _airtableId:'vi-N',
+// sku?, qty?, precioUnitario? }]. Los triggers de la DB recalculan
+// total_facturado / total_ganancia / subtotal automáticamente. Refetch al final.
+async function updateVentaLineas(idVenta, lineas) {
+  const venta = (window.__AIRTABLE_DATA__?.ventas || []).find((v) => v.idVenta === idVenta);
+  if (!venta) throw new Error(`venta no encontrada: ${idVenta}`);
+  for (const l of lineas || []) {
+    const itemId = _stripPrefix(l._airtableId);
+    if (itemId == null) continue;
+    const row = {};
+    if (l.sku != null)            row.sku_id          = l.sku;
+    if (l.qty != null)            row.cantidad        = Number(l.qty) || 0;
+    if (l.precioUnitario != null) row.precio_unitario = Number(l.precioUnitario) || 0;
+    // Si cambia el SKU, re-snapshotear el costo (cpp_historico) al CPP actual del
+    // nuevo SKU — el trigger snapshot_cpp solo corre en INSERT, no en UPDATE.
+    if (l.cppHistorico != null)   row.cpp_historico   = Number(l.cppHistorico) || 0;
+    if (Object.keys(row).length === 0) continue;
+    const { error } = await sb.from('ventas_items').update(row).eq('id', itemId);
+    if (error) throw new Error(`updateVentaLineas (item ${itemId}): ${error.message}`);
+  }
+  // Refetch: los triggers ya recalcularon totales en la DB.
+  await loadVentas();
+  return { idVenta, updatedCount: (lineas || []).length };
 }
 
 /* ════════════════════════ WRITERS — Lotes/Entradas ════════════════════════ */
@@ -2066,7 +2093,7 @@ Object.assign(window.AT_CLIENT, {
   loadFinanciero, loadCuotas, loadResumen, loadMovFin, refreshAll,
   // Writers específicos
   createSKU, updateSKU, removeSKU, countSKURefs,
-  createVenta, removeVenta, updateVentaHeader,
+  createVenta, removeVenta, updateVentaHeader, updateVentaLineas,
   createLote, removeLote, updateLoteHeader,
   addEntradaToLote, updateEntrada, removeEntrada,
   createMovFin, removeMovFin,

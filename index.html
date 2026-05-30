@@ -6578,18 +6578,7 @@ function VentasPageExt({ period }) {
     setBusy(false);
   };
 
-  const doSave = async (vals) => {
-    setBusy(true);
-    try {
-      await window.AT_CLIENT.updateVentaHeader(edit.idVenta, {
-        fecha: vals.fecha, canal: vals.canal,
-        envio: Number(vals.envio) || 0, notas: vals.notas,
-      });
-      window.toastOk('Venta actualizada', `${edit.idVenta}`);
-      setEdit(null);
-    } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
-    setBusy(false);
-  };
+  // (Edición de venta movida a <EditVentaModal/> — encabezado + líneas/monto.)
 
   return (
     <>
@@ -6759,17 +6748,143 @@ function VentasPageExt({ period }) {
         onCancel={() => setDel(null)}
         onConfirm={doDelete} />
 
-      <EditModal open={!!edit} busy={busy}
-        title={`Editar venta ${edit?.idVenta}`}
-        fields={edit ? [
-          { name: 'fecha', label: 'Fecha', type: 'date', value: edit.fecha },
-          { name: 'canal', label: 'Canal', type: 'text', value: edit.canal },
-          { name: 'envio', label: 'Envío cobrado (RD$)', type: 'number', value: edit.envio || 0 },
-          { name: 'notas', label: 'Notas', type: 'text', value: edit.notas || '', span: 2 },
-        ] : []}
+      <EditVentaModal open={!!edit} venta={edit}
         onCancel={() => setEdit(null)}
-        onSave={doSave} />
+        onSaved={() => setEdit(null)} />
     </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// EditVentaModal — editar encabezado + líneas (SKU/cant./precio) de una venta.
+// El monto total se recalcula en vivo y los triggers de la DB recalculan
+// total_facturado / total_ganancia tras guardar.
+// ════════════════════════════════════════════════════════════════
+function EditVentaModal({ open, venta, onCancel, onSaved }) {
+  const data = useATData();
+  const skus = data.skus || [];
+  const [fecha, setFecha] = useState('');
+  const [canal, setCanal] = useState('');
+  const [envio, setEnvio] = useState(0);
+  const [notas, setNotas] = useState('');
+  const [lineas, setLineas] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open && venta) {
+      setFecha(venta.fecha || '');
+      setCanal(venta.canal || '');
+      setEnvio(venta.envio || 0);
+      setNotas(venta.notas || '');
+      setLineas((venta.lineas || []).map(l => {
+        const sku = l.skuLinked || l.skuRef || '';
+        return {
+          _airtableId: l._airtableId, sku, qty: l.qty || 0, precio: l.precio || 0,
+          costoUd: l.costoUd || 0, _origSku: sku, _origQty: l.qty || 0, _origPrecio: l.precio || 0,
+        };
+      }));
+    }
+  }, [open, venta?.idVenta]);
+
+  if (!open || !venta) return null;
+
+  const updateLinea = (idx, patch) => setLineas(arr => arr.map((l, i) => i === idx ? { ...l, ...patch } : l));
+
+  const subtotalItems = lineas.reduce((s, l) => s + (Number(l.precio) || 0) * (Number(l.qty) || 0), 0);
+  // La DB calcula total_facturado = subtotal_items + envío − descuento (descuento=0 aquí).
+  const totalFacturado = subtotalItems + (Number(envio) || 0);
+  const costoTotal = lineas.reduce((s, l) => {
+    const sku = skus.find(x => x.id === l.sku);
+    const cu = l.sku === l._origSku ? (l.costoUd || 0) : (sku?.cpp || 0);
+    return s + cu * (Number(l.qty) || 0);
+  }, 0);
+  // Ganancia = sólo productos (la DB no suma el envío a la ganancia).
+  const ganancia = subtotalItems - costoTotal;
+  const margen = subtotalItems > 0 ? (ganancia / subtotalItems) * 100 : 0;
+
+  const doSave = async () => {
+    setBusy(true);
+    try {
+      await window.AT_CLIENT.updateVentaHeader(venta.idVenta, {
+        fecha, canal, envio: Number(envio) || 0, notas,
+      });
+      const changed = lineas
+        .filter(l => l.sku !== l._origSku || Number(l.qty) !== Number(l._origQty) || Number(l.precio) !== Number(l._origPrecio))
+        .map(l => {
+          const row = { _airtableId: l._airtableId, qty: Number(l.qty), precioUnitario: Number(l.precio) };
+          if (l.sku !== l._origSku) {
+            row.sku = l.sku;
+            const sku = skus.find(x => x.id === l.sku);
+            row.cppHistorico = sku?.cpp || 0;   // re-snapshot costo al nuevo SKU
+          }
+          return row;
+        });
+      if (changed.length > 0) await window.AT_CLIENT.updateVentaLineas(venta.idVenta, changed);
+      window.toastOk('Venta actualizada', `${venta.idVenta} · ${fmtCurrency(totalFacturado)}`);
+      onSaved && onSaved();
+    } catch (e) {
+      window.toastErr('No se pudo guardar', e.message?.slice(0, 120));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal" style={{ minWidth: 580, maxWidth: '92vw' }} onClick={e => e.stopPropagation()}>
+        <div className="modal-title">Editar venta {venta.idVenta}</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+          <div className="field"><div className="field-label">Fecha</div>
+            <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
+          <div className="field"><div className="field-label">Canal</div>
+            <input className="input" type="text" value={canal} onChange={e => setCanal(e.target.value)} /></div>
+          <div className="field"><div className="field-label">Envío cobrado (RD$)</div>
+            <input className="input num" type="number" value={envio} onChange={e => setEnvio(e.target.value)} /></div>
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 6 }}>Productos / monto</div>
+        <table className="data" style={{ marginBottom: 10 }}>
+          <thead><tr>
+            <th>SKU</th>
+            <th className="right">Cant.</th>
+            <th className="right">Precio ud. (RD$)</th>
+            <th className="right">Subtotal</th>
+          </tr></thead>
+          <tbody>
+            {lineas.map((l, idx) => (
+              <tr key={l._airtableId || idx}>
+                <td>
+                  <select className="select" value={l.sku} onChange={e => updateLinea(idx, { sku: e.target.value })} style={{ maxWidth: 250 }}>
+                    {l.sku && !skus.find(s => s.id === l.sku) && <option value={l.sku}>{l.sku}</option>}
+                    {skus.map(s => <option key={s.id} value={s.id}>{s.nm || s.id}</option>)}
+                  </select>
+                </td>
+                <td className="right"><input className="input num" type="number" style={{ width: 64 }} value={l.qty} onChange={e => updateLinea(idx, { qty: e.target.value })} /></td>
+                <td className="right"><input className="input num" type="number" style={{ width: 100 }} value={l.precio} onChange={e => updateLinea(idx, { precio: e.target.value })} /></td>
+                <td className="num right">{fmtCurrency((Number(l.precio) || 0) * (Number(l.qty) || 0))}</td>
+              </tr>
+            ))}
+            {lineas.length === 0 && <tr><td colSpan={4} className="muted">Esta venta no tiene líneas registradas.</td></tr>}
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', fontSize: 13, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span className="muted">Productos: {fmtCurrency(subtotalItems)}</span>
+          {Number(envio) > 0 && <span className="muted">+ Envío: {fmtCurrency(Number(envio))}</span>}
+          <span>Total facturado: <b>{fmtCurrency(totalFacturado)}</b></span>
+          <span className="pos">Ganancia: {fmtCurrency(ganancia)}</span>
+          <span className="muted">Margen: {margen.toFixed(1)}%</span>
+        </div>
+
+        <div className="field" style={{ marginBottom: 'var(--s-4)' }}><div className="field-label">Notas</div>
+          <input className="input" type="text" value={notas} onChange={e => setNotas(e.target.value)} /></div>
+
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onCancel} disabled={busy}>Cancelar</button>
+          <button className="btn" disabled={busy} onClick={doSave}>{busy ? 'Guardando…' : 'Guardar'}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
