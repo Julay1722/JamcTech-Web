@@ -1206,6 +1206,7 @@ async function createLote(lote) {
   // también los borre en cascada.
   if (loteId) _recordLote(loteId, lote.fecha);
   await loadEntradas();
+  await loadSKUs();   // lote nuevo (recibido) afecta stock/CPP → refrescar Inventario
   const newLote = (window.__AIRTABLE_DATA__.lotes || []).find(
     (l) => loteCodigo ? l.id === loteCodigo : l.skus.some((s) => (created || []).some((c) => c.id === Number(String(s._airtableId).replace('e-', ''))))
   );
@@ -1252,6 +1253,7 @@ async function removeLote(loteDashId) {
     }
     _dispatch('entradas', window.__AIRTABLE_DATA__.lotes.length);
   }
+  await loadSKUs();   // borrar el lote reduce stock → refrescar Inventario
   return { loteId: loteDashId, deletedCount: numIds.length, cfsBorrados };
 }
 
@@ -1273,6 +1275,7 @@ async function addEntradaToLote(loteDashId, linea) {
   }).select().single();
   if (error) throw new Error(`addEntradaToLote: ${error.message}`);
   await loadEntradas();
+  await loadSKUs();   // nueva entrada afecta stock/CPP → refrescar Inventario
   return { id: 'e-' + data.id };
 }
 
@@ -1288,6 +1291,7 @@ async function updateEntrada(airtableId, patch) {
   const { error } = await sb.from('entradas').update(row).eq('id', id);
   if (error) throw new Error(`updateEntrada: ${error.message}`);
   await loadEntradas();
+  await loadSKUs();   // stock/CPP cambian con la entrada → refrescar Inventario
   return { id: airtableId };
 }
 
@@ -1298,6 +1302,7 @@ async function removeEntrada(airtableId) {
   const { error } = await sb.from('entradas').delete().eq('id', id);
   if (error) throw new Error(`removeEntrada: ${error.message}`);
   await loadEntradas();
+  await loadSKUs();   // stock/CPP cambian al borrar la entrada → refrescar Inventario
   return { id: airtableId, deleted: true };
 }
 
@@ -1365,6 +1370,7 @@ async function updateLoteHeader(loteDashId, patch) {
 
   // Refresca cache
   await loadEntradas();
+  await loadSKUs();   // status (recibido) / costos afectan stock/CPP → refrescar Inventario
   return { loteId: loteDashId, updatedCount: numIds.length };
 }
 
