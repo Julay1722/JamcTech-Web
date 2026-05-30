@@ -720,6 +720,10 @@ function _buildFinancieroProductos() {
       const prestamoNumId = Number(String(r._airtableId).replace('p-', ''));
       // Match por nombre (data histórica sin FK explícito).
       const matchByName = (m) => {
+        // Una transferencia interna entre cuentas propias NUNCA cuenta como
+        // movimiento de la línea/tarjeta, aunque mencione el banco en la
+        // contraparte (ej. "Transferencia a BHD Débito" inflaba el usado).
+        if (m.c === 'Transferencia') return false;
         const a = (m.a || '').toLowerCase();
         if (!a) return false;
         if (nameLC.includes('bhd'))    return a.includes('bhd') || a.includes('linea de credito');
