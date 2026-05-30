@@ -4502,42 +4502,51 @@ function SimuladorPaqueteModal({ open, inversor, reglas, onClose }) {
   const totalUd = last12.reduce((s, m) => s + m.unidades, 0);
   const totalVentas = last12.reduce((s, m) => s + m.ventas, 0);
 
-  // Para cada mes, calcula el pago consolidado de TODAS las reglas
+  // Para cada mes, calcula el pago PER REGLA + consolidado
   const capital = Number(inversor.montoTotal) || 0;
+  // Inicializa totales por regla
+  const totalPorRegla = {};
+  reglas.forEach(r => { totalPorRegla[r.id] = { regla: r, total: 0, esCash: r.tipoCompensacion !== 'REINVERSION' }; });
+
   const proyeccion = last12.map((m, idx) => {
+    const porRegla = {};
     let cash = 0, equity = 0;
     let dividendoMesPagado = 0;
 
-    // Primero calcula dividendo preferente (orden de prelación)
+    // Dividendo preferente PRIMERO (orden de prelación)
     reglas.forEach(r => {
       if (r.tipoCompensacion === 'DIVIDENDO_PREFERENTE') {
         const pct = Number(r.pctAplicado || 0) / 100;
-        // Trimestral: paga en mes 3, 6, 9, 12 (idx 2, 5, 8, 11)
         if ((idx + 1) % 3 === 0) {
           const pago = capital * pct / 4;
+          porRegla[r.id] = pago;
           cash += pago;
           dividendoMesPagado += pago;
-        }
+          totalPorRegla[r.id].total += pago;
+        } else { porRegla[r.id] = 0; }
       }
     });
 
-    // Luego el resto
     reglas.forEach(r => {
+      if (r.tipoCompensacion === 'DIVIDENDO_PREFERENTE') return; // ya procesado
       const pct = Number(r.pctAplicado || 0) / 100;
       const cuota = Number(r.cuotaMensual || 0);
       const monto = Number(r.montoPorUnidad || 0);
+      let pago = 0;
       switch (r.tipoCompensacion) {
         case 'ROYALTY_BRUTO':
-        case 'RBF':                  cash += m.revenue * pct; break;
-        case 'SALARIO_PRO_LABORE':   cash += cuota; break;
-        case 'UTILIDADES_SUBORD':    cash += Math.max(0, m.ganancia - dividendoMesPagado) * pct; break;
-        case 'COMISION_SKU':         cash += m.unidades * monto; break;
-        case 'REINVERSION':          equity += m.ganancia * pct; break;
-        case 'CASHFLOW_ANUAL':       if (idx === last12.length - 1) cash += totalGan * pct; break;
+        case 'RBF':                  pago = m.revenue * pct; cash += pago; break;
+        case 'SALARIO_PRO_LABORE':   pago = cuota; cash += pago; break;
+        case 'UTILIDADES_SUBORD':    pago = Math.max(0, m.ganancia - dividendoMesPagado) * pct; cash += pago; break;
+        case 'COMISION_SKU':         pago = m.unidades * monto; cash += pago; break;
+        case 'REINVERSION':          pago = m.ganancia * pct; equity += pago; break;
+        case 'CASHFLOW_ANUAL':       if (idx === last12.length - 1) { pago = totalGan * pct; cash += pago; } break;
       }
+      porRegla[r.id] = pago;
+      totalPorRegla[r.id].total += pago;
     });
 
-    return { ...m, cash, equity, total: cash + equity };
+    return { ...m, cash, equity, total: cash + equity, porRegla };
   });
 
   const totalCash = proyeccion.reduce((s, p) => s + p.cash, 0);
@@ -4568,7 +4577,35 @@ function SimuladorPaqueteModal({ open, inversor, reglas, onClose }) {
           </div>
         </div>
 
-        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
+        {/* BREAKDOWN POR MÉTODO — qué paga cada regla específicamente */}
+        <div className="field-label" style={{ marginTop: 'var(--s-3)', marginBottom: 6 }}>📋 ¿Cuánto paga cada método?</div>
+        <div style={{ marginBottom: 'var(--s-3)' }}>
+          {Object.values(totalPorRegla).map(({ regla, total, esCash }) => {
+            const meta = TIPO_COMPENSACION_META[regla.tipoCompensacion] || { label: regla.tipoCompensacion, color: 'var(--text-3)' };
+            const promMensual = total / Math.max(1, last12.length);
+            return (
+              <div key={regla.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 'var(--s-2)', borderLeft: `4px solid ${meta.color}`, background: 'var(--surface-2)', marginBottom: 4, borderRadius: 3 }}>
+                <span className="badge" style={{ background: meta.color, color: 'white', fontSize: 10, fontWeight: 600 }}>{meta.label}</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  {regla.pctAplicado != null && `${regla.pctAplicado}%`}
+                  {regla.cuotaMensual != null && `RD$${Number(regla.cuotaMensual).toLocaleString()}/mes`}
+                  {regla.montoPorUnidad != null && `RD$${Number(regla.montoPorUnidad).toLocaleString()}/u`}
+                  {regla.capDevolver != null && ` · cap ${fmtCurrency(regla.capDevolver)}`}
+                </span>
+                <span style={{ flex: 1 }}></span>
+                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                  prom/mes: <b style={{ color: 'var(--text-2)' }}>{fmtCurrency(promMensual)}</b>
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: esCash ? 'var(--danger)' : 'var(--success)', minWidth: 100, textAlign: 'right' }}>
+                  {esCash ? '💵 ' : '📊 +'}{fmtCurrency(total)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 6 }}>📅 Mes a mes</div>
+        <div style={{ maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 4 }}>
           <table className="data" style={{ fontSize: 11 }}>
             <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
               <tr>
@@ -4612,9 +4649,25 @@ function SimuladorPaqueteModal({ open, inversor, reglas, onClose }) {
 // Para los demás crea un movimiento PAGO_INVERSOR / APORTE_DUENO.
 // ════════════════════════════════════════════════════════════════
 function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, onClose }) {
+  // Calcula fecha del próximo pago: día más común entre reglas, o 17 default.
+  const diaPagoComun = (() => {
+    const dias = reglas.map(r => r.diaPago || 17);
+    if (dias.length === 0) return 17;
+    // Toma el más frecuente
+    const counts = {};
+    dias.forEach(d => { counts[d] = (counts[d] || 0) + 1; });
+    return parseInt(Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]);
+  })();
+  const proximoPago = (() => {
+    const hoy = new Date(window.HOY || new Date().toISOString().slice(0, 10));
+    const fecha = new Date(hoy.getFullYear(), hoy.getMonth(), diaPagoComun);
+    // Si ya pasó este mes, próximo mes
+    if (fecha < hoy) fecha.setMonth(fecha.getMonth() + 1);
+    return fecha.toISOString().slice(0, 10);
+  })();
   // Monto editable por regla, pre-llenado con el devengado.
   const [montos, setMontos] = useState({});
-  const [fechaPago, setFechaPago] = useState(window.HOY || new Date().toISOString().slice(0, 10));
+  const [fechaPago, setFechaPago] = useState(proximoPago);
   const [cuenta, setCuenta] = useState('BHD Debito');
   const [busy, setBusy] = useState(false);
 
@@ -4717,6 +4770,7 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
           <div className="field">
             <div className="field-label">Fecha del pago</div>
             <input className="input num" type="date" value={fechaPago} onChange={e => setFechaPago(e.target.value)} />
+            <div className="field-hint">Sugerido: día {diaPagoComun} (configurable por regla con ✎)</div>
           </div>
           <div className="field">
             <div className="field-label">Cuenta origen</div>
@@ -4909,9 +4963,11 @@ function ReglasCompensacionList({ inversor, esDueno }) {
       await window.AT_CLIENT.updateCompensacion(editReglaId, {
         pctAplicado:    values.pctAplicado    === '' ? null : values.pctAplicado,
         cuotaMensual:   values.cuotaMensual   === '' ? null : values.cuotaMensual,
+        montoPorUnidad: values.montoPorUnidad === '' ? null : values.montoPorUnidad,
         bonusThreshold: values.bonusThreshold === '' ? null : values.bonusThreshold,
         capDevolver:    values.capDevolver    === '' ? null : values.capDevolver,
         montoPactado:   values.montoPactado   === '' ? null : values.montoPactado,
+        diaPago:        values.diaPago        === '' ? 17   : values.diaPago,
       });
       window.toastOk('Regla actualizada', '');
       setEditReglaId(null);
@@ -4961,31 +5017,58 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         const dev = computeDevengado(r);
         const pag = computePagado(r);
         const pendiente = Math.max(0, dev.generado - pag.pagado);
+        const diaPago = r.diaPago || 17;
+        // Resumen de parámetros principales (sin truncar descripción)
+        const params = [];
+        if (r.pctAplicado != null) params.push(`${r.pctAplicado}%`);
+        if (r.cuotaMensual != null) params.push(`RD$${Number(r.cuotaMensual).toLocaleString()}/mes`);
+        if (r.montoPorUnidad != null) params.push(`RD$${Number(r.montoPorUnidad).toLocaleString()}/u`);
+        if (r.bonusThreshold != null) params.push(`Umbral RD$${Number(r.bonusThreshold).toLocaleString()}`);
+        if (r.capDevolver != null) params.push(`Cap ${fmtCurrency(r.capDevolver)}`);
         return (
-          <div key={r.id} style={{ padding: 'var(--s-2)', borderLeft: `3px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 6, borderRadius: 3 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="badge" style={{ background: m.color, color: 'white', fontSize: 10 }}>{m.label}</span>
-              <span style={{ flex: 1, fontSize: 11, color: 'var(--text-2)' }}>
-                {r.pctAplicado != null && <span><b>{r.pctAplicado}%</b> · </span>}
-                {r.cuotaMensual != null && <span><b>RD${Number(r.cuotaMensual).toLocaleString()}/mo</b> · </span>}
-                {r.montoPorUnidad != null && <span><b>RD${Number(r.montoPorUnidad).toLocaleString()}/u</b> · </span>}
-                {r.bonusThreshold != null && <span>Umbral RD${r.bonusThreshold} · </span>}
-                {r.capDevolver != null && <span>Cap {fmtCurrency(r.capDevolver)} · </span>}
-                {m.desc && <span style={{ color: 'var(--text-3)' }}>{m.desc.slice(0, 45)}…</span>}
+          <div key={r.id} style={{ padding: 'var(--s-3)', borderLeft: `4px solid ${m.color}`, background: 'var(--surface-2)', marginBottom: 8, borderRadius: 4 }}>
+            {/* HEADER: badge + parámetros + día pago + acciones */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <span className="badge" style={{ background: m.color, color: 'white', fontSize: 11, fontWeight: 600, padding: '3px 10px' }}>{m.label}</span>
+              <span style={{ fontSize: 12, color: 'var(--text)', fontWeight: 500 }}>{params.join(' · ')}</span>
+              <span style={{ flex: 1 }}></span>
+              <span style={{ fontSize: 10, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                📅 paga día <b style={{ color: 'var(--text-2)' }}>{diaPago}</b>
               </span>
               <button className="icon-btn" title="Editar valores" onClick={() => setEditReglaId(r.id)}>✎</button>
               <button className="icon-btn" title="Simular pagos" onClick={() => setSimReglaId(r.id)}>🧮</button>
               <button className="icon-btn danger" title="Eliminar regla" onClick={() => handleRemove(r.id)}>×</button>
             </div>
-            <div style={{ marginTop: 4, padding: '4px 8px', background: 'var(--surface)', borderRadius: 3, fontSize: 10, color: 'var(--text-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dev.detalle}</span>
-              <span style={{ display: 'flex', gap: 14, flexShrink: 0 }}>
-                <span><span style={{ color: 'var(--text-3)' }}>{dev.esInfoOnly ? '📊 Acumulado:' : '💰 Devengado:'}</span> <b style={{ color: m.color }}>{fmtCurrency(dev.generado)}</b></span>
-                <span><span style={{ color: 'var(--text-3)' }}>{dev.esInfoOnly ? '🔄 Reinvertido:' : '✓ Pagado:'}</span> <b style={{ color: 'var(--success)' }}>{fmtCurrency(pag.pagado)}</b>{pag.count > 0 && <span style={{ color: 'var(--text-3)' }}> ({pag.count})</span>}</span>
-                {!dev.esInfoOnly && (
-                  <span><span style={{ color: 'var(--text-3)' }}>⏳ Pendiente:</span> <b style={{ color: pendiente > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{fmtCurrency(pendiente)}</b></span>
-                )}
-              </span>
+            {/* DESCRIPTION completa, no truncada */}
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.4 }}>
+              {m.desc}
+            </div>
+            {/* STATS: Devengado / Pagado / Pendiente lado a lado, grandes y claros */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 8, padding: 'var(--s-2)', background: 'var(--surface)', borderRadius: 3 }}>
+              <div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>Cálculo a hoy</div>
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{dev.detalle}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>
+                  {dev.esInfoOnly ? '📊 Acumulado' : '💰 Devengado'}
+                </div>
+                <div style={{ fontSize: 14, color: m.color, fontWeight: 600, marginTop: 2 }}>{fmtCurrency(dev.generado)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>
+                  {dev.esInfoOnly ? '🔄 Reinvertido' : '✓ Pagado'}{pag.count > 0 && ` (${pag.count})`}
+                </div>
+                <div style={{ fontSize: 14, color: 'var(--success)', fontWeight: 600, marginTop: 2 }}>{fmtCurrency(pag.pagado)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>
+                  {dev.esInfoOnly ? 'Capital sumado' : '⏳ Pendiente'}
+                </div>
+                <div style={{ fontSize: 14, color: pendiente > 0 ? 'var(--warning)' : 'var(--text-3)', fontWeight: 600, marginTop: 2 }}>
+                  {dev.esInfoOnly ? fmtCurrency(pag.pagado) : fmtCurrency(pendiente)}
+                </div>
+              </div>
             </div>
           </div>
         );
@@ -4997,10 +5080,13 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         const editFields = [];
         if ((m.fields || []).includes('pct')) editFields.push({ name: 'pctAplicado', label: '% aplicado', type: 'number', value: editRegla.pctAplicado ?? '' });
         if ((m.fields || []).includes('cuotaMensual')) editFields.push({ name: 'cuotaMensual', label: 'Cuota mensual (RD$)', type: 'number', value: editRegla.cuotaMensual ?? '' });
+        if ((m.fields || []).includes('montoPorUnidad')) editFields.push({ name: 'montoPorUnidad', label: 'Monto por unidad (RD$)', type: 'number', value: editRegla.montoPorUnidad ?? '' });
         if ((m.fields || []).includes('cap')) editFields.push({ name: 'capDevolver', label: 'Cap máximo (RD$)', type: 'number', value: editRegla.capDevolver ?? '' });
         if ((m.fields || []).includes('bonusThreshold')) editFields.push({ name: 'bonusThreshold', label: 'Umbral bonus (RD$)', type: 'number', value: editRegla.bonusThreshold ?? '' });
         if ((m.fields || []).includes('retorno')) editFields.push({ name: 'montoPactado', label: 'Monto target (RD$)', type: 'number', value: editRegla.montoPactado ?? '' });
-        if (editFields.length === 0) editFields.push({ name: '_info', label: 'Sin parámetros editables', value: 'Esta regla no tiene valores numéricos para editar' });
+        // Día de pago: 1-28 (todos los meses tienen esos días)
+        editFields.push({ name: 'diaPago', label: 'Día del mes (1-28)', type: 'number', value: editRegla.diaPago ?? 17 });
+        if (editFields.length === 1) editFields.unshift({ name: '_info', label: 'Sin parámetros numéricos', value: 'Esta regla solo permite editar el día de pago.' });
         return <EditModal open={true} title={`Editar regla · ${m.label}`}
           fields={editFields} busy={busy}
           onCancel={() => setEditReglaId(null)} onSave={handleSaveEdit} />;
