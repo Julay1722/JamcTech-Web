@@ -2690,26 +2690,18 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
     const txt = ((m.a || '') + ' ' + (m.notas || '')).toLowerCase();
     return m.c === concepto && nameTokens.some(t => txt.includes(t));
   }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
-  const tipoComp = productoExt?.tipoCompensacion || item.tipoCompensacion || 'FLAT';
-  const meta = TIPO_COMPENSACION_META[tipoComp] || { label: tipoComp || 'Sin método', color: 'var(--text-3)', desc: 'Método legacy', fields: [] };
-  const target = tipoComp === 'ROYALTY' && productoExt?.capDevolver ? productoExt.capDevolver : Number(item.balance || 0);
-  let saldo = esDueno ? 0 : target; // dueño: acumular aportes; inversor: empezar con deuda total
+  // Running acumulado POR REGLA (no per-inversor): cada fila muestra cuánto se
+  // lleva pagado a SU propio método de compensación. Así el historial "toma en
+  // cuenta su propia data" en vez de restar todo contra un balance global.
+  const acumPorRegla = {};
   const rows = movs.map(m => {
-    const delta = esDueno ? (m.e || 0) : -(m.s || 0);
-    saldo += delta;
-    return { ...m, monto: m.e || m.s, saldoDespues: saldo };
+    const reglaMatch = (m.notas || '').match(/regla #(\d+)/);
+    const reglaId = reglaMatch ? parseInt(reglaMatch[1]) : 0;
+    const monto = (m.e || 0) + (m.s || 0);
+    acumPorRegla[reglaId] = (acumPorRegla[reglaId] || 0) + monto;
+    return { ...m, monto, acumMetodo: acumPorRegla[reglaId] };
   }).reverse();
-  const totalPagado = movs.reduce((s, m) => s + (m.s || 0), 0);
-  // Velocidad: monto pagado dividido entre meses transcurridos
-  let mesesTrans = 1;
-  if (item.fechaInicio) {
-    const fechaIni = new Date(item.fechaInicio);
-    const hoy = new Date();
-    mesesTrans = Math.max(1, (hoy - fechaIni) / (30.4 * 86400000));
-  }
-  const ritmoMensual = totalPagado / mesesTrans;
-  const pendiente = Math.max(0, target - totalPagado);
-  const etaMeses = ritmoMensual > 0 ? Math.ceil(pendiente / ritmoMensual) : null;
+  const totalPagado = movs.reduce((s, m) => s + (m.e || 0) + (m.s || 0), 0);
   return (
     <div className="section">
       <div className="section-head">
@@ -2718,42 +2710,11 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
             {esDueno ? 'Aportes recibidos de' : 'Pagos hechos a'} · {item.nombre}
           </div>
           <div className="section-desc">
-            {movs.length} movimientos ·
-            {esDueno
-              ? ` total aportado ${fmtCurrency(item.totalPagado || saldo)}`
-              : ` deuda restante ${fmtCurrency(pendiente)}`}
+            {movs.length} movimientos · total {esDueno ? 'aportado' : 'pagado'} {fmtCurrency(totalPagado)}
           </div>
         </div>
-        {esDueno
-          ? <span className="badge success">DUEÑO · no es deuda</span>
-          : <span className="badge" style={{ background: meta.color, color: 'white' }}>{meta.label}</span>}
+        {esDueno && <span className="badge success">DUEÑO · no es deuda</span>}
       </div>
-
-      {!esDueno && (
-        <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-3)', borderLeft: `3px solid ${meta.color}` }}>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>{meta.desc}</div>
-          <div className="grid-3" style={{ fontSize: 11 }}>
-            {productoExt?.pctAplicado != null && (
-              <div><span className="muted">% aplicado:</span> <b>{productoExt.pctAplicado}%</b></div>
-            )}
-            {productoExt?.cuotaMensual != null && (
-              <div><span className="muted">Cuota fija:</span> <b>RD${productoExt.cuotaMensual}/mes</b></div>
-            )}
-            {productoExt?.bonusThreshold != null && (
-              <div><span className="muted">Target bonus:</span> <b>RD${productoExt.bonusThreshold}/mes</b></div>
-            )}
-            {productoExt?.plazoMeses && (
-              <div><span className="muted">Plazo:</span> <b>{productoExt.plazoMeses} meses</b></div>
-            )}
-            {productoExt?.capDevolver && (
-              <div><span className="muted">Cap:</span> <b>{fmtCurrency(productoExt.capDevolver)}</b></div>
-            )}
-            <div><span className="muted">Ritmo actual:</span> <b>RD${ritmoMensual.toFixed(0)}/mo</b></div>
-            <div><span className="muted">ETA al cierre:</span> <b>{etaMeses != null && etaMeses < 600 ? `${etaMeses} meses` : '—'}</b></div>
-            <div><span className="muted">Progreso:</span> <b>{((totalPagado / target) * 100).toFixed(1)}%</b></div>
-          </div>
-        </div>
-      )}
 
       <ReglasCompensacionList inversor={item} esDueno={esDueno} />
 
@@ -2763,7 +2724,7 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
             <tr>
               <th>Fecha</th><th>Método</th><th>Concepto</th><th>Contraparte</th>
               <th className="right">{esDueno ? 'Aporte' : 'Pago'}</th>
-              <th className="right">{esDueno ? 'Acumulado aportado' : 'Pendiente'}</th>
+              <th className="right">Acum. al método</th>
             </tr>
           </thead>
           <tbody>
@@ -2788,7 +2749,7 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
                   <td className="muted">{r.c}</td>
                   <td className="muted">{r.a || '—'}</td>
                   <td className="num right pos">{fmtCurrency(r.monto)}</td>
-                  <td className="num right">{fmtCurrency(Math.max(0, r.saldoDespues))}</td>
+                  <td className="num right">{fmtCurrency(r.acumMetodo)}</td>
                 </tr>
               );
             })}
@@ -4746,6 +4707,12 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
           capitalInvertido: nuevoCapital,
         });
       }
+
+      // Re-fetch para que los movimientos recién creados (con su tag "regla #ID"
+      // en notas) entren al cache local y computePagado/historial los reflejen
+      // sin tener que refrescar a mano.
+      await window.AT_CLIENT.loadCashflow?.();
+      await window.AT_CLIENT.loadFinanciero?.();
 
       const msg = [];
       if (cashRegistrados > 0) msg.push(`Cash RD$${cashRegistrados.toLocaleString()}`);

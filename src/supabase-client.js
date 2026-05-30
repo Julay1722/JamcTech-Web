@@ -378,6 +378,7 @@ async function loadCashflow() {
       a:           r.contraparte?.nombre || '',
       e:           parseFloat(r.entrada) || 0,
       s:           parseFloat(r.salida)  || 0,
+      notas:       r.notas || '',
       _src:        'supabase · cf',
       _origen:     r.cuenta?.nombre,
       _naturaleza: r.naturaleza,
