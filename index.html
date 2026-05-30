@@ -7002,6 +7002,7 @@ function MovimientosPage({ period: periodProp, onNavigate, embedded }) {
     setBusy(true);
     try {
       await window.AT_CLIENT.remove('cashflow', del._airtableId);
+      await window.AT_CLIENT.loadCashflow();   // refresca la tabla (el remove genérico no dispara evento)
       window.toastOk('Movimiento eliminado', del.c);
       setDel(null);
     } catch (e) {
@@ -7013,16 +7014,17 @@ function MovimientosPage({ period: periodProp, onNavigate, embedded }) {
   const doSaveEdit = async (vals) => {
     setBusy(true);
     try {
-      const F = window.AT?.fields?.cashflow || { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar', entrada: 'entrada', salida: 'salida', notas: 'notas' };
       await window.AT_CLIENT.update('cashflow', edit._airtableId, {
-        [F.fecha]: vals.fecha,
-        [F.cuenta]: vals.cuenta,
-        [F.auxiliar]: vals.auxiliar,
-        [F.entrada]: Number(vals.entrada) || 0,
-        [F.salida]: Number(vals.salida) || 0,
-        [F.notas]: vals.notas,
+        fecha:       vals.fecha,
+        concepto:    vals.concepto,      // label amigable → enum tipo (vía TIPO_REV)
+        cuentaBanco: vals.cuentaBanco,   // nombre de cuenta → cuenta_id
+        auxiliar:    vals.auxiliar,
+        entrada:     Number(vals.entrada) || 0,
+        salida:      Number(vals.salida) || 0,
+        notas:       vals.notas,
       });
-      window.toastOk('Movimiento actualizado', vals.cuenta);
+      await window.AT_CLIENT.loadCashflow();   // refresca la tabla (el update genérico no dispara evento)
+      window.toastOk('Movimiento actualizado', vals.concepto || '');
       setEdit(null);
     } catch (e) { window.toastErr('No se pudo guardar', e.message?.slice(0, 120)); }
     setBusy(false);
@@ -7244,14 +7246,21 @@ function MovimientosPage({ period: periodProp, onNavigate, embedded }) {
 
       <EditModal open={!!edit} busy={busy}
         title={`Editar movimiento`}
-        fields={edit ? [
-          { name: 'fecha', label: 'Fecha', type: 'date', value: edit.f },
-          { name: 'cuenta', label: 'Tipo (categoría)', type: 'text', value: edit.c },
-          { name: 'auxiliar', label: 'Contraparte', type: 'text', value: edit.a || '' },
-          { name: 'entrada', label: 'Entrada (RD$)', type: 'number', value: edit.e || 0 },
-          { name: 'salida', label: 'Salida (RD$)', type: 'number', value: edit.s || 0 },
-          { name: 'notas', label: 'Notas', type: 'text', value: '', span: 2 },
-        ] : []}
+        fields={edit ? (() => {
+          const CONCEPTOS = ['Venta de mercancia','Envio cobrado','Compra de mercancia','Compra operativa','Pago Envio','Courier','Pago ADS','Pago Comision','Aportes para negocio','Fee bancario','Refund proveedor','Refund cliente','Transferencia','Ajuste','Intereses','Otro'];
+          const conceptoOpts = [...new Set([edit.c, ...CONCEPTOS].filter(Boolean))];
+          const cuentaOpts = [...new Set((data._cuentas || []).map(c => c.nombre).filter(Boolean))];
+          if (edit._origen && !cuentaOpts.includes(edit._origen)) cuentaOpts.unshift(edit._origen);
+          return [
+            { name: 'fecha', label: 'Fecha', type: 'date', value: edit.f },
+            { name: 'concepto', label: 'Concepto', type: 'select', value: edit.c, options: conceptoOpts },
+            { name: 'cuentaBanco', label: 'Cuenta de banco', type: 'select', value: edit._origen || '', options: cuentaOpts },
+            { name: 'auxiliar', label: 'Contraparte', type: 'text', value: edit.a || '' },
+            { name: 'entrada', label: 'Entrada (RD$)', type: 'number', value: edit.e || 0 },
+            { name: 'salida', label: 'Salida (RD$)', type: 'number', value: edit.s || 0 },
+            { name: 'notas', label: 'Notas', type: 'text', value: edit.notas || '', span: 2 },
+          ];
+        })() : []}
         onCancel={() => setEdit(null)}
         onSave={doSaveEdit} />
     </>

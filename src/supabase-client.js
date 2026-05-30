@@ -1743,7 +1743,15 @@ async function update(tableKey, airtableId, fields) {
     const mid = _stripPrefix(airtableId);
     const row = {};
     if (fields.fecha    !== undefined) row.fecha    = fields.fecha;
-    if (fields.cuenta   !== undefined) row.tipo     = TIPO_REV[fields.cuenta] || 'OTROS';
+    // Concepto/tipo: `tipo` (enum directo) tiene prioridad; si no, mapear desde
+    // el label amigable (`concepto` o el legacy `cuenta`) vía TIPO_REV.
+    if (fields.tipo     !== undefined)      row.tipo = fields.tipo;
+    else if (fields.concepto !== undefined) row.tipo = TIPO_REV[fields.concepto] || 'OTROS';
+    else if (fields.cuenta   !== undefined) row.tipo = TIPO_REV[fields.cuenta]   || 'OTROS';
+    // Cuenta de banco real (cuenta_id) — permite mover el movimiento a otra cuenta.
+    if (fields.cuentaBanco !== undefined && fields.cuentaBanco !== '') {
+      row.cuenta_id = _findCuentaId(fields.cuentaBanco, DEFAULT_CUENTA_ID);
+    }
     if (fields.auxiliar !== undefined) row.contraparte_id = _findContraparteId(fields.auxiliar, DEFAULT_CONTRAPARTE_ID);
     if (fields.entrada  !== undefined) row.entrada  = Number(fields.entrada) || 0;
     if (fields.salida   !== undefined) row.salida   = Number(fields.salida)  || 0;
