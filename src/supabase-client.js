@@ -1419,6 +1419,8 @@ async function createPrestamo(data) {
     plazo_meses:       data.plazoMeses ? Number(data.plazoMeses) : null,
     fecha_inicio:      data.fechaInicio || null,
     fecha_primer_pago: data.fechaPrimerPago || null,
+    dia_corte:         data.diaCorte ? Number(data.diaCorte) : null,
+    dia_vencimiento:   data.diaVencimiento ? Number(data.diaVencimiento) : null,
     moneda:            data.moneda || 'RD',
     contraparte_id:    data.contraparteId ? Number(data.contraparteId)
                         : await _ensureContraparteId(data.contraparte || data.nombre, 'BANCO'),
@@ -1440,6 +1442,7 @@ async function updatePrestamo(id, patch) {
     tasaMensual: 'tasa_mensual', seguroMensual: 'seguro_mensual',
     plazoMeses: 'plazo_meses', fechaInicio: 'fecha_inicio',
     fechaPrimerPago: 'fecha_primer_pago', moneda: 'moneda',
+    diaCorte: 'dia_corte', diaVencimiento: 'dia_vencimiento',
     contraparteId: 'contraparte_id', activa: 'activa',
   };
   for (const [k, dbCol] of Object.entries(map)) {
