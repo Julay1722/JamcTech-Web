@@ -184,13 +184,16 @@ async function loadVentas() {
       .limit(2000);
     if (error) throw error;
 
-    // Ventas LEGACY-SALE no tienen cpp_historico real (placeholder con cpp=0),
-    // asi que el trigger reporta ganancia = facturado (margen 100%) — incorrecto.
-    // Para esos casos aplicamos margen historico promedio del 42% (de V2.1).
+    // Fallback histórico: SOLO si una venta legacy quedó con cpp_historico=0
+    // (placeholder viejo, margen 100% irreal) aplicamos el 42% de V2.1. Tras el
+    // reload del sheet las ventas legacy ya traen su costo real, así que esto
+    // casi nunca aplica y se usa la ganancia real de la DB.
     const LEGACY_DEFAULT_MARGIN = 0.42;
     const ventas = (data || []).map((v) => {
       const items = v.ventas_items || [];
-      const allLegacy = items.length > 0 && items.every((l) => l.sku_id === 'LEGACY-SALE');
+      const allLegacy = items.length > 0 && items.every(
+        (l) => l.sku_id === 'LEGACY-SALE' && (parseFloat(l.cpp_historico) || 0) === 0,
+      );
       const baseCostTotal = items.reduce(
         (sum, l) => sum + (parseFloat(l.cpp_historico) || 0) * (parseFloat(l.cantidad) || 0),
         0,

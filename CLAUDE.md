@@ -12,7 +12,7 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 
 | Componente | Tech | Status |
 |---|---|---|
-| **Database** | Supabase (Postgres) | ✓ 276 movimientos · 190 ventas · 79 entradas · 49 SKUs · 5 préstamos · 4 diseños |
+| **Database** | Supabase (Postgres) | ✓ Reload total del sheet live 1722 ProV2.1 (2026-05-30): 269 movimientos · 196 ventas · 79 entradas · 19 lotes · 49 SKUs (con stock+precio) · 5 préstamos. KPIs cuadran con el sheet: capital 36,960 · revenue 393,450 · ganancia 157,846 · stock 111 ud. Cuadre vs cierre = 1 fila AJUSTE (drift manual del sheet). Generador: `backup_2026-05-30/build_load.js`. |
 | **Frontend dashboard** | HTML/JS estático local (`npx serve .`) | ✓ Apuntando a Supabase via `src/supabase-client.js` (migrado 2026-05-26) |
 | **Cliente Airtable legacy** | `src/airtable-client.js` | Comentado en index.html como rollback fácil |
 | **RLS** | Open para anon (dev local) | ⚠ Revisar policies antes de cualquier deploy a Netlify |
