@@ -68,11 +68,11 @@ const TIPO_MAP = {
   APORTE_DUENO:          'Aportes para negocio',
   APORTE_INVERSOR:       'Aportes para negocio',
   DRAWDOWN:              'Otro',
-  FEE_BANCARIO:          'Otro',
+  FEE_BANCARIO:          'Fee bancario',
   TRANSFERENCIA_INTERNA: 'Transferencia',
-  REFUND_PROVEEDOR:      'Otro',
-  REFUND_CLIENTE:        'Otro',
-  AJUSTE:                'Otro',
+  REFUND_PROVEEDOR:      'Refund proveedor',
+  REFUND_CLIENTE:        'Refund cliente',
+  AJUSTE:                'Ajuste',
   OTROS:                 'Otro',
 };
 
@@ -365,7 +365,7 @@ async function loadCashflow() {
     const { data, error } = await sb
       .from('movimientos')
       .select(`
-        id, fecha, tipo, entrada, salida, naturaleza, notas,
+        id, fecha, tipo, entrada, salida, naturaleza, notas, prestamo_id, inversor_id,
         cuenta:cuentas!cuenta_id ( nombre ),
         contraparte:contrapartes!contraparte_id ( nombre )
       `)
@@ -382,6 +382,8 @@ async function loadCashflow() {
       _src:        'supabase · cf',
       _origen:     r.cuenta?.nombre,
       _naturaleza: r.naturaleza,
+      _prestamoId: r.prestamo_id != null ? Number(r.prestamo_id) : null,
+      _inversorId: r.inversor_id != null ? Number(r.inversor_id) : null,
       _airtableId: 'cf-' + r.id,
     }));
     window.__AIRTABLE_DATA__.cashflow = cf;
@@ -715,18 +717,22 @@ function _buildFinancieroProductos() {
       // separado del banco; aceptamos imprecisión moderada en exchange de no
       // duplicar el mismo monto en los 4 productos.
       const nameLC = (r.nombre || '').toLowerCase();
-      let movsLC = [];
-      if (nameLC.includes('bhd')) {
-        movsLC = cf.filter((m) =>
-          m.a && (m.a.toLowerCase().includes('bhd') || m.a.toLowerCase().includes('linea de credito'))
-        );
-      } else if (nameLC.includes('scotia')) {
-        movsLC = cf.filter((m) =>
-          m.a && m.a.toLowerCase().includes('scotia') && !m.a.toLowerCase().includes('usd') === !nameLC.includes('usd')
-        );
-      } else if (nameLC.includes('qik')) {
-        movsLC = cf.filter((m) => m.a && m.a.toLowerCase().includes('qik'));
-      }
+      const prestamoNumId = Number(String(r._airtableId).replace('p-', ''));
+      // Match por nombre (data histórica sin FK explícito).
+      const matchByName = (m) => {
+        const a = (m.a || '').toLowerCase();
+        if (!a) return false;
+        if (nameLC.includes('bhd'))    return a.includes('bhd') || a.includes('linea de credito');
+        if (nameLC.includes('scotia')) return a.includes('scotia') && (!a.includes('usd') === !nameLC.includes('usd'));
+        if (nameLC.includes('qik'))    return a.includes('qik');
+        return false;
+      };
+      // Preferimos el FK prestamo_id (lo setea createMovFin en cada registro
+      // nuevo, garantizando que el usado se mueva). La data histórica sin FK
+      // (prestamo_id null) cae al match por nombre. Sin doble conteo.
+      const movsLC = cf.filter((m) =>
+        m._prestamoId != null ? m._prestamoId === prestamoNumId : matchByName(m)
+      );
       const usado = movsLC.reduce((sum, m) => sum + (m.e || 0) - (m.s || 0), 0);
       // BHD no tiene tasa_mensual en prestamos (NULL). Fallback al 26% anual
       // que tenía data.js hardcoded.
@@ -763,14 +769,17 @@ function _buildFinancieroProductos() {
   console.log(`✓ [SB/productos] ${productos['FIN-P'].length} préstamos · ${productos['FIN-I'].length} inversores · ${productos['FIN-LC'].length} líneas/tarjetas`);
 }
 
-let _finReady = false, _cfReady = false, _productosBuilt = false;
+let _finReady = false, _cfReady = false;
 window.addEventListener('airtable-loaded', (e) => {
   const t = e.detail?.table;
   if (t === 'financiero')      _finReady = true;
   else if (t === 'cashflow')   _cfReady  = true;
   else return; // evita re-entrar por el propio 'productos' que dispara abajo
-  if (_finReady && _cfReady && !_productosBuilt) {
-    _productosBuilt = true;
+  // Reconstruye productos cada vez que cashflow o financiero recargan (no solo
+  // la primera vez). Sin esto, saldos de préstamo/línea/tarjeta + usado de
+  // inversores quedaban congelados al boot y NO reflejaban movimientos nuevos
+  // registrados después (bug: "funciona pero no recalcula al usarse").
+  if (_finReady && _cfReady) {
     _buildFinancieroProductos();
   }
 });
@@ -849,8 +858,15 @@ const TIPO_REV = {
   'Pago a Inversores':      'PAGO_INVERSOR',
   'Courier':                'PAGO_TRANSPORTE',
   'Envio Mercancia':        'PAGO_TRANSPORTE',
+  'Pago Envio':             'ENVIO_LOTE',
+  'Compra de mercancia':    'COMPRA_MERCANCIA',
   'Aportes para negocio':   'APORTE_DUENO',
   'Transferencia':          'TRANSFERENCIA_INTERNA',
+  'Transferencia interna':  'TRANSFERENCIA_INTERNA',
+  'Fee bancario':           'FEE_BANCARIO',
+  'Refund proveedor':       'REFUND_PROVEEDOR',
+  'Refund cliente':         'REFUND_CLIENTE',
+  'Ajuste':                 'AJUSTE',
   'Pago deuda':             'OTROS',
   'Otro':                   'OTROS',
 };
@@ -864,6 +880,8 @@ const MOVFIN_REV = {
   'Cargo Línea':       { tipo: 'PAGO_INTERESES',     side: 'salida'  },
   'Depósito Inversor': { tipo: 'APORTE_INVERSOR',    side: 'entrada' },
   'Retorno Inversor':  { tipo: 'PAGO_INVERSOR',      side: 'salida'  },
+  'Pago Tarjeta':      { tipo: 'PAGO_TARJETA_CREDITO', side: 'salida'  },
+  'Compra Tarjeta':    { tipo: 'DRAWDOWN',             side: 'entrada' },
   'Otro':              { tipo: 'OTROS',              side: 'salida'  },
 };
 

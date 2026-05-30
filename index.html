@@ -2476,6 +2476,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
 // Marca cuotas pagadas vs proyectadas comparando contra los pagos ya hechos.
 function DetalleAmortizacion({ item }) {
   const data = useATData();
+  const [showReg, setShowReg] = useState(false);
   const monto    = Number(item.montoTotal) || 0;
   const tasa     = Number(item.tasaMensual) || 0;  // decimal mensual
   const seguro   = Number(item.seguroMensual) || 0;
@@ -2522,8 +2523,17 @@ function DetalleAmortizacion({ item }) {
             {' '}{cuotasRestantes} restantes · interés proyectado {fmtCurrency(interesProyectado)}
           </div>
         </div>
-        <span className="badge neutral">Cuota: {fmtCurrency(cuotaTotal)}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn" style={{ background: 'var(--success)', fontSize: 12, padding: '4px 12px' }}
+            onClick={() => setShowReg(s => !s)}>{showReg ? '× Cerrar' : '💸 Registrar pago'}</button>
+          <span className="badge neutral">Cuota: {fmtCurrency(cuotaTotal)}</span>
+        </div>
       </div>
+      {showReg && (
+        <div className="section" style={{ marginBottom: 'var(--s-3)', background: 'var(--surface-2)' }}>
+          <FormMovFinScoped item={item} kind="prestamo" onDone={() => setShowReg(false)} />
+        </div>
+      )}
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
@@ -2565,6 +2575,7 @@ function DetalleAmortizacion({ item }) {
 // Para líneas de crédito (BHD Linea) — muestra los movimientos (disposiciones,
 // pagos, cargos por intereses) con saldo corriente. Sin amortización fija.
 function DetalleLineaRevolvente({ item }) {
+  const [showReg, setShowReg] = useState(false);
   const movs = (item.movimientos || []).slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || ''));
   let saldo = 0;
   const rows = movs.map(m => {
@@ -2582,8 +2593,17 @@ function DetalleLineaRevolvente({ item }) {
             {' '}disponible {fmtCurrency(item.limite - item.usado)}
           </div>
         </div>
-        <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn" style={{ background: 'var(--success)', fontSize: 12, padding: '4px 12px' }}
+            onClick={() => setShowReg(s => !s)}>{showReg ? '× Cerrar' : '💸 Registrar pago / disposición'}</button>
+          <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+        </div>
       </div>
+      {showReg && (
+        <div className="section" style={{ marginBottom: 'var(--s-3)', background: 'var(--surface-2)' }}>
+          <FormMovFinScoped item={item} kind="linea" onDone={() => setShowReg(false)} />
+        </div>
+      )}
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
@@ -2618,9 +2638,13 @@ function DetalleLineaRevolvente({ item }) {
 // Para tarjetas de crédito — lista de cargos y pagos con saldo corriente.
 // Útil para ver qué se está cargando a la tarjeta y cuánto se ha pagado.
 function DetalleUsosTarjeta({ item, cashflow }) {
-  // Filtrar cashflow por mención de la tarjeta en auxiliar o notas
+  const [showReg, setShowReg] = useState(false);
+  // Filtrar cashflow por FK a la tarjeta (prestamo_id) o, para data histórica
+  // sin FK, por mención del nombre de la tarjeta en auxiliar/notas/concepto.
+  const cardId = Number(String(item._airtableId).replace('p-', ''));
   const nameTokens = (item.nombre || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
   const usos = (cashflow || []).filter(m => {
+    if (m._prestamoId != null) return m._prestamoId === cardId;
     const txt = ((m.a || '') + ' ' + (m.notas || '') + ' ' + (m.c || '')).toLowerCase();
     return nameTokens.some(t => txt.includes(t));
   }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
@@ -2643,8 +2667,17 @@ function DetalleUsosTarjeta({ item, cashflow }) {
             {' '}usado {fmtCurrency(item.usado)} · disponible {fmtCurrency(item.limite - item.usado)}
           </div>
         </div>
-        <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn" style={{ background: 'var(--success)', fontSize: 12, padding: '4px 12px' }}
+            onClick={() => setShowReg(s => !s)}>{showReg ? '× Cerrar' : '💸 Registrar cargo / pago'}</button>
+          <span className="badge neutral">Tasa {item.tasaAnual?.toFixed?.(1) || '—'}% anual</span>
+        </div>
       </div>
+      {showReg && (
+        <div className="section" style={{ marginBottom: 'var(--s-3)', background: 'var(--surface-2)' }}>
+          <FormMovFinScoped item={item} kind="tarjeta" onDone={() => setShowReg(false)} />
+        </div>
+      )}
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
         <table className="data">
           <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
@@ -2772,6 +2805,7 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
 function DetalleCuentaLedger({ cuenta, cashflow }) {
   const [periodo, setPeriodo] = useState('todo');
   const [search, setSearch] = useState('');
+  const [showReg, setShowReg] = useState(false);
 
   const movsCuenta = (cashflow || []).filter(m => m._origen === cuenta.nombre);
   const movsPeriodo = filterByPeriod(movsCuenta, periodo, 'f');
@@ -2838,10 +2872,17 @@ function DetalleCuentaLedger({ cuenta, cashflow }) {
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button className="btn" style={{ background: 'var(--success)', fontSize: 12, padding: '4px 12px' }}
+              onClick={() => setShowReg(s => !s)}>{showReg ? '× Cerrar' : '💸 Registrar movimiento'}</button>
             <input className="input" style={{ width: 180 }} placeholder="Buscar concepto/contraparte/notas..." value={search} onChange={e => setSearch(e.target.value)} />
             <PeriodFilter value={periodo} onChange={setPeriodo} />
           </div>
         </div>
+        {showReg && (
+          <div className="section" style={{ marginBottom: 'var(--s-3)', background: 'var(--surface-2)' }}>
+            <FormAjusteCF cuentaInicial={cuenta.nombre} />
+          </div>
+        )}
         <div style={{ maxHeight: 500, overflowY: 'auto' }}>
           <table className="data">
             <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
@@ -3385,9 +3426,15 @@ function ProductDetailModal({ open, item, kind, onClose }) {
 // Versión scopeada del FormMovFin que pre-rellena producto y elige tipo razonable.
 function FormMovFinScoped({ item, kind, onDone }) {
   const data = useATData();
-  const tipoDefault = kind === 'inversor' ? 'Retorno Inversor'
-                    : kind === 'linea'    ? 'Pago Línea'
-                    :                       'Cuota Préstamo';
+  // Opciones de tipo según el producto — solo las que aplican.
+  const TIPOS_POR_KIND = {
+    prestamo: ['Cuota Préstamo', 'Abono Préstamo'],
+    linea:    ['Pago Línea', 'Disposición Línea', 'Cargo Línea'],
+    tarjeta:  ['Pago Tarjeta', 'Compra Tarjeta'],
+    inversor: ['Retorno Inversor', 'Depósito Inversor'],
+  };
+  const MOVFIN_TIPOS = TIPOS_POR_KIND[kind] || ['Cuota Préstamo', 'Abono Préstamo', 'Disposición Línea', 'Pago Línea', 'Cargo Línea', 'Depósito Inversor', 'Retorno Inversor', 'Otro'];
+  const tipoDefault = MOVFIN_TIPOS[0];
   const [tipo, setTipo] = useState(tipoDefault);
   const [fecha, setFecha] = useState(window.HOY || HOY);
   const [monto, setMonto] = useState('');
@@ -3398,15 +3445,22 @@ function FormMovFinScoped({ item, kind, onDone }) {
   const [notas, setNotas] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const MOVFIN_TIPOS = ['Cuota Préstamo', 'Abono Préstamo', 'Disposición Línea', 'Pago Línea', 'Cargo Línea', 'Depósito Inversor', 'Retorno Inversor', 'Otro'];
-
   useEffect(() => {
     if (tipo === 'Cuota Préstamo' && (capital || interes || seguro)) {
       setMonto((Number(capital || 0) + Number(interes || 0) + Number(seguro || 0)).toString());
     }
   }, [tipo, capital, interes, seguro]);
 
-  const cuentas = (data._cuentas || []).map(c => c.nombre);
+  // Solo cuentas líquidas (débito/efectivo) como origen de cash. Las tarjetas
+  // de crédito (CREDITO) no son origen — un cargo a tarjeta usa su cuenta espejo.
+  const cuentas = (data._cuentas || []).filter(c => c.tipo === 'DEBITO' || c.tipo === 'EFECTIVO').map(c => c.nombre);
+  // Un cargo/compra a tarjeta NO sale de una cuenta de banco: aumenta el usado
+  // de la tarjeta. Se asienta contra su cuenta espejo (mismo nombre, tipo CREDITO)
+  // para no inflar el saldo de débito.
+  const esCargoTarjeta = kind === 'tarjeta' && tipo === 'Compra Tarjeta';
+  // Asegura que la cuenta seleccionada exista realmente (evita el desfase
+  // 'BHD Debito' sin acento vs 'BHD Débito').
+  useEffect(() => { if (cuentas.length && !cuentas.includes(cuentaBanco)) setCuentaBanco(cuentas[0]); }, [cuentas.join('|')]);
   const valid = tipo && Number(monto) > 0;
 
   const onSubmit = async () => {
@@ -3417,12 +3471,14 @@ function FormMovFinScoped({ item, kind, onDone }) {
         monto: Number(monto),
         productoFinAirtableId: item._airtableId,
         productoFinId: item.idFin || item.id,
-        cuentaBanco,
+        cuentaBanco: esCargoTarjeta ? item.nombre : cuentaBanco,
         capital: Number(capital) || 0,
         interes: Number(interes) || 0,
         seguro:  Number(seguro)  || 0,
         notas,
       });
+      await window.AT_CLIENT.loadCashflow?.();
+      await window.AT_CLIENT.loadFinanciero?.();
       window.toastOk('Movimiento registrado', `${tipo} · ${fmtCurrency(monto)} · ${item.nombre}`);
       setMonto(''); setCapital(''); setInteres(''); setSeguro(''); setNotas('');
       onDone?.();
@@ -3439,10 +3495,14 @@ function FormMovFinScoped({ item, kind, onDone }) {
           </select></div>
         <div className="field"><div className="field-label">Fecha</div>
           <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} /></div>
-        <div className="field"><div className="field-label">Cuenta origen</div>
-          <select className="select" value={cuentaBanco} onChange={e => setCuentaBanco(e.target.value)}>
-            {cuentas.length > 0 ? cuentas.map(c => <option key={c}>{c}</option>) : <><option>BHD Debito</option><option>Efectivo</option></>}
-          </select></div>
+        <div className="field"><div className="field-label">{kind === 'tarjeta' && tipo === 'Pago Tarjeta' ? 'Cuenta que paga' : 'Cuenta origen'}</div>
+          {esCargoTarjeta ? (
+            <input className="input" value={`Cargo a ${item.nombre}`} readOnly title="El cargo aumenta el usado de la tarjeta; no sale de una cuenta de banco." />
+          ) : (
+            <select className="select" value={cuentaBanco} onChange={e => setCuentaBanco(e.target.value)}>
+              {cuentas.length > 0 ? cuentas.map(c => <option key={c}>{c}</option>) : <><option>BHD Debito</option><option>Efectivo</option></>}
+            </select>
+          )}</div>
       </div>
       {tipo === 'Cuota Préstamo' && (
         <div className="row-3">
@@ -3710,7 +3770,7 @@ function FormInversor({ onDone }) {
   );
 }
 
-function FinanzasPage() {
+function FinanzasPage({ onNavigate }) {
   const data = useATData();
   const productos = data.productos || {};
   const coop   = (productos['FIN-P']  || [])[0];
@@ -3895,6 +3955,7 @@ function FinanzasPage() {
         <button className={`tab ${subtab === 'tarjetas' ? 'active' : ''}`} onClick={() => setSubtab('tarjetas')}>Tarjetas</button>
         <button className={`tab ${subtab === 'inversores' ? 'active' : ''}`} onClick={() => setSubtab('inversores')}>Inversores</button>
         <button className={`tab ${subtab === 'cuentas' ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Cuentas de banco</button>
+        <button className={`tab ${subtab === 'movimientos' ? 'active' : ''}`} onClick={() => setSubtab('movimientos')}>Movimientos</button>
       </div>
 
       {/* CREATE MODAL */}
@@ -4397,6 +4458,8 @@ function FinanzasPage() {
           return <DetalleCuentaLedger cuenta={cuenta} cashflow={data.cashflow || []} />;
         })()}
       </>)}
+
+      {subtab === 'movimientos' && <MovimientosPage embedded onNavigate={onNavigate} />}
     </>
   );
 }
@@ -6033,38 +6096,81 @@ function FormLote() {
 // Para excepciones: descuadres, hallazgos, comisiones automáticas
 // sin fuente, fees bancarios, etc. NO usar para registrar venta/lote
 // normal (esos usan sus forms específicos).
-function FormAjusteCF() {
+// Conceptos operativos / generales que NO pertenecen a una sección dedicada
+// (préstamo/línea/tarjeta/inversor tienen sus propios forms). Cada uno define
+// la dirección por defecto del dinero. 'Transferencia interna' es especial:
+// crea DOS movimientos (sale de una cuenta, entra a otra).
+const CONCEPTOS_GENERALES = [
+  { label: 'Compra operativa',      dir: 'salida'   },
+  { label: 'Pago ADS',              dir: 'salida'   },
+  { label: 'Pago Comision',         dir: 'salida'   },
+  { label: 'Courier',               dir: 'salida'   },
+  { label: 'Pago Envio',            dir: 'salida'   },
+  { label: 'Fee bancario',          dir: 'salida'   },
+  { label: 'Refund cliente',        dir: 'salida'   },
+  { label: 'Refund proveedor',      dir: 'entrada'  },
+  { label: 'Aportes para negocio',  dir: 'entrada'  },
+  { label: 'Transferencia interna', dir: 'transfer' },
+  { label: 'Ajuste',                dir: 'salida'   },
+  { label: 'Otro',                  dir: 'salida'   },
+];
+
+function FormAjusteCF({ cuentaInicial } = {}) {
   const data = useATData();
+  // Cuentas líquidas reales (débito + efectivo) — las tarjetas de crédito se
+  // manejan en su propia sección, no son origen de un gasto en efectivo.
+  const cuentas = (data._cuentas || []).filter(c => c.tipo === 'DEBITO' || c.tipo === 'EFECTIVO');
+  const cuentaNames = cuentas.length ? cuentas.map(c => c.nombre) : ['BHD Debito', 'Efectivo'];
+
   const [fecha, setFecha] = useState(window.HOY || HOY);
-  const [tipo, setTipo] = useState('Otro');
+  const [concepto, setConcepto] = useState('Compra operativa');
+  const [dir, setDir] = useState('salida');                 // 'entrada' | 'salida'
+  const [cuenta, setCuenta] = useState(cuentaInicial && cuentaNames.includes(cuentaInicial) ? cuentaInicial : cuentaNames[0]);
+  const [cuentaDest, setCuentaDest] = useState(cuentaNames[1] || cuentaNames[0]);
   const [contraparte, setContraparte] = useState('');
-  const [entrada, setEntrada] = useState('');
-  const [salida, setSalida] = useState('');
+  const [monto, setMonto] = useState('');
   const [notas, setNotas] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const CF_TIPOS = [
-    'Otro', 'Fee bancario', 'Pago Comision', 'Aportes para negocio',
-    'Pago ADS', 'Pago Envio', 'Cuentas por pagar',
-    'Compra operativa', 'Refund',
-  ];
+  const meta = CONCEPTOS_GENERALES.find(c => c.label === concepto) || { dir: 'salida' };
+  const esTransfer = meta.dir === 'transfer';
 
-  const valid = (Number(entrada) > 0 || Number(salida) > 0);
+  // Al cambiar el concepto, ajusta la dirección sugerida (editable salvo transfer).
+  useEffect(() => { if (meta.dir !== 'transfer') setDir(meta.dir); }, [concepto]);
+
+  const valid = Number(monto) > 0 && cuenta && (!esTransfer || (cuentaDest && cuentaDest !== cuenta));
 
   const onSubmit = async () => {
     setBusy(true);
     try {
-      const F = window.AT?.fields?.cashflow || { fecha: 'fecha', cuenta: 'cuenta', auxiliar: 'auxiliar', entrada: 'entrada', salida: 'salida', notas: 'notas' };
-      await window.AT_CLIENT.create('cashflow', {
-        [F.fecha]:    fecha,
-        [F.cuenta]:   tipo,
-        [F.auxiliar]: contraparte,
-        [F.entrada]:  Number(entrada) || 0,
-        [F.salida]:   Number(salida)  || 0,
-        [F.notas]:    notas,
-      });
-      window.toastOk('Ajuste registrado', `${tipo} · ${entrada ? '+' + fmtCurrency(entrada) : '-' + fmtCurrency(salida)}`);
-      setEntrada(''); setSalida(''); setNotas(''); setContraparte('');
+      const m = Number(monto) || 0;
+      if (esTransfer) {
+        // Dos patas: sale del origen, entra al destino. Neto al cash = 0,
+        // pero cada cuenta refleja el movimiento correctamente.
+        await window.AT_CLIENT.create('cashflow', {
+          fecha, concepto: 'Transferencia interna', cuenta,
+          auxiliar: cuentaDest, entrada: 0, salida: m,
+          notas: notas || `Transferencia a ${cuentaDest}`,
+        });
+        await window.AT_CLIENT.create('cashflow', {
+          fecha, concepto: 'Transferencia interna', cuenta: cuentaDest,
+          auxiliar: cuenta, entrada: m, salida: 0,
+          notas: notas || `Transferencia desde ${cuenta}`,
+        });
+        window.toastOk('Transferencia registrada', `${cuenta} → ${cuentaDest} · ${fmtCurrency(m)}`);
+      } else {
+        await window.AT_CLIENT.create('cashflow', {
+          fecha, concepto, cuenta, auxiliar: contraparte,
+          entrada: dir === 'entrada' ? m : 0,
+          salida:  dir === 'salida'  ? m : 0,
+          notas,
+        });
+        window.toastOk('Movimiento registrado', `${concepto} · ${dir === 'entrada' ? '+' : '-'}${fmtCurrency(m)} · ${cuenta}`);
+      }
+      // Refresca para que el libro + saldos de cuenta reflejen el cambio.
+      await window.AT_CLIENT.loadCashflow?.();
+      await window.AT_CLIENT.loadFinanciero?.();
+      setMonto(''); setNotas(''); setContraparte('');
     } catch (e) {
       window.toastErr('No se pudo registrar', e.message?.slice(0, 120));
     }
@@ -6077,9 +6183,10 @@ function FormAjusteCF() {
         background: 'rgba(240, 182, 88, 0.08)', border: '1px solid rgba(240, 182, 88, 0.3)',
         borderRadius: 'var(--r-sm)', padding: 'var(--s-3) var(--s-4)', fontSize: 12, color: 'var(--text-2)',
       }}>
-        ⚠ <strong>Ajuste manual</strong> es solo para excepciones: descuadres, hallazgos,
-        fees sin fuente. Las ventas, lotes, cuotas y disposiciones usan sus
-        propios forms (donde generan automaticamente el CF vinculado).
+        💸 <strong>Gastos operativos, transferencias y ajustes</strong> — ADS, comisiones, courier,
+        fees, refunds, aportes del dueño y descuadres. Selecciona la <b>cuenta real</b> de donde
+        sale/entra el dinero para que el saldo cuadre. (Ventas, lotes, cuotas y pagos a inversores
+        usan sus propios apartados.)
       </div>
 
       <div className="row-3">
@@ -6088,38 +6195,71 @@ function FormAjusteCF() {
           <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
         </div>
         <div className="field">
-          <div className="field-label">Tipo</div>
-          <select className="select" value={tipo} onChange={e => setTipo(e.target.value)}>
-            {CF_TIPOS.map(t => <option key={t}>{t}</option>)}
+          <div className="field-label">Concepto</div>
+          <select className="select" value={concepto} onChange={e => setConcepto(e.target.value)}>
+            {CONCEPTOS_GENERALES.map(c => <option key={c.label}>{c.label}</option>)}
           </select>
         </div>
-        <div className="field">
-          <div className="field-label">Contraparte</div>
-          <input className="input" value={contraparte} onChange={e => setContraparte(e.target.value)} placeholder="ej. BHD · Facebook · Teo" />
-        </div>
+        {!esTransfer && (
+          <div className="field">
+            <div className="field-label">Dirección</div>
+            <select className="select" value={dir} onChange={e => setDir(e.target.value)}>
+              <option value="salida">Salida (dinero que sale)</option>
+              <option value="entrada">Entrada (dinero que entra)</option>
+            </select>
+          </div>
+        )}
       </div>
 
-      <div className="row-3">
-        <div className="field">
-          <div className="field-label">Entrada (RD$)</div>
-          <input className="input num" type="number" value={entrada} onChange={e => setEntrada(e.target.value)} placeholder="0" />
+      {esTransfer ? (
+        <div className="row-3">
+          <div className="field">
+            <div className="field-label">Cuenta origen</div>
+            <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)}>
+              {cuentaNames.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <div className="field-label">Cuenta destino</div>
+            <select className="select" value={cuentaDest} onChange={e => setCuentaDest(e.target.value)}>
+              {cuentaNames.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <div className="field-label">Monto (RD$)</div>
+            <input className="input num" type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" />
+          </div>
         </div>
-        <div className="field">
-          <div className="field-label">Salida (RD$)</div>
-          <input className="input num" type="number" value={salida} onChange={e => setSalida(e.target.value)} placeholder="0" />
+      ) : (
+        <div className="row-3">
+          <div className="field">
+            <div className="field-label">Cuenta de banco</div>
+            <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)}>
+              {cuentaNames.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <div className="field-label">Monto (RD$)</div>
+            <input className="input num" type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" />
+          </div>
+          <div className="field">
+            <div className="field-label">Contraparte</div>
+            <input className="input" value={contraparte} onChange={e => setContraparte(e.target.value)} placeholder="ej. Facebook · Teo · Banco" />
+          </div>
         </div>
-        <div className="field">
-          <div className="field-label">Notas</div>
-          <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="descripción libre" />
-        </div>
+      )}
+
+      <div className="field">
+        <div className="field-label">Notas</div>
+        <input className="input" value={notas} onChange={e => setNotas(e.target.value)} placeholder="descripción libre" />
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
-          {busy ? 'Registrando…' : 'Registrar ajuste'}
+          {busy ? 'Registrando…' : esTransfer ? 'Registrar transferencia' : 'Registrar movimiento'}
         </button>
         <button className="btn ghost" disabled={busy} onClick={() => {
-          setEntrada(''); setSalida(''); setNotas(''); setContraparte('');
+          setMonto(''); setNotas(''); setContraparte('');
         }}>Limpiar</button>
       </div>
     </div>
@@ -6167,6 +6307,8 @@ function FormMovFin() {
         seguro:  Number(seguro)  || 0,
         notas,
       });
+      await window.AT_CLIENT.loadCashflow?.();
+      await window.AT_CLIENT.loadFinanciero?.();
       window.toastOk('Movimiento registrado', `${tipo} · ${fmtCurrency(monto)} · ${prod?.nombre || ''}`);
       setMonto(''); setCapital(''); setInteres(''); setSeguro(''); setNotas('');
     } catch (e) {
@@ -6519,9 +6661,13 @@ function VentasPageExt({ period }) {
 // ════════════════════════════════════════════════════════════════
 // Movimientos Page — full cashflow tail con delete
 // ════════════════════════════════════════════════════════════════
-function MovimientosPage({ period, onNavigate }) {
+function MovimientosPage({ period: periodProp, onNavigate, embedded }) {
   const data = useATData();
   const all = data.cashflow || [];
+  // Cuando está embebido en Finanzas (que no tiene barra de período propia),
+  // usa un selector de período interno. Si no, usa el período del padre.
+  const [periodLocal, setPeriodLocal] = useState('todo');
+  const period = embedded ? periodLocal : periodProp;
   const [del, setDel] = useState(null);
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -6654,20 +6800,34 @@ function MovimientosPage({ period, onNavigate }) {
 
   return (
     <>
-      <div className="topbar">
-        <div>
-          <h1>Movimientos · libro contable</h1>
-          <div className="sub">{all.length} totales · {filteredAll.length} en filtros · saldo período: <strong style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(neto)}</strong></div>
+      {!embedded && (
+        <div className="topbar">
+          <div>
+            <h1>Movimientos · libro contable</h1>
+            <div className="sub">{all.length} totales · {filteredAll.length} en filtros · saldo período: <strong style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(neto)}</strong></div>
+          </div>
+          <div className="topbar-actions">
+            <button className="pill" onClick={exportCSV} title="Descargar libro contable como CSV">⬇ Exportar CSV</button>
+          </div>
         </div>
-        <div className="topbar-actions">
-          <button className="pill" onClick={exportCSV} title="Descargar libro contable como CSV">⬇ Exportar CSV</button>
+      )}
+      {embedded && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s-3)', flexWrap: 'wrap', gap: 8 }}>
+          <div className="section-desc">
+            {all.length} movimientos totales · {filteredAll.length} en filtros · saldo período:{' '}
+            <strong style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(neto)}</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <PeriodFilter value={period} onChange={setPeriodLocal} />
+            <button className="pill" onClick={exportCSV} title="Descargar libro contable como CSV">⬇ CSV</button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="tabs">
         <button className={`tab ${tab === 'lista' ? 'active' : ''}`} onClick={() => setTab('lista')}>Libro contable</button>
-        <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>+ Movimiento financiero</button>
-        <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>+ Ajuste CF</button>
+        <button className={`tab ${tab === 'movfin' ? 'active' : ''}`} onClick={() => setTab('movfin')}>+ Pago a préstamo/línea/inversor</button>
+        <button className={`tab ${tab === 'ajuste' ? 'active' : ''}`} onClick={() => setTab('ajuste')}>+ Gasto / ajuste / transferencia</button>
       </div>
 
       {tab === 'movfin' && <div className="section"><FormMovFin /></div>}
@@ -7263,10 +7423,9 @@ function App() {
     { id: 'ventas',      label: 'Ventas',      icon: '$', badge: (data.ventas || []).length },
     { id: 'inventario',  label: 'Inventario',  icon: '▤', badge: (data.skus || []).length },
     { id: 'finanzas',    label: 'Finanzas',    icon: '∮', badge: null },
-    { id: 'movimientos', label: 'Movimientos', icon: '⇆', badge: (data.cashflow || []).length },
   ];
 
-  const showPeriod = ['overview', 'ventas', 'movimientos'].includes(page);
+  const showPeriod = ['overview', 'ventas'].includes(page);
 
   return (
     <div className={`app ${navCollapsed ? 'collapsed' : ''}`}>
@@ -7338,8 +7497,7 @@ function App() {
         {page === 'alertas'     && <AlertasPage />}
         {page === 'ventas'      && <VentasPageExt period={period} />}
         {page === 'inventario'  && <InventarioPage />}
-        {page === 'movimientos' && <MovimientosPage period={period} onNavigate={setPage} />}
-        {page === 'finanzas'    && <FinanzasPage />}
+        {page === 'finanzas'    && <FinanzasPage onNavigate={setPage} />}
       </main>
       <ToastStack />
     </div>
