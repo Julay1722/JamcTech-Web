@@ -2527,6 +2527,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
 function DetalleAmortizacion({ item }) {
   const data = useATData();
   const [showReg, setShowReg] = useState(false);
+  const [verProy, setVerProy] = useState(false); // false = pagos reales (default si hay)
   const monto    = Number(item.montoTotal) || 0;
   const tasa     = Number(item.tasaMensual) || 0;  // decimal mensual
   const seguro   = Number(item.seguroMensual) || 0;
@@ -2563,19 +2564,42 @@ function DetalleAmortizacion({ item }) {
   const idxActual = schedule.findIndex(r => !r.pagada);
   const cuotasRestantes = schedule.filter(r => !r.pagada).length;
   const interesProyectado = schedule.filter(r => !r.pagada).reduce((s, r) => s + r.interes, 0);
+
+  // ── Pagos REALES registrados (tabla cuotas del banco) ──
+  // El item viene de `financiero`; las cuotas se adjuntan a productos['FIN-P'].
+  const cuotasReales = finP?.cuotas || item.cuotas || [];
+  const hayReales = cuotasReales.length > 0;
+  let saldoR = monto;
+  const realesRows = cuotasReales.map(c => {
+    const reduce = (c.capital || 0) + (c.abono || 0);
+    saldoR = Math.max(0, saldoR - reduce);
+    return { ...c, saldoDespues: saldoR };
+  });
+  const totalCapitalReal = cuotasReales.reduce((s, c) => s + (c.capital || 0) + (c.abono || 0), 0);
+  const totalInteresReal = cuotasReales.reduce((s, c) => s + (c.interes || 0), 0);
+  const saldoFinalReal = finP?.saldo != null ? finP.saldo : saldoR; // item viene de financiero (usa .balance), no .saldo
+  // Mostrar reales por defecto si existen y el usuario no pidió la proyección.
+  const mostrarReales = hayReales && !verProy;
   return (
     <div className="section">
       <div className="section-head">
         <div>
-          <div className="section-title">Tabla de amortización · {item.nombre}</div>
+          <div className="section-title">
+            {mostrarReales ? `Pagos reales · ${item.nombre}` : `Amortización proyectada · ${item.nombre}`}
+          </div>
           <div className="section-desc">
-            {schedule.length} meses totales · {idxActual >= 0 ? idxActual : schedule.length} pagados ·
-            {' '}{cuotasRestantes} restantes · interés proyectado {fmtCurrency(interesProyectado)}
+            {mostrarReales
+              ? `${cuotasReales.length} pagos registrados · capital ${fmtCurrency(totalCapitalReal)} · interés ${fmtCurrency(totalInteresReal)} · saldo ${fmtCurrency(saldoFinalReal)}`
+              : `${schedule.length} meses totales · ${idxActual >= 0 ? idxActual : schedule.length} pagados · ${cuotasRestantes} restantes · interés proyectado ${fmtCurrency(interesProyectado)}`}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button className="btn" style={{ background: 'var(--success)', fontSize: 12, padding: '4px 12px' }}
             onClick={() => setShowReg(s => !s)}>{showReg ? '× Cerrar' : '💸 Registrar pago'}</button>
+          {hayReales && (
+            <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }}
+              onClick={() => setVerProy(p => !p)}>{verProy ? 'Ver pagos reales' : 'Ver proyección'}</button>
+          )}
           <span className="badge neutral">Cuota: {fmtCurrency(cuotaTotal)}</span>
         </div>
       </div>
@@ -2585,37 +2609,73 @@ function DetalleAmortizacion({ item }) {
         </div>
       )}
       <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-        <table className="data">
-          <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
-            <tr>
-              <th className="right">Mes</th>
-              <th className="right">Capital</th>
-              <th className="right">Interés</th>
-              <th className="right">Seguro</th>
-              <th className="right">Cuota total</th>
-              <th className="right">Saldo después</th>
-              <th>Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {schedule.map((r, i) => (
-              <tr key={i} style={{
-                background: i === idxActual ? 'var(--surface-2)' : undefined,
-                opacity: r.pagada ? 0.55 : 1,
-              }}>
-                <td className="num right">{r.mes}</td>
-                <td className="num right pos">{fmtCurrency(r.capital)}</td>
-                <td className="num right neg">{fmtCurrency(r.interes)}</td>
-                <td className="num right muted">{fmtCurrency(r.seguro)}</td>
-                <td className="num right">{fmtCurrency(r.cuota)}</td>
-                <td className="num right">{fmtCurrency(r.saldoFin)}</td>
-                <td><span className={`badge ${r.pagada ? 'success' : i === idxActual ? 'warning' : 'neutral'}`}>
-                  {r.pagada ? '✓ Pagada' : i === idxActual ? '→ Próxima' : 'Pendiente'}
-                </span></td>
+        {mostrarReales ? (
+          <table className="data">
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+              <tr>
+                <th className="right">Pago</th>
+                <th>Fecha</th>
+                <th className="right">Capital</th>
+                <th className="right">Interés</th>
+                <th className="right">Seguro</th>
+                <th className="right">Total</th>
+                <th className="right">Saldo después</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {realesRows.map((c, i) => (
+                <tr key={i}>
+                  <td className="num right">{c.numero}</td>
+                  <td>{fmtDate(c.fecha)}</td>
+                  <td className="num right pos">{fmtCurrency((c.capital || 0) + (c.abono || 0))}</td>
+                  <td className="num right neg">{c.interes > 0 ? fmtCurrency(c.interes) : '—'}</td>
+                  <td className="num right muted">{c.seguro > 0 ? fmtCurrency(c.seguro) : '—'}</td>
+                  <td className="num right">{fmtCurrency((c.capital || 0) + (c.abono || 0) + (c.interes || 0) + (c.seguro || 0))}</td>
+                  <td className="num right" style={{ fontWeight: 600 }}>{fmtCurrency(c.saldoDespues)}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 600 }}>
+                <td colSpan="2" className="muted">Totales</td>
+                <td className="num right pos">{fmtCurrency(totalCapitalReal)}</td>
+                <td className="num right neg">{fmtCurrency(totalInteresReal)}</td>
+                <td colSpan="2"></td>
+                <td className="num right">{fmtCurrency(saldoFinalReal)}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <table className="data">
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
+              <tr>
+                <th className="right">Mes</th>
+                <th className="right">Capital</th>
+                <th className="right">Interés</th>
+                <th className="right">Seguro</th>
+                <th className="right">Cuota total</th>
+                <th className="right">Saldo después</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedule.map((r, i) => (
+                <tr key={i} style={{
+                  background: i === idxActual ? 'var(--surface-2)' : undefined,
+                  opacity: r.pagada ? 0.55 : 1,
+                }}>
+                  <td className="num right">{r.mes}</td>
+                  <td className="num right pos">{fmtCurrency(r.capital)}</td>
+                  <td className="num right neg">{fmtCurrency(r.interes)}</td>
+                  <td className="num right muted">{fmtCurrency(r.seguro)}</td>
+                  <td className="num right">{fmtCurrency(r.cuota)}</td>
+                  <td className="num right">{fmtCurrency(r.saldoFin)}</td>
+                  <td><span className={`badge ${r.pagada ? 'success' : i === idxActual ? 'warning' : 'neutral'}`}>
+                    {r.pagada ? '✓ Pagada' : i === idxActual ? '→ Próxima' : 'Pendiente'}
+                  </span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

@@ -401,6 +401,43 @@ async function loadCashflow() {
   }
 }
 
+// ── Cuotas (pagos reales registrados de préstamos amortizados, ej. COOP) ──
+// Se adjuntan a productos['FIN-P'][i].cuotas para que el drilldown muestre los
+// pagos REALES del banco en vez de una proyección de amortización.
+async function loadCuotas() {
+  try {
+    const { data, error } = await sb
+      .from('cuotas')
+      .select('prestamo_id, numero, fecha_pago, capital, interes, seguro, abono_capital, monto_total, pagada, notas')
+      .order('prestamo_id', { ascending: true })
+      .order('numero', { ascending: true });
+    if (error) throw error;
+    const cuotas = (data || []).map((c) => ({
+      prestamoId: c.prestamo_id,
+      numero:     c.numero,
+      fecha:      c.fecha_pago,
+      capital:    parseFloat(c.capital)       || 0,
+      interes:    parseFloat(c.interes)       || 0,
+      seguro:     parseFloat(c.seguro)        || 0,
+      abono:      parseFloat(c.abono_capital) || 0,
+      total:      parseFloat(c.monto_total)   || 0,
+      pagada:     !!c.pagada,
+      notas:      c.notas || '',
+    }));
+    window.__AIRTABLE_DATA__.cuotas = cuotas;
+    // Re-arma productos para adjuntar las cuotas a cada FIN-P.
+    if (Array.isArray(window.__AIRTABLE_DATA__.financiero) && Array.isArray(window.__AIRTABLE_DATA__.cashflow)) {
+      try { _buildFinancieroProductos(); } catch (e) {}
+    }
+    _dispatch('cuotas', cuotas.length);
+    console.log(`✓ [SB/cuotas] ${cuotas.length} cuotas`);
+    return cuotas;
+  } catch (e) {
+    console.error('✕ [SB/cuotas] falló:', e.message);
+    return null;
+  }
+}
+
 // ── Financiero (productos: préstamo/línea/tarjeta + inversores) ──
 async function loadFinanciero() {
   try {
@@ -678,6 +715,11 @@ function _buildFinancieroProductos() {
           capital: 0, interes: 0, seguro: 0, abono: 0,
           nota:    m.a || '',
         })),
+        // Pagos REALES registrados (tabla cuotas) — el drilldown los muestra en
+        // vez de la proyección de amortización si existen.
+        cuotas: (window.__AIRTABLE_DATA__.cuotas || [])
+          .filter((c) => c.prestamoId === Number(String(r._airtableId).replace('p-', '')))
+          .sort((a, b) => (a.numero || 0) - (b.numero || 0)),
       });
     } else if (t.includes('inversor')) {
       const pagosCF = cf.filter((m) => m.c === 'Pago a Inversores');
@@ -2007,6 +2049,7 @@ async function refreshAll() {
   console.log('[SB] refreshAll() iniciando...');
   await _loadLookups();
   await Promise.all([loadSKUs(), loadVentas(), loadEntradas(), loadCashflow(), loadFinanciero()]);
+  await loadCuotas();
   await loadMovFin();
   await loadResumen();
   console.log('[SB] refreshAll() completo · ' +
@@ -2020,7 +2063,7 @@ async function refreshAll() {
 window.AT_CLIENT = window.AT_CLIENT || {};
 Object.assign(window.AT_CLIENT, {
   loadSKUs, loadVentas, loadEntradas, loadCashflow,
-  loadFinanciero, loadResumen, loadMovFin, refreshAll,
+  loadFinanciero, loadCuotas, loadResumen, loadMovFin, refreshAll,
   // Writers específicos
   createSKU, updateSKU, removeSKU, countSKURefs,
   createVenta, removeVenta, updateVentaHeader,
@@ -2067,7 +2110,7 @@ setTimeout(loadSKUs,                                              150);
 setTimeout(loadVentas,                                            200);
 setTimeout(loadEntradas,                                          250);
 setTimeout(loadCashflow,                                          300);
-setTimeout(async () => { await loadFinanciero(); loadMovFin(); }, 350);
+setTimeout(async () => { await loadFinanciero(); await loadCuotas(); loadMovFin(); }, 350);
 setTimeout(loadResumen,                                           400);
 
 // Fallback: re-correr override + re-dispatchear eventos a 1.5s, 3s, 5s para
