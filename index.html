@@ -768,9 +768,15 @@ function OverviewPage({ period }) {
     );
     cuentasLiquidasCount = cuentasLiquidas.length;
     if (cuentasLiquidas.length > 0 && Array.isArray(window.BANCOS_SEED)) {
+      const RATE = Number(localStorage.getItem('tasa-cambio-usd')) || 60;
       capitalActual = window.BANCOS_SEED
         .filter(b => b && cuentasLiquidas.some(c => c.id === b._cuentaId))
-        .reduce((s, b) => s + (Number(b.saldo) || 0), 0);
+        .reduce((s, b) => {
+          const saldo = Number(b.saldo) || 0;
+          // Cuentas en USD se convierten a RD$ a la tasa (b.moneda viene 'USD' o 'DOP').
+          const enRD = (b.moneda === 'USD' || b.moneda === 'USD$') ? saldo * RATE : saldo;
+          return s + enRD;
+        }, 0);
     }
   } catch (e) { /* fallback al cashFlowNeto */ }
 
@@ -6267,6 +6273,7 @@ function FormAjusteCF({ cuentaInicial } = {}) {
   const [contraparte, setContraparte] = useState('');
   const [monto, setMonto] = useState('');
   const [notas, setNotas] = useState('');
+  const [tasa, setTasa] = useState(() => Number(localStorage.getItem('tasa-cambio-usd')) || 60);
   const [busy, setBusy] = useState(false);
 
   const meta = CONCEPTOS_GENERALES.find(c => c.label === concepto) || { dir: 'salida' };
@@ -6275,26 +6282,46 @@ function FormAjusteCF({ cuentaInicial } = {}) {
   // Al cambiar el concepto, ajusta la dirección sugerida (editable salvo transfer).
   useEffect(() => { if (meta.dir !== 'transfer') setDir(meta.dir); }, [concepto]);
 
-  const valid = Number(monto) > 0 && cuenta && (!esTransfer || (cuentaDest && cuentaDest !== cuenta));
+  // Moneda de cada cuenta (para transferencias entre RD$ y US$).
+  const monedaDe = (nombre) => ((data._cuentas || []).find(x => x.nombre === nombre)?.moneda === 'USD' ? 'USD' : 'RD');
+  const monedaOrig = monedaDe(cuenta);
+  const monedaDest = monedaDe(cuentaDest);
+  const esCross = esTransfer && monedaOrig !== monedaDest;   // transferencia entre monedas distintas
+  const t = Number(tasa) || 0;
+  // Monto que LLEGA al destino, en la moneda del destino.
+  const montoDestino = !esCross ? (Number(monto) || 0)
+    : (monedaOrig === 'RD' ? (Number(monto) || 0) / (t || 1)   // RD$ -> US$ : dividir por tasa
+                           : (Number(monto) || 0) * t);         // US$ -> RD$ : multiplicar por tasa
+  const simOrig = monedaOrig === 'USD' ? 'US$' : 'RD$';
+  const simDest = monedaDest === 'USD' ? 'US$' : 'RD$';
+
+  const valid = Number(monto) > 0 && cuenta && (!esTransfer || (cuentaDest && cuentaDest !== cuenta && (!esCross || t > 0)));
 
   const onSubmit = async () => {
     setBusy(true);
     try {
       const m = Number(monto) || 0;
       if (esTransfer) {
-        // Dos patas: sale del origen, entra al destino. Neto al cash = 0,
-        // pero cada cuenta refleja el movimiento correctamente.
+        // Dos patas: sale del origen (en su moneda) y entra al destino (en la suya).
+        // Si cruzan monedas, el destino recibe el monto convertido a la tasa que define
+        // el usuario. Neto al capital = 0 (el capital convierte USD->RD$ a la misma tasa).
+        const llega = esCross ? montoDestino : m;
+        const tagTasa = esCross ? ` (tasa ${t})` : '';
         await window.AT_CLIENT.create('cashflow', {
           fecha, concepto: 'Transferencia interna', cuenta,
           auxiliar: cuentaDest, entrada: 0, salida: m,
-          notas: notas || `Transferencia a ${cuentaDest}`,
+          notas: (notas || `Transferencia a ${cuentaDest}`) + tagTasa,
         });
         await window.AT_CLIENT.create('cashflow', {
           fecha, concepto: 'Transferencia interna', cuenta: cuentaDest,
-          auxiliar: cuenta, entrada: m, salida: 0,
-          notas: notas || `Transferencia desde ${cuenta}`,
+          auxiliar: cuenta, entrada: llega, salida: 0,
+          notas: (notas || `Transferencia desde ${cuenta}`) + tagTasa,
         });
-        window.toastOk('Transferencia registrada', `${cuenta} → ${cuentaDest} · ${fmtCurrency(m)}`);
+        if (esCross && t > 0) localStorage.setItem('tasa-cambio-usd', String(t));
+        window.toastOk('Transferencia registrada',
+          `${cuenta} → ${cuentaDest}` + (esCross
+            ? ` · ${simDest}${llega.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+            : ` · ${fmtCurrency(m)}`));
       } else {
         await window.AT_CLIENT.create('cashflow', {
           fecha, concepto, cuenta, auxiliar: contraparte,
@@ -6349,6 +6376,7 @@ function FormAjusteCF({ cuentaInicial } = {}) {
       </div>
 
       {esTransfer ? (
+        <>
         <div className="row-3">
           <div className="field">
             <div className="field-label">Cuenta origen</div>
@@ -6363,10 +6391,27 @@ function FormAjusteCF({ cuentaInicial } = {}) {
             </select>
           </div>
           <div className="field">
-            <div className="field-label">Monto (RD$)</div>
+            <div className="field-label">Monto que sale ({simOrig})</div>
             <input className="input num" type="number" value={monto} onChange={e => setMonto(e.target.value)} placeholder="0" />
           </div>
         </div>
+        {esCross && (
+          <div className="row-2" style={{ marginTop: 'var(--s-3)' }}>
+            <div className="field">
+              <div className="field-label">Tasa de cambio (RD$ por US$)</div>
+              <input className="input num" type="number" step="0.01" value={tasa} onChange={e => setTasa(e.target.value)} placeholder="60" />
+              <div className="field-hint">Tú defines la tasa de esta transferencia</div>
+            </div>
+            <div className="field">
+              <div className="field-label">Llega al destino</div>
+              <div className="input num" style={{ display: 'flex', alignItems: 'center', background: 'var(--surface-2)', fontWeight: 600 }}>
+                {simDest} {montoDestino.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </div>
+              <div className="field-hint">{simOrig}{Number(monto) || 0} {monedaOrig === 'RD' ? '÷' : '×'} {t || '—'}</div>
+            </div>
+          </div>
+        )}
+        </>
       ) : (
         <div className="row-3">
           <div className="field">
