@@ -4383,11 +4383,23 @@ function FinanzasPage({ onNavigate }) {
               `• Capital = aportes\n` +
               `• Target = 2× capital\n` +
               `• Las reglas actuales del Paquete Dueño se eliminan.`;
-          if (!confirm(`¿${accion} a ${i.nombre}?\n\n${consecuencias}\n\nLa data histórica de pagos se preserva.`)) return;
+          const id = Number(i._airtableId.slice(2));
+          const reglasActuales = i.compensaciones || [];  // se eliminan: el paquete del otro tipo no aplica
+          // Guard reforzado contra clicks accidentales: si hay reglas que se van
+          // a ELIMINAR, hay que escribir BORRAR. Si no hay reglas, basta confirmar.
+          if (reglasActuales.length > 0) {
+            const typed = prompt(
+              `${accion} a ${i.nombre}.\n\n${consecuencias}\n\n` +
+              `⚠️ Se ELIMINARÁN ${reglasActuales.length} regla(s) de compensación (la data histórica de pagos se preserva).\n\n` +
+              `Para confirmar, escribe BORRAR:`);
+            if ((typed || '').trim().toUpperCase() !== 'BORRAR') {
+              window.toastWarn?.('Cancelado', 'No se escribió BORRAR · no se cambió nada');
+              return;
+            }
+          } else if (!confirm(`¿${accion} a ${i.nombre}?\n\n${consecuencias}`)) {
+            return;
+          }
           try {
-            const id = Number(i._airtableId.slice(2));
-            // Borrar reglas existentes (el paquete del otro tipo no aplica)
-            const reglasActuales = i.compensaciones || [];
             for (const r of reglasActuales) {
               try { await window.AT_CLIENT.removeCompensacion(r.id); } catch {}
             }
