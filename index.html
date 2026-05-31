@@ -4788,6 +4788,9 @@ function SimuladorPaqueteModal({ open, inversor, reglas, onClose }) {
 // Para los demás crea un movimiento PAGO_INVERSOR / APORTE_DUENO.
 // ════════════════════════════════════════════════════════════════
 function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, onClose }) {
+  const data = useATData();
+  // Cuentas reales de donde puede salir el pago (débito/efectivo).
+  const cuentasBanco = (data._cuentas || []).filter(c => c.tipo === 'DEBITO' || c.tipo === 'EFECTIVO');
   // Calcula fecha del próximo pago: día más común entre reglas, o 17 default.
   const diaPagoComun = (() => {
     const dias = reglas.map(r => r.diaPago || 17);
@@ -4807,7 +4810,7 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
   // Monto editable por regla, pre-llenado con el devengado.
   const [montos, setMontos] = useState({});
   const [fechaPago, setFechaPago] = useState(proximoPago);
-  const [cuenta, setCuenta] = useState('BHD Debito');
+  const [cuenta, setCuenta] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -4818,8 +4821,12 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
         init[r.id] = dev.generado.toFixed(2);
       });
       setMontos(init);
+      // Default de cuenta = la cuenta real (con su acento), priorizando BHD.
+      if (!cuenta && cuentasBanco.length) {
+        setCuenta((cuentasBanco.find(c => /bhd/i.test(c.nombre)) || cuentasBanco[0]).nombre);
+      }
     }
-  }, [open, reglas]);
+  }, [open, reglas, cuentasBanco.length]);
 
   if (!open || !inversor) return null;
 
@@ -4919,7 +4926,10 @@ function PagoMensualModal({ open, inversor, esDueno, reglas, computeDevengado, o
           </div>
           <div className="field">
             <div className="field-label">Cuenta origen</div>
-            <input className="input" value={cuenta} onChange={e => setCuenta(e.target.value)} />
+            <select className="select" value={cuenta} onChange={e => setCuenta(e.target.value)}>
+              {cuentasBanco.length === 0 && <option value="">(sin cuentas)</option>}
+              {cuentasBanco.map(c => <option key={c.id} value={c.nombre}>{c.nombre} ({c.tipo})</option>)}
+            </select>
           </div>
         </div>
 

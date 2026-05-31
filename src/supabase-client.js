@@ -882,12 +882,18 @@ async function _ensureContraparteId(name, tipo) {
   return data.id;
 }
 
+// Normaliza para matching: minúsculas, trim, y SIN acentos. Así "BHD Debito"
+// (como lo tipean los forms) matchea "BHD Débito" (nombre real con acento).
+function _norm(s) {
+  return String(s || '').toLowerCase().trim().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
 function _findCuentaId(name, fallback = DEFAULT_CUENTA_ID) {
   if (!name) return fallback;
   const list = window.__AIRTABLE_DATA__._cuentas || [];
-  const n = name.toLowerCase().trim();
-  const found = list.find((c) => c.nombre.toLowerCase() === n)
-            || list.find((c) => c.nombre.toLowerCase().includes(n));
+  const n = _norm(name);
+  const found = list.find((c) => _norm(c.nombre) === n)
+            || list.find((c) => _norm(c.nombre).includes(n));
   return found ? found.id : fallback;
 }
 
