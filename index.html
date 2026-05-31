@@ -5128,6 +5128,35 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     return { generado, detalle, esInfoOnly };
   };
 
+  // ─── Computa lo generado SOLO en el mes calendario actual (dinámico) ───
+  const computeDevengadoMes = (regla) => {
+    const tipo = regla.tipoCompensacion;
+    const pct = Number(regla.pctAplicado || 0) / 100;
+    const cuota = Number(regla.cuotaMensual || 0);
+    const montoPorUnidad = Number(regla.montoPorUnidad || 0);
+    const capitalInv = Number(inversor.montoTotal) || 0;
+    // Ventas del mes calendario actual (1ro del mes → hoy).
+    const inicioMes = new Date(HOY_REAL.getFullYear(), HOY_REAL.getMonth(), 1);
+    const vsMes = (data.ventas || []).filter(v => {
+      const f = v.fecha ? new Date(v.fecha) : null;
+      return f && f >= inicioMes && f <= HOY_REAL;
+    });
+    const revMes = vsMes.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
+    const ganMes = vsMes.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const udMes  = vsMes.reduce((s, v) => s + (v.cantidadTotal || 0), 0);
+    switch (tipo) {
+      case 'SALARIO_PRO_LABORE':   return cuota;                       // fijo
+      case 'UTILIDADES_SUBORD':    return Math.max(0, ganMes) * pct;
+      case 'REINVERSION':          return Math.max(0, ganMes) * pct;
+      case 'COMISION_SKU':         return udMes * montoPorUnidad;
+      case 'ROYALTY_BRUTO':
+      case 'RBF':                  return revMes * pct;
+      case 'CASHFLOW_ANUAL':       return Math.max(0, ganMes) * pct;   // acumula hacia el cierre
+      case 'DIVIDENDO_PREFERENTE': return capitalInv * pct / 12;       // prorrateo mensual del anual
+      default: return 0;
+    }
+  };
+
   // ─── Edit modal state + handler ───
   const editRegla = reglas.find(r => r.id === editReglaId);
   const handleSaveEdit = async (values) => {
@@ -5189,6 +5218,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         const m = TIPO_COMPENSACION_META[r.tipoCompensacion] || { label: r.tipoCompensacion, color: 'var(--text-3)' };
         const dev = computeDevengado(r);
         const pag = computePagado(r);
+        const esteMes = computeDevengadoMes(r);
         const pendiente = Math.max(0, dev.generado - pag.pagado);
         const diaPago = r.diaPago || 17;
         // Resumen de parámetros principales (sin truncar descripción)
@@ -5216,11 +5246,15 @@ function ReglasCompensacionList({ inversor, esDueno }) {
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.4 }}>
               {m.desc}
             </div>
-            {/* STATS: Devengado / Pagado / Pendiente lado a lado, grandes y claros */}
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 8, padding: 'var(--s-2)', background: 'var(--surface)', borderRadius: 3 }}>
+            {/* STATS: Cálculo / Este mes / Devengado / Pagado / Pendiente lado a lado */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 1fr 1fr', gap: 8, padding: 'var(--s-2)', background: 'var(--surface)', borderRadius: 3 }}>
               <div>
                 <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>Cálculo a hoy</div>
                 <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{dev.detalle}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>📈 Este mes</div>
+                <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginTop: 2 }}>{fmtCurrency(esteMes)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>
