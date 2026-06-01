@@ -724,8 +724,15 @@ function _buildFinancieroProductos() {
           .sort((a, b) => (a.numero || 0) - (b.numero || 0)),
       });
     } else if (t.includes('inversor')) {
-      const pagosCF = cf.filter((m) => m.c === 'Pago a Inversores');
-      const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0), 0);
+      // Pagado = SOLO los pagos etiquetados a las reglas de ESTE inversor ("regla #ID"
+      // en notas, que pone PagoMensualModal). Antes sumaba TODOS los 'Pago a Inversores'
+      // sin distinguir inversor, así que el mismo monto aparecía en todos (incluido el
+      // dueño, sin haber cobrado). Dueño paga como entrada; inversor como salida → sumo ambos.
+      const ruleIds = (r.compensaciones || []).map((c) => c.id);
+      const pagosCF = cf.filter((m) =>
+        typeof m.notas === 'string' && ruleIds.some((id) => m.notas.includes(`regla #${id}`)),
+      );
+      const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0) + (m.e || 0), 0);
       // Para ROYALTY usamos el cap; para los demas el monto_pactado_devolver
       const targetTotal = r.tipoCompensacion === 'ROYALTY' && r.capDevolver
         ? r.capDevolver
@@ -750,7 +757,7 @@ function _buildFinancieroProductos() {
           id:    'pi-' + m._airtableId,
           fecha: m.f,
           tipo:  'pago',
-          monto: m.s || 0,
+          monto: (m.s || 0) + (m.e || 0),
           nota:  m.a || '',
         })),
       });
