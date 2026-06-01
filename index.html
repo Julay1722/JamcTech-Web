@@ -3118,6 +3118,14 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
 
   const pagosBreakdown = [];
 
+  // Convierte deuda en USD → RD$ a la tasa (mismo criterio que el capital), para
+  // que el pago mínimo de una tarjeta/línea en dólares no salga como si fueran RD$.
+  const RATE_USD = Number(localStorage.getItem('tasa-cambio-usd')) || 60;
+  const esUSD = (nombre) => {
+    const c = (data._cuentas || []).find(x => x.nombre === nombre);
+    return c ? c.moneda === 'USD' : /usd/i.test(nombre || '');
+  };
+
   prestamosUnified.forEach(p => {
     if (p._kind === 'prestamo') {
       // Cuota desde productos['FIN-P'] (mediana) o computar
@@ -3126,15 +3134,15 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
       pagosCuotas += cuotaCalc;
       if (cuotaCalc > 0) pagosBreakdown.push({ nombre: p.nombre, tipo: 'Préstamo (cuota fija)', monto: cuotaCalc, color: '#3b82f6' });
     } else if (p._kind === 'linea') {
-      // Línea de crédito: estimar 5% saldo usado como pago mínimo
-      const minimo = (p.balance || 0) * 0.05;
+      // Línea de crédito: estimar 5% saldo usado como pago mínimo (convertido a RD$ si es USD)
+      const minimo = (p.balance || 0) * 0.05 * (esUSD(p.nombre) ? RATE_USD : 1);
       pagosMinimos += minimo;
       if (minimo > 0) pagosBreakdown.push({ nombre: p.nombre, tipo: 'Línea (pago mín. 5%)', monto: minimo, color: '#f59e0b' });
     }
   });
 
   tarjetasCredito.forEach(t => {
-    const minimo = (t.usado || 0) * 0.05;
+    const minimo = (t.usado || 0) * 0.05 * (esUSD(t.nombre) ? RATE_USD : 1);
     pagosMinimos += minimo;
     if (minimo > 0) pagosBreakdown.push({ nombre: t.nombre, tipo: 'Tarjeta (pago mín. 5%)', monto: minimo, color: '#f59e0b' });
   });
@@ -3365,8 +3373,8 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Desglose de pagos mensuales</div>
-            <div className="section-desc">{pagosBreakdown.length} obligaciones · total {fmtCurrency(pagosMensualesTotales)}/mes</div>
+            <div className="section-title">Desglose de pagos mensuales (estimado)</div>
+            <div className="section-desc">{pagosBreakdown.length} obligaciones · total {fmtCurrency(pagosMensualesTotales)}/mes · estimación para el stress test: cuota REAL del préstamo · 5% mín. en tarjetas/líneas · capital del inversor proyectado a 24m</div>
           </div>
         </div>
         {pagosBreakdown.length > 0 ? (
