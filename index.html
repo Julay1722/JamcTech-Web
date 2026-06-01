@@ -5135,8 +5135,12 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     const cuota = Number(regla.cuotaMensual || 0);
     const montoPorUnidad = Number(regla.montoPorUnidad || 0);
     const capitalInv = Number(inversor.montoTotal) || 0;
-    // Ventas del mes calendario actual (1ro del mes → hoy).
-    const inicioMes = new Date(HOY_REAL.getFullYear(), HOY_REAL.getMonth(), 1);
+    // Respeta la fecha de inicio de la regla: si todavía no arranca, no genera nada.
+    const inicioRegla = regla.fechaInicio ? new Date(regla.fechaInicio) : (inversor.fechaInicio ? new Date(inversor.fechaInicio) : null);
+    if (inicioRegla && inicioRegla > HOY_REAL) return 0;
+    // Ventas desde el 1ro del mes (o desde el arranque de la regla si es más tarde) → hoy.
+    const inicioMesRaw = new Date(HOY_REAL.getFullYear(), HOY_REAL.getMonth(), 1);
+    const inicioMes = (inicioRegla && inicioRegla > inicioMesRaw) ? inicioRegla : inicioMesRaw;
     const vsMes = (data.ventas || []).filter(v => {
       const f = v.fecha ? new Date(v.fecha) : null;
       return f && f >= inicioMes && f <= HOY_REAL;
