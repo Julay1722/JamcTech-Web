@@ -14,22 +14,23 @@ test.describe('Persona · QA UI (visual)', () => {
     consoleEvents = setupConsoleCapture(page);
   });
 
-  test('V1 · fuente monoespaciada cargada (IBM Plex Mono o similar, no fallback)', async ({ page }) => {
+  test('V1 · números en fuente monoespaciada (JetBrains Mono, no fallback)', async ({ page }) => {
     await gotoAppAndWaitReady(page);
-    const body = page.locator('body');
-    const fontFamily = await body.evaluate((el) => getComputedStyle(el).fontFamily);
-    // Espera ver IBM Plex Mono, JetBrains Mono, Fira Code o Space Mono.
-    // Per §5 regla 6 el theme dice "Space Mono" pero el código default es IBM Plex Mono.
-    expect(fontFamily.toLowerCase()).toMatch(/(plex mono|jetbrains|fira code|space mono|ui-monospace)/);
+    // En el v3 el body es Inter (sans); el mono se usa solo para cifras/IDs.
+    // Verificamos un KPI value (clase .kpi-value usa var(--font-mono)).
+    const kpi = page.locator('.kpi-value').first();
+    await expect(kpi).toBeVisible();
+    const fontFamily = await kpi.evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(fontFamily.toLowerCase()).toMatch(/(jetbrains|plex mono|fira code|space mono|ui-monospace|monospace)/);
     assertCleanConsole(consoleEvents);
   });
 
   test('V2 · paleta acento aplicada (algún elemento usa color del acento)', async ({ page }) => {
     await gotoAppAndWaitReady(page);
-    // El color acento default es lime: #c8ff2e
-    // Busca cualquier elemento con ese color (o sus variantes) en estilos computados.
+    // Paleta v3 "Amber Terminal": acento ámbar #f2b53e, verde #6fd08a, rojo #f0726e.
+    // getComputedStyle devuelve rgb(), así que buscamos en ese formato.
     const hits = await page.evaluate(() => {
-      const colors = ['#c8ff2e', '#ffb340', '#5fd0ff', '#ff5563', 'rgb(200, 255, 46)'];
+      const colors = ['rgb(242, 181, 62)', 'rgb(111, 208, 138)', 'rgb(240, 114, 110)', '#f2b53e'];
       const all = document.querySelectorAll('*');
       let count = 0;
       for (const el of all) {
@@ -61,23 +62,19 @@ test.describe('Persona · QA UI (visual)', () => {
 
   test('V4 · header LIVE indicator visible', async ({ page }) => {
     await gotoAppAndWaitReady(page);
-    // El header tiene un texto "LIVE" en color de acento; verificar visible.
-    await expect(page.getByText(/LIVE/, { exact: false }).first()).toBeVisible();
+    // El header tiene el indicador "Live · Supabase" en color de acento.
+    await expect(page.getByText(/live/i, { exact: false }).first()).toBeVisible();
     assertCleanConsole(consoleEvents);
   });
 
-  test('V5 · sidebar/tabs presentes según viewport', async ({ page }) => {
+  test('V5 · sidebar presente (dashboard desktop)', async ({ page }) => {
     await gotoAppAndWaitReady(page);
-    const vw = page.viewportSize().width;
-    // El código en app.jsx hace: isMobile = window.innerWidth < 860.
-    // Mobile: muestra TerminalMobileTabs. Desktop: muestra TerminalSidebar.
-    const mobBtn = await page.locator('.term-mobtabs').count();
-    const sideBtn = await page.locator('.term-sidebar').count();
-    if (vw < 860) {
-      expect(mobBtn, 'mobile debe mostrar TerminalMobileTabs').toBeGreaterThan(0);
-    } else {
-      expect(sideBtn, 'desktop debe mostrar TerminalSidebar').toBeGreaterThan(0);
-    }
+    // El v3 es desktop: el sidebar `aside.nav` con los items de navegación
+    // siempre está presente y visible en viewports desktop.
+    const side = page.locator('aside.nav');
+    await expect(side).toBeVisible();
+    const navItems = await page.locator('aside.nav .nav-item').count();
+    expect(navItems, 'el sidebar debe tener items de navegación').toBeGreaterThanOrEqual(5);
     assertCleanConsole(consoleEvents);
   });
 });

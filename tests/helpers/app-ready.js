@@ -51,15 +51,17 @@ async function airtableSnapshot(page) {
   });
 }
 
-// Cambia al panel indicado (m=Mando, i=Inventario, n=Financiero, r=Radar, f=Ventas).
-// El TerminalSidebar / TerminalMobileTabs renderea botones con los textos
-// MANDO, INVENT, FINANC, RADAR, VENTAS.
-const PANEL_LABEL = { m: 'MANDO', i: 'INVENT', n: 'FINANC', r: 'RADAR', f: 'VENTAS' };
+// Cambia al panel indicado. El dashboard v3 (index.html) renderea el sidebar
+// con items `.nav-item` (divs clicables) cuyos labels son Resumen, Alertas,
+// Ventas, Inventario, Finanzas. Las keys históricas m/i/n/r/f se mapean:
+//   m=Resumen · i=Inventario · n=Finanzas · r=Alertas · f=Ventas
+const PANEL_LABEL = { m: 'Resumen', i: 'Inventario', n: 'Finanzas', r: 'Alertas', f: 'Ventas' };
 
 async function switchToPanel(page, key) {
   const label = PANEL_LABEL[key];
   if (!label) throw new Error(`panel desconocido: ${key}`);
-  await page.getByRole('button', { name: new RegExp(label, 'i') }).first().click();
+  // Scope al sidebar para no chocar con el mismo texto en el contenido.
+  await page.locator('aside.nav .nav-item', { hasText: label }).first().click();
   // Esperar a que el contenido del panel renderice (heurística simple)
   await page.waitForTimeout(400);
 }

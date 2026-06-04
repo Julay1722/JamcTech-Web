@@ -2182,3 +2182,6 @@ function _scheduledOverride(label) {
 setTimeout(() => _scheduledOverride('1.5s'), 1500);
 setTimeout(() => _scheduledOverride('3s'),   3000);
 setTimeout(() => _scheduledOverride('5s'),   5000);
+// Seguro extra para arranques fríos lentos (PC con babel-standalone tardando
+// o red lenta): cubre el caso donde los loaders terminan después de los 5s.
+setTimeout(() => _scheduledOverride('8s'),   8000);

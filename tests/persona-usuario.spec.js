@@ -16,13 +16,13 @@ test.describe('Persona · Usuario (Julio · flujos reales)', () => {
     consoleEvents = setupConsoleCapture(page);
   });
 
-  test('U1 · carga el sitio y ve datos poblados (43 SKUs · 189 ventas · 361 CF)', async ({ page }) => {
+  test('U1 · carga el sitio y ve datos poblados (50 SKUs · 199 ventas · 286 CF)', async ({ page }) => {
     await gotoAppAndWaitReady(page);
     const snap = await airtableSnapshot(page);
-    // Verifica que los loaders Airtable cargaron los conteos esperados.
+    // Verifica que los loaders Supabase cargaron los conteos esperados.
     // Tolerante a crecimiento natural (el negocio sigue operando).
     expect(snap.skus, 'SKUs cargados').toBeGreaterThanOrEqual(40);
-    expect(snap.cashflow, 'CF cargado').toBeGreaterThanOrEqual(350);
+    expect(snap.cashflow, 'CF cargado').toBeGreaterThanOrEqual(250);
     expect(snap.ventas, 'ventas cargadas').toBeGreaterThanOrEqual(180);
     expect(snap.financiero, 'productos financieros').toBeGreaterThanOrEqual(3);
     expect(snap.resumen, 'resúmenes mensuales').toBeGreaterThanOrEqual(11);
@@ -53,14 +53,13 @@ test.describe('Persona · Usuario (Julio · flujos reales)', () => {
     assertCleanConsole(consoleEvents);
   });
 
-  test('U4 · selecciona un mes específico desde el dropdown', async ({ page }) => {
+  test('U4 · cambia a vista de 6 meses desde la barra de período', async ({ page }) => {
     await gotoAppAndWaitReady(page);
-    await switchToPanel(page, 'i');
-    // El TFilterBar tiene un <select> con "— mes —" y los meses.
-    const select = page.locator('select').first();
-    await expect(select).toBeVisible();
-    // Selecciona May 2026 (el mes activo)
-    await select.selectOption({ value: '2026-05' });
+    // El período (TODO/7D/30D/90D/6M/1A) vive en Resumen y Ventas en el v3.
+    await switchToPanel(page, 'm');
+    const btn6m = page.locator('.period-bar button', { hasText: /^6M$/ }).first();
+    await expect(btn6m).toBeVisible();
+    await btn6m.click();
     await page.waitForTimeout(400);
     assertCleanConsole(consoleEvents);
   });

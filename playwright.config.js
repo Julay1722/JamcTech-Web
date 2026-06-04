@@ -11,9 +11,12 @@
 
 const { defineConfig, devices } = require('@playwright/test');
 
+// El dashboard v3 es una herramienta de ESCRITORIO (la PC de Julio). Por
+// diseño el sidebar se oculta en <=768px (sin nav móvil/hamburguesa) y el
+// layout denso no está pensado para móvil. Por eso la matriz de test cubre
+// solo viewports desktop. Si algún día se quiere soporte móvil, es feature
+// aparte (agregar nav móvil + responsive de tablas) y se re-agregan 375/768.
 const VIEWPORTS = [
-  { tag: '375',  width: 375,  height: 720  }, // móvil
-  { tag: '768',  width: 768,  height: 1024 }, // tablet
   { tag: '1280', width: 1280, height: 800  }, // desktop estándar
   { tag: '1920', width: 1920, height: 1080 }, // wide
 ];
@@ -63,9 +66,11 @@ module.exports = defineConfig({
     ['json', { outputFile: 'test-results/results.json' }],
   ],
   use: {
-    // Default: localhost (netlify dev), para iteración rápida sin gastar
-    // build credits. Para correr contra producción: JAMC_BASE_URL=https://jamcs-tech.netlify.app npx playwright test.
-    baseURL: process.env.JAMC_BASE_URL || 'http://localhost:8888',
+    // Default: dashboard v3 servido por `npx serve` en :3000 (static, rápido).
+    // Antes apuntaba a :8888 (netlify dev) que servía el Terminal LEGACY —
+    // los tests testeaban el dashboard viejo. Ahora apuntan al v3 real.
+    // Contra producción: JAMC_BASE_URL=https://jamcs-tech.netlify.app npx playwright test.
+    baseURL: process.env.JAMC_BASE_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -76,6 +81,14 @@ module.exports = defineConfig({
   expect: {
     timeout: 8000,
   },
+  // Auto-levanta el server estático del v3 si no está corriendo. Estático
+  // (no netlify dev single-threaded), así que no hay saturación con N tests.
+  webServer: RUNS_LOCAL ? {
+    command: 'npx serve . -p 3000',
+    url: 'http://localhost:3000',
+    reuseExistingServer: true,
+    timeout: 60000,
+  } : undefined,
   projects,
   outputDir: 'test-results/artifacts',
 });

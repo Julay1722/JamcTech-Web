@@ -109,22 +109,19 @@ test.describe('Tarea A · Lotes writers (createLote / updateLoteHeader / removeL
     assertCleanConsole(consoleEvents);
   });
 
-  test('UI · tab HISTÓRICO LOTES visible en panel Inventario y lista lotes', async ({ page }) => {
+  test('UI · tab Lotes visible en panel Inventario y lista lotes (v3)', async ({ page }) => {
     await gotoAppAndWaitReady(page);
 
-    // Cambia al panel Inventario
-    await page.getByRole('button', { name: /INVENT/i }).first().click();
-    // El tab existe en el TTabStrip del InventarioRegistrar
-    const tabBtn = page.getByRole('button', { name: /HISTÓRICO LOTES/i }).first();
+    // Cambia al panel Inventario (sidebar v3 = items .nav-item)
+    await page.locator('aside.nav .nav-item', { hasText: 'Inventario' }).first().click();
+    // Click en el tab "Lotes" del strip de tabs del v3
+    const tabBtn = page.locator('.tabs .tab', { hasText: /^Lotes/ }).first();
     await expect(tabBtn).toBeVisible({ timeout: 15000 });
     await tabBtn.click();
-    // El header explicativo aparece
-    await expect(page.getByText(/Lista paginada de TODOS los lotes/i)).toBeVisible({ timeout: 10000 });
-    // El input de búsqueda existe
-    await expect(page.getByPlaceholder(/buscar SKU, fecha, lote/i)).toBeVisible();
-    // Botón CSV del tab — identificado por title único para distinguir del
-    // botón CSV del panel principal "Inventario completo".
-    await expect(page.locator('button[title*="lotes filtrados"]')).toBeVisible();
+    // La tabla lista lotes con código L-YYYYMMDD-N
+    await expect(page.getByText(/L-2026\d{4}-\d+/).first()).toBeVisible({ timeout: 10000 });
+    // El buscador del tab existe
+    await expect(page.getByPlaceholder(/buscar/i).first()).toBeVisible();
   });
 
   test.afterAll(async ({ browser }) => {

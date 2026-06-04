@@ -96,23 +96,30 @@ test.describe('Tarea C · SKU writers (createSKU / updateSKU / removeSKU)', () =
     assertCleanConsole(consoleEvents);
   });
 
-  test('createSKU rechaza categoría inválida (singleSelect strict)', async ({ page }) => {
+  test('createSKU tolera categoría desconocida (coerce a enum válido · no rompe)', async ({ page }) => {
+    // En Airtable la categoría era singleSelect strict (rechazaba inválidas).
+    // El v3 (Supabase) es TOLERANTE a propósito: soporta categorías custom
+    // (mapeadas a un enum válido), así que createSKU NO lanza — coacciona.
+    // Verificamos que no rompe y que persiste una categoría válida del enum,
+    // y limpiamos el SKU de prueba en el acto (+ afterAll por prefijo).
     await gotoAppAndWaitReady(page);
-    const res = await page.evaluate(async () => {
+    const ENUM_OK = ['Stand', 'Mouse', 'Teclado', 'Headset', 'Mouse Pad', 'Otro',
+                     'STAND', 'MOUSE', 'TECLADO', 'HEADSET', 'MOUSEPAD', 'MOUSE PAD', 'OTRO'];
+    const id = `${TEST_PREFIX}-COERCE`;
+    const out = await page.evaluate(async (skuId) => {
       try {
-        await window.AT_CLIENT.createSKU({
-          id: 'TEST-SKU-INVALID-CAT',
-          nm: 'Should fail',
-          mk: 'PW',
-          cat: 'Mousepad', // no existe en Airtable singleSelect
-        });
-        return { threw: false };
+        await window.AT_CLIENT.createSKU({ id: skuId, nm: 'coercion test', mk: 'PW', cat: 'CategoriaInventada' });
+        const row = (window.__AIRTABLE_DATA__?.skus || []).find((s) => s.id === skuId);
+        const airtableId = row?._airtableId;
+        const cat = row?.cat ?? null;
+        if (airtableId) await window.AT_CLIENT.removeSKU(airtableId); // cleanup inmediato
+        return { threw: false, cat };
       } catch (e) {
         return { threw: true, msg: e.message };
       }
-    });
-    expect(res.threw).toBe(true);
-    expect(res.msg).toMatch(/categoría/i);
+    }, id);
+    expect(out.threw, `createSKU no debería romper (msg: ${out.msg})`).toBe(false);
+    expect(ENUM_OK, `categoría persistida debe ser un enum válido (fue: ${out.cat})`).toContain(out.cat);
   });
 
   // Cleanup defensivo: si algún test anterior dejó un TEST-SKU- colgando

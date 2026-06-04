@@ -19,7 +19,7 @@ test.describe('Persona · Tester (destructivo)', () => {
     await gotoAppAndWaitReady(page);
     const labels = Object.values(PANEL_LABEL);
     for (const lbl of labels) {
-      const btn = page.getByRole('button', { name: new RegExp(lbl, 'i') }).first();
+      const btn = page.locator('aside.nav .nav-item', { hasText: lbl }).first();
       await btn.dblclick({ delay: 30 });
     }
     // Después del bombardeo, la app debe seguir mostrando algo coherente.
@@ -33,7 +33,7 @@ test.describe('Persona · Tester (destructivo)', () => {
     // Sin esperas entre clicks — debe absorber sin errores
     for (let i = 0; i < 8; i++) {
       const lbl = labels[i % labels.length];
-      const btn = page.getByRole('button', { name: new RegExp(lbl, 'i') }).first();
+      const btn = page.locator('aside.nav .nav-item', { hasText: lbl }).first();
       await btn.click({ noWaitAfter: true });
     }
     await page.waitForTimeout(800);
@@ -61,9 +61,10 @@ test.describe('Persona · Tester (destructivo)', () => {
     }
   });
 
-  test('T4 · red caída en endpoints del proxy: la app no crashea (degrada elegante)', async ({ page }) => {
-    // Aborta TODAS las llamadas al proxy ANTES de cargar.
-    await page.route('**/.netlify/functions/airtable**', (route) => route.abort('failed'));
+  test('T4 · red caída (Supabase) : la app no crashea (degrada elegante)', async ({ page }) => {
+    // Aborta TODAS las llamadas a Supabase ANTES de cargar. El v3 lee directo
+    // de Supabase (ya no del proxy netlify), así que bloqueamos *.supabase.co.
+    await page.route('**/*supabase.co/**', (route) => route.abort('failed'));
     // Carga la página. NO usamos gotoAppAndWaitReady porque ese helper espera
     // que window.__AIRTABLE_DATA__ tenga datos — con red caída no se logra.
     await page.goto('/', { waitUntil: 'domcontentloaded' });

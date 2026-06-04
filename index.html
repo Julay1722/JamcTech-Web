@@ -15,28 +15,32 @@
      duro, tipografía Inter (system) + mono solo para números/IDs.
      ════════════════════════════════════════════════════════════════ */
   :root {
-    /* Surfaces — niveles de elevación sutiles */
-    --bg:        #0a0a0c;          /* page background */
-    --surface:   #111114;          /* card background */
-    --surface-2: #15151a;          /* hover / nested */
-    --surface-3: #1c1c22;          /* dropdown / popover */
-    --border:    #1f1f25;          /* subtle borders */
-    --border-2:  #2a2a32;          /* stronger borders */
+    /* ═══ Amber Terminal — dark cálido, fósforo ámbar (Bloomberg vibe) ═══ */
+    /* Surfaces — base cálida (warm charcoal), no azulada */
+    --bg:        #15130d;          /* page background (warm near-black) */
+    --surface:   #1d1a12;          /* card background */
+    --surface-2: #252016;          /* hover / nested */
+    --surface-3: #2f291c;          /* dropdown / popover */
+    --border:    #322c1d;          /* subtle borders */
+    --border-2:  #453d29;          /* stronger borders */
 
-    /* Text */
-    --text:      #ededf0;          /* primary */
-    --text-2:    #a8a8b3;          /* secondary */
-    --text-3:    #6b6b78;          /* tertiary / labels */
-    --text-4:    #3f3f4a;          /* disabled / placeholder */
+    /* Text — tinte marfil cálido */
+    --text:      #f1ead8;          /* primary */
+    --text-2:    #bcb39c;          /* secondary */
+    --text-3:    #847b64;          /* tertiary / labels */
+    --text-4:    #564d3b;          /* disabled / placeholder */
 
     /* Brand & semantic */
-    --accent:    #7c9aff;          /* primary action (cool blue, calm) */
-    --accent-2:  #5e7fea;
-    --success:   #5fce8d;          /* positive, gains */
-    --warning:   #f0b658;          /* warnings, attention */
-    --danger:    #ef6b7e;          /* losses, critical */
-    --muted-pos: #4a8b6c;          /* desaturated positive */
-    --muted-neg: #8b4a5a;
+    --accent:    #f2b53e;          /* primary — ámbar/oro (fósforo) */
+    --accent-2:  #d89a1f;          /* amber hover/gradient */
+    --accent-ink:#1a160c;          /* texto sobre fondo ámbar (alto contraste) */
+    --accent-soft: rgba(242,181,62,0.12); /* tinte para hero/realces */
+    --success:   #6fd08a;          /* positive, gains (verde) */
+    --warning:   #ef9a3d;          /* warnings (naranja, distinto del ámbar) */
+    --danger:    #f0726e;          /* losses, critical (rojo cálido) */
+    --info:      #5fd0ff;          /* cyan para acentos de datos */
+    --muted-pos: #5a9b6f;          /* desaturated positive */
+    --muted-neg: #9b5a5a;
 
     /* Typography */
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -90,7 +94,7 @@
     transition: all 120ms ease;
     box-shadow: 0 2px 6px rgba(0,0,0,0.2);
   }
-  .nav-toggle:hover { background: var(--accent); color: white; border-color: var(--accent); transform: scale(1.1); }
+  .nav-toggle:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); transform: scale(1.1); }
 
   /* Sidebar */
   .nav {
@@ -110,7 +114,7 @@
     width: 28px; height: 28px; border-radius: var(--r-sm);
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     display: grid; place-items: center;
-    font-weight: 700; color: white; font-size: 13px;
+    font-weight: 800; color: var(--accent-ink); font-size: 13px;
   }
   .brand-text { font-weight: 600; font-size: 13px; letter-spacing: -0.01em; }
   .brand-sub { font-size: 11px; color: var(--text-3); margin-top: -2px; }
@@ -279,9 +283,9 @@
 
   /* Button */
   .btn {
-    background: var(--accent); color: white; border: none;
+    background: var(--accent); color: var(--accent-ink); border: none;
     padding: 8px 14px; border-radius: var(--r-sm); cursor: pointer;
-    font-family: inherit; font-size: 13px; font-weight: 500;
+    font-family: inherit; font-size: 13px; font-weight: 600;
     transition: background 120ms ease;
   }
   .btn:hover { background: var(--accent-2); }
@@ -396,7 +400,7 @@
     transition: all 120ms ease;
   }
   .period-bar button:hover { color: var(--text); }
-  .period-bar button.active { background: var(--accent); color: white; }
+  .period-bar button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 
   /* Summary panel inside forms */
   .summary {
@@ -465,6 +469,79 @@
       transition-duration: 0.01ms !important;
     }
   }
+
+  /* ════════════════════════════════════════════════════════════════
+     AMBER TERMINAL — carácter Bloomberg (numeración §, hero, realces)
+     ════════════════════════════════════════════════════════════════ */
+
+  /* Numeración automática de secciones (§01, §02…) por página.
+     El contador se reinicia en .main; cada .section-title se enumera. */
+  .main { counter-reset: secnum; }
+  .section-title {
+    display: inline-flex; align-items: baseline; gap: 8px;
+  }
+  .section-title::before {
+    counter-increment: secnum;
+    content: '§' counter(secnum, decimal-leading-zero);
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+    color: var(--accent); letter-spacing: 0.06em;
+    opacity: 0.85; flex: 0 0 auto;
+  }
+
+  /* Topbar: filo inferior cálido + título con tinte */
+  .topbar { border-bottom: 1px solid var(--border); padding-bottom: var(--s-4); }
+  .topbar h1 {
+    font-family: var(--font-mono); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.02em;
+  }
+
+  /* KPI hero — el primero de cada fila se realza (borde + tinte ámbar) */
+  .kpi-row .kpi:first-child {
+    border-color: rgba(242,181,62,0.45);
+    background: linear-gradient(180deg, var(--accent-soft), var(--surface) 60%);
+  }
+  .kpi-row .kpi:first-child::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--accent); border-radius: var(--r-md) 0 0 var(--r-md);
+  }
+  /* Etiqueta del KPI hero en ámbar para jerarquía */
+  .kpi-row .kpi:first-child .kpi-label { color: var(--accent); opacity: 0.9; }
+
+  /* Valores numéricos grandes con leve glow cálido (fósforo) */
+  .kpi-value { text-shadow: 0 0 18px rgba(242,181,62,0.10); }
+
+  /* Tabla: cabecera con micro-acento + fila hover cálida */
+  table.data th { border-bottom: 1px solid var(--border-2); color: var(--text-3); }
+  table.data tr:hover td { background: var(--surface-2); }
+
+  /* Tabs: pestaña activa con subrayado ámbar más marcado */
+  .tab.active { color: var(--accent); }
+  .tab.active::after, .tab.active { border-bottom-color: var(--accent); }
+
+  /* Pills / badges: bordes cálidos */
+  .pill { border-color: var(--border); }
+  .pill-dot { box-shadow: 0 0 6px var(--success); }
+
+  /* Brand sub en mono para vibe terminal */
+  .brand-sub { font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+  /* Selección de texto en ámbar */
+  ::selection { background: rgba(242,181,62,0.30); color: var(--text); }
+
+  /* Sub-selector (segmented control) dentro de un tab agrupado */
+  .subtabs {
+    display: inline-flex; gap: 4px; margin: 0 0 var(--s-4);
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 4px; border-radius: var(--r-sm);
+  }
+  .subtab {
+    background: transparent; border: none; color: var(--text-3);
+    padding: 5px 14px; font-family: inherit; font-size: 12px; font-weight: 500;
+    cursor: pointer; border-radius: 4px; transition: all 120ms ease;
+  }
+  .subtab:hover { color: var(--text); }
+  .subtab.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .subtab:active { transform: scale(0.96); }
 </style>
 
 <!-- Data layer (mismo que index.html — reusa supabase-client) -->
@@ -721,7 +798,7 @@ function DonutChart({ data, size = 180, strokeW = 26, fmt = (n, p) => `${n.toLoc
           return seg;
         })}
         <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight={600} fontFamily="var(--font-mono)" fill="var(--text)">{total.toLocaleString('en-US')}</text>
-        <text x={cx} y={cy + 16} textAnchor="middle" fontSize={9} fill="var(--text-3)" textTransform="uppercase" letterSpacing={0.6}>{title || 'TOTAL'}</text>
+        <text x={cx} y={cy + 16} textAnchor="middle" fontSize={9} fill="var(--text-3)" style={{ textTransform: 'uppercase' }} letterSpacing={0.6}>{title || 'TOTAL'}</text>
       </svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, flex: 1, minWidth: 0 }}>
         {data.map((d, i) => (
@@ -783,10 +860,14 @@ function OverviewPage({ period }) {
   // Deuda total = COOP saldo + ANDREA pendiente + BHD usado
   const deudaTotal = (window.COOP?.saldo || 0) + (window.ANDREA?.pendiente || 0) + (window.BHD?.usado || 0);
 
-  // Crecimiento mes a mes (histórico siempre)
+  // Crecimiento mes a mes — sobre meses COMPLETOS. El mes en curso es parcial
+  // (pocos días) y daría un MoM falso muy negativo; lo excluimos.
   const MES = window.MES || [];
-  const lastMo = MES[MES.length - 1];
-  const prevMo = MES[MES.length - 2];
+  const _curYM = String(window.HOY || '').slice(0, 7);
+  const _mesCompletos = _curYM ? MES.filter(x => (x.f || '').slice(0, 7) < _curYM) : MES;
+  const _mesBase = _mesCompletos.length >= 2 ? _mesCompletos : MES;
+  const lastMo = _mesBase[_mesBase.length - 1];
+  const prevMo = _mesBase[_mesBase.length - 2];
   const growthMoM = (lastMo && prevMo && prevMo.v) ? ((lastMo.v - prevMo.v) / prevMo.v) * 100 : null;
 
   // Series para sparklines
@@ -2016,8 +2097,8 @@ function InventarioPage() {
           <h1>Inventario</h1>
           <div className="sub">{SK.filter(s => s.id !== 'LEGACY-SALE').length} SKUs · {fmtNum(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
         </div>
-        {subtab === 'skus' && (
-          <div className="topbar-actions">
+        <div className="topbar-actions">
+          {subtab === 'skus' && (<>
             <input className="input" style={{ width: 160 }} type="text" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
             {['all', 'critico', 'atencion', 'ok', 'sin_movimiento'].map(f => (
               <button key={f} className="pill" style={{
@@ -2027,16 +2108,18 @@ function InventarioPage() {
                 {f === 'all' ? 'Todos' : f === 'sin_movimiento' ? 'Sin movim' : f}
               </button>
             ))}
-          </div>
-        )}
+            <button className="btn" onClick={() => setSubtab('nuevo-sku')}>+ Nuevo SKU</button>
+          </>)}
+          {subtab === 'nuevo-sku'  && <button className="btn ghost" onClick={() => setSubtab('skus')}>← Volver a SKUs</button>}
+          {subtab === 'lotes'      && <button className="btn" onClick={() => setSubtab('nuevo-lote')}>+ Nuevo lote</button>}
+          {subtab === 'nuevo-lote' && <button className="btn ghost" onClick={() => setSubtab('lotes')}>← Volver a Lotes</button>}
+        </div>
       </div>
 
       <div className="tabs">
-        <button className={`tab ${subtab === 'skus' ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
-        <button className={`tab ${subtab === 'nuevo-sku' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-sku')}>+ Nuevo SKU</button>
+        <button className={`tab ${(subtab === 'skus' || subtab === 'nuevo-sku') ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
         <button className={`tab ${subtab === 'restock' ? 'active' : ''}`} onClick={() => setSubtab('restock')}>Re-Stock</button>
-        <button className={`tab ${subtab === 'lotes' ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
-        <button className={`tab ${subtab === 'nuevo-lote' ? 'active' : ''}`} onClick={() => setSubtab('nuevo-lote')}>+ Nuevo lote</button>
+        <button className={`tab ${(subtab === 'lotes' || subtab === 'nuevo-lote') ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
       </div>
 
       <div className="section">
@@ -4072,20 +4155,34 @@ function FinanzasPage({ onNavigate }) {
           <h1>Finanzas</h1>
           <div className="sub">Préstamos · Inversores · Líneas · Cuentas · todo CRUD</div>
         </div>
-        {subtab !== 'resumen' && (
+        {['prestamos','tarjetas','inversores','cuentas'].includes(subtab) && (
           <button className="btn" onClick={() => setShowCreate(true)}>+ Nuevo</button>
         )}
       </div>
 
+      {/* Tabs agrupados (4): Resumen · Deudas · Inversores · Banco */}
       <div className="tabs">
         <button className={`tab ${subtab === 'resumen' ? 'active' : ''}`} onClick={() => setSubtab('resumen')}>Resumen</button>
-        <button className={`tab ${subtab === 'analisis' ? 'active' : ''}`} onClick={() => setSubtab('analisis')}>Análisis deuda</button>
-        <button className={`tab ${subtab === 'prestamos' ? 'active' : ''}`} onClick={() => setSubtab('prestamos')}>Préstamos</button>
-        <button className={`tab ${subtab === 'tarjetas' ? 'active' : ''}`} onClick={() => setSubtab('tarjetas')}>Tarjetas</button>
+        <button className={`tab ${['analisis','prestamos','tarjetas'].includes(subtab) ? 'active' : ''}`} onClick={() => setSubtab('analisis')}>Deudas</button>
         <button className={`tab ${subtab === 'inversores' ? 'active' : ''}`} onClick={() => setSubtab('inversores')}>Inversores</button>
-        <button className={`tab ${subtab === 'cuentas' ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Cuentas de banco</button>
-        <button className={`tab ${subtab === 'movimientos' ? 'active' : ''}`} onClick={() => setSubtab('movimientos')}>Movimientos</button>
+        <button className={`tab ${['cuentas','movimientos'].includes(subtab) ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Banco</button>
       </div>
+
+      {/* Sub-selector dentro de Deudas */}
+      {['analisis','prestamos','tarjetas'].includes(subtab) && (
+        <div className="subtabs">
+          <button className={`subtab ${subtab === 'analisis' ? 'active' : ''}`} onClick={() => setSubtab('analisis')}>Análisis</button>
+          <button className={`subtab ${subtab === 'prestamos' ? 'active' : ''}`} onClick={() => setSubtab('prestamos')}>Préstamos</button>
+          <button className={`subtab ${subtab === 'tarjetas' ? 'active' : ''}`} onClick={() => setSubtab('tarjetas')}>Tarjetas</button>
+        </div>
+      )}
+      {/* Sub-selector dentro de Banco */}
+      {['cuentas','movimientos'].includes(subtab) && (
+        <div className="subtabs">
+          <button className={`subtab ${subtab === 'cuentas' ? 'active' : ''}`} onClick={() => setSubtab('cuentas')}>Cuentas</button>
+          <button className={`subtab ${subtab === 'movimientos' ? 'active' : ''}`} onClick={() => setSubtab('movimientos')}>Movimientos</button>
+        </div>
+      )}
 
       {/* CREATE MODAL */}
       {showCreate && (
@@ -7519,7 +7616,7 @@ function AlertasPage() {
       <div className="topbar">
         <div>
           <h1>Alertas · centro de control</h1>
-          <div className="sub">{totalAlertas} alertas activas · pagos, deuda, tarjetas e inventario</div>
+          <div className="sub">{totalAlertas} alerta{totalAlertas === 1 ? '' : 's'} activa{totalAlertas === 1 ? '' : 's'} · pagos, deuda, tarjetas e inventario</div>
         </div>
       </div>
 
@@ -7870,11 +7967,12 @@ function App() {
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem('nav-collapsed') === '1');
   useEffect(() => { localStorage.setItem('nav-collapsed', navCollapsed ? '1' : '0'); }, [navCollapsed]);
 
-  // Computa # alertas para badge del sidebar
+  // Badge del sidebar = SKUs en estado crítico (señal urgente).
+  // Antes sumaba atención+reposición y daba un número mayor que el
+  // headline "N alertas activas" de la página, confundiendo. Crítico
+  // es la señal accionable y queda consistente con la página.
   const SK = window.buildSK ? window.buildSK() : (data.skus || []);
-  const alertCount = SK.filter(s => s.estado === 'critico').length
-                   + SK.filter(s => s.estado === 'atencion').length
-                   + SK.filter(s => s.estado === 'en_reposicion').length;
+  const alertCount = SK.filter(s => s.estado === 'critico').length;
 
   const pages = [
     { id: 'overview',    label: 'Resumen',     icon: '◉', badge: null },
