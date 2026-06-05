@@ -135,8 +135,14 @@ function buildSK(){
 
   return base.map(r=>{
     const s = {...r};
-    s.enCamino = EN_CAMINO[s.id] || 0;
-    s.vendido  = VENTAS_SKU[s.id] || 0;
+    // En modo Supabase, el objeto real (window.__AIRTABLE_DATA__.skus) ya trae
+    // enCamino/vendido calculados desde las vistas (vw_stock_sku). Esos valores
+    // mandan. Los seeds hardcodeados EN_CAMINO/VENTAS_SKU solo aplican en modo
+    // mock (SK_RAW), donde r.enCamino/r.vendido vienen undefined.
+    // BUG previo: este const EN_CAMINO (jul-2025) pisaba la data real → SKUs
+    // como AK820 (no presentes en el seed) mostraban 0 en camino.
+    s.enCamino = (r.enCamino != null) ? r.enCamino : (EN_CAMINO[s.id] || 0);
+    s.vendido  = (r.vendido  != null) ? r.vendido  : (VENTAS_SKU[s.id] || 0);
     s.margen   = s.pv>0 ? Math.round((s.pv - s.cpp)/s.pv * 100) : 0;
     s.valorStock = s.s * s.cpp;
     s.valorEnCamino = s.enCamino * s.cpp;
