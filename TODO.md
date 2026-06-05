@@ -1,162 +1,53 @@
-# JAMC's Tech — Pending Work
+# JAMC's Tech — Pendiente + notas de desarrollo
 
-> Última actualización: 2026-05-26 (sesión de migración Supabase autónoma).
-> Trabajo en orden de prioridad. **P0** = bloquea uso productivo del dashboard. **P1** = funcionalidad importante. **P2** = nice-to-have / futuro.
+> Doc vivo de lo que falta. Contexto del negocio → `CLAUDE.md` · Schema DB → `SCHEMA.md` ·
+> Agentes (futuro) → `JARVIS.md` · Login de los tests → `tests/README-AUTH.md`.
+> Última actualización: **2026-06-05**.
 
 ---
 
-## ✅ P0 — Conectar dashboard a Supabase · **COMPLETADO** (2026-05-26)
+## ✅ Hitos grandes (hechos)
+- Migración Google Sheets V2.1 → Supabase + dashboard Airtable → Supabase.
+- Dashboard v3 (estilo "Amber Terminal"): Resumen · Alertas · Ventas · Inventario · Finanzas.
+- Finanzas: USD nativo (tasa configurable), análisis de deuda con semáforo, compensaciones dueño/inversor.
+- Inventario: SKUs/lotes/CPP, prorrateo por valor base, estado **Descontinuado** con apartado propio.
+- Ventas legacy: 8 descifradas del sheet "1722", el resto quedan legacy (sin producto en la fuente).
+- **Seguridad para web (2026-06-05):** login real (Supabase Auth) + RLS cerrado a solo `authenticated`
+  (`anon` = 0 policies) + Netlify publica solo `dist/` (allowlist, sin docs/tests).
 
-El dashboard ya está corriendo localmente contra Supabase. Lee/escribe todo via `src/supabase-client.js`. El cliente Airtable (`src/airtable-client.js`) quedó comentado en `index.html` como rollback fácil.
+---
 
-**Cómo correrlo localmente:**
+## 🔜 Próximo — para publicar en Netlify
+- [ ] Crear **usuario de test** en Supabase Auth + poner `TEST_USER_*` en `.env` → correr suite Playwright completa. (Ver `tests/README-AUTH.md`.)
+- [ ] Conectar el repo a Netlify (branch `master`). El `netlify.toml` ya hace el build allowlist solo.
+- [ ] No publicar `index-legacy.html` (el allowlist ya lo excluye; además el RLS lo protege).
+
+---
+
+## 💰 Negocio (no es código)
+- **Plan de salida de deuda** en `PLAN_DEUDA.md` (local). Meta realista: ~RD$14k/mes → libre de deuda bancaria en ~17 meses (avalancha: Scotia USD → BHD Línea → Coop).
+- **Agentes** (`JARVIS.md`): retomar SOLO cuando la caja esté sana (deuda cara muerta + cash libre positivo y estable 2+ meses).
+
+---
+
+## 📋 P2 / futuro (nice-to-have)
+- **Mobile UI / PWA** para registrar ventas desde el celular (hoy es desktop-only).
+- **Backup automático** semanal a Drive si queda en plan free de Supabase (retención 7 días).
+- **Lotes retroactivos**: agrupar compras Alibaba históricas en `lotes` (opcional; la data ya es correcta sin esto).
+- **Ganancia real vs proyectada**: columna `cpp_actualizado_post_recibo` en `ventas_items` + trigger.
+- **Cleanup de nombres legacy** (cosmético): `window.__AIRTABLE_DATA__` → `__APP_DATA__`, `window.AT_CLIENT` → `DB`, evento `airtable-loaded` → `data-loaded`.
+- **Mousepads** con nombres genéricos (`Mouse Pad 80 30 1`) — normalizar si Julio quiere.
+
+---
+
+## Cómo correrlo
 ```powershell
 cd C:\Users\coco2\OneDrive\Escritorio\V17
-npx serve .   # sirve en :3000
-# o si quieres netlify dev con las functions (que ya no usamos):
-# netlify dev   # sirve en :8888
+npx serve .            # http://localhost:3000 (ahora pide login)
+npx playwright test    # requiere TEST_USER_EMAIL/PASSWORD en .env
 ```
 
-Visitar http://localhost:3000 — el dashboard carga 49 SKUs, 190 ventas, 79 entradas, 276 movimientos directo de Supabase.
-
-**Cómo se hizo:**
-- `src/supabase-client.js` reemplaza a airtable-client manteniendo el MISMO contrato (`window.AT_CLIENT.*`, cache `window.__AIRTABLE_DATA__`, eventos `airtable-loaded`). Los paneles no se modificaron en su lógica core.
-- Loaders read-only: skus, ventas (con items), entradas (con lotes), cashflow (vía tabla `movimientos` directa para incluir CASHFLOW + FINANCIERO), financiero (préstamos + inversores), resumen (computado on-the-fly), movFin.
-- Writers: createSKU/updateSKU/removeSKU, createVenta/removeVenta/updateVentaHeader, createLote/removeLote/updateLoteHeader, createMovFin/removeMovFin, y genéricos create/update/remove para cashflow + entradas + financiero (no-op).
-- Override de globals hardcoded: mutación in-place de `window.CF_ALL`, `window.CF_MES`, `window.MES`, `window.COOP`, `window.ANDREA`, `window.BHD` con datos reales de Supabase, después que cargan los loaders. Re-dispara `airtable-loaded` para que paneles re-rendereen.
-- Compat shim: `window.AT.fields.cashflow.*` con keys literales para que los paneles que llamaban `AT_CLIENT.create('cashflow', fields)` con field-IDs estilo Airtable sigan funcionando.
-
----
-
-## ✅ P0.5 — Row Level Security (RLS) · **COMPLETADO en modo DEV** (2026-05-26)
-
-Las 13 tablas tienen RLS habilitado con policy `dev_anon_all` que permite SELECT/INSERT/UPDATE/DELETE al rol `anon`. Migration: `rls_open_anon_dev_local`.
-
-**⚠ ANTES DE PUBLICAR EL DASHBOARD EN NETLIFY / PRODUCCIÓN:**
-- Revisar estas policies — actualmente cualquiera con el `anon` key puede leer y modificar todas las tablas.
-- Opciones de hardening:
-  - **A)** Configurar Supabase Auth + cambiar policies a `TO authenticated` y obligar login en el dashboard.
-  - **B)** Restringir CORS en Supabase a dominios específicos.
-  - **C)** Mover lecturas/escrituras detrás de Netlify Functions con `service_role` key del lado servidor.
-
-Por ahora (uso local de Julio en localhost:3000), open access es lo más simple.
-
----
-
-## ✅ P1 — Linkear movimientos VENTA con ventas · **PARCIAL** (2026-05-26)
-
-54 de 169 movimientos VENTA quedaron linkeados a su venta vía match único por fecha + monto. Los 115 restantes son **V-LEG** (ventas legacy de jul 2025 - ene 2026) que fueron migradas como agregados de período sin movimiento individual correspondiente. No hay forma automática de matchearlos.
-
-Migrations aplicadas: `link_movimientos_venta_with_ventas`, `link_movimientos_venta_segunda_pasada`.
-
----
-
-## ✅ P1 — Llenar tabla `disenos` · **COMPLETADO** (2026-05-26)
-
-4 entries base: Hollow Knight, Plain White, Plain Black, Custom Cliente. Ya seteables como `diseno_id` desde el formulario de venta cuando el SKU es Stand.
-
----
-
-## ✅ P1 — Auto-regeneración de cuotas BHD · **RESUELTO** (2026-05-26)
-
-Se eligió la opción simple (sin schedule fijo, ya que BHD es revolvente).
-El panel FINANC > LÍNEAS DE CRÉDITO > BHD Linea muestra en vivo:
-
-- **LÍMITE** (de `prestamos.limite_credito` = 112,000)
-- **USADO** (calculado: SUM drawdowns − SUM pagos línea, filtrado por banco)
-- **DISPONIBLE** (limite − usado)
-- **% USO**
-- **TASA ANUAL** = 26%
-- **INTERÉS/MES EST.** = usado × tasaMensual (proyección actualizada cada vez que cargan los movimientos)
-
-No se genera tabla `cuotas` para BHD porque la línea es flexible y no tiene
-schedule amortizado. El balance corriente vive en cashflow y el panel lo
-recalcula automáticamente cada refresh.
-
----
-
-## P2 — Stock management con lotes (retroactivo)
-
-V2.1 no tenía concepto de "lote" (compra agrupada con costos compartidos). Supabase sí, pero la tabla `lotes` está vacía. Las 79 entradas actuales no apuntan a un `lote_id`. Si Julio quiere migrar las compras Alibaba a lotes retroactivamente:
-
-1. Identificar grupos de entradas con misma fecha y proveedor
-2. Crear un `lotes` record con los costos compartidos
-3. UPDATE las entradas para apuntar a ese `lote_id`
-4. Triggers recalculan el `costo_compartido_asignado` automáticamente
-
-Esto es opcional. La data actual es funcionalmente correcta sin lotes. Los lotes NUEVOS creados desde el dashboard sí usan `lotes` cuando se llenan los shared costs.
-
----
-
-## P2 — Reporte de ganancia real vs proyectada
-
-Cuando una entrada PENDIENTE llega (cambia a RECIBIDO), su `costo_unitario_total` puede diferir de la estimación. Si hubo ventas anteriores con `cpp_historico` basado en CPP estimado, retroactivamente la ganancia cambia.
-
-Idea: agregar columna `cpp_actualizado_post_recibo` en `ventas_items` y un trigger que la actualice. La ganancia "definitiva" sería con el costo real, la "estimada" con el snapshot. Útil para dashboards. Pero baja prioridad.
-
----
-
-## P2 — Mobile UI
-
-El dashboard actual es desktop-only. Julio opera mucho desde el celular para registrar ventas en vivo. Considerar:
-- Hacer el wizard responsive
-- O un PWA simple
-
-No urgente porque Julio puede usar el desktop, pero mejoraría su workflow.
-
----
-
-## P2 — Backup automático
-
-Supabase tiene backups diarios automáticos en el plan pago. En plan free son 7 días retenidos. Configurar export semanal a Google Drive si Julio queda en plan free.
-
----
-
-## ✅ P1.5 — Side-effect cleanup en remove de Lote/MovFin · **RESUELTO** (2026-05-26)
-
-Implementado en `src/supabase-client.js` con temporal binding (sin tocar paneles):
-
-- **Lote satélites**: cuando `createLote` corre, registra el `lote_id_num` con TTL 8s. Los siguientes `create('cashflow')` del wizard (envío, courier, otros, compra) auto-setean `movimientos.lote_id = X`. `removeLote` ahora hace `DELETE FROM movimientos WHERE lote_id = X` antes de borrar entradas + lote header, cascadeando el cleanup.
-- **MovFin mirror**: cuando `createMovFin` corre, registra el `mov_id + fecha + monto` con TTL 8s. El siguiente `create('cashflow')` del wizard que matchee (misma fecha, monto ±1) se **suprime** (returns el id existente con `_dedup: true`). En el modelo Supabase un PAGO_PRESTAMO es 1 mov, no 2.
-
-Verificado: lote completo crea 4 satélites con `lote_id=3`, removeLote borra los 4. MovFin Cuota Préstamo + intento de mirror → 1 mov solo, no 2.
-
----
-
-## P2 — Cleanup post-migración
-
-Una vez que Julio confirme que el dashboard nuevo (Supabase) funciona perfectamente en producción durante 1-2 semanas:
-
-- [ ] Eliminar `src/airtable-client.js`
-- [ ] Eliminar `netlify/functions/airtable.js`
-- [ ] Eliminar `AIRTABLE_PAT` y `AIRTABLE_BASE_ID` de Netlify env vars (revocar PAT en Airtable también)
-- [ ] Limpiar referencias a Airtable en `index.html`
-- [ ] Renombrar archivos: `airtable-loaded` event → `data-loaded`, `window.__AIRTABLE_DATA__` → `window.__APP_DATA__`, `window.AT_CLIENT` → `window.DB` (los nombres actuales son histórico de la fase Airtable)
-
----
-
-## Comandos rápidos para Claude Code
-
-```bash
-# Probar conexión a Supabase desde Node
-node -e "
-const { createClient } = require('@supabase/supabase-js');
-const sb = createClient(
-  'https://oicxvnnzocwnqlsojhco.supabase.co',
-  'eyJ...'  // anon key, ver supabase-client.js
-);
-sb.from('skus').select('*').limit(5).then(({ data, error }) => {
-  console.log(error || data);
-});
-"
-
-# Listar tablas + counts
-# (via MCP de Supabase, Claude Code lo hace directo)
-```
-
-## Cómo continuar
-
-1. Lee `CLAUDE.md` para contexto del negocio (ya actualizado a Supabase)
-2. Lee `SCHEMA.md` para referencia de tablas y queries
-3. P1 BHD cuotas y P2 cleanup son los próximos candidatos si Julio decide.
-4. Pregúntele a Julio antes de tomar decisiones grandes (cambios de schema, refactors mayores).
+## Notas para quien continúe (Claude o dev)
+1. Lee `CLAUDE.md` (negocio + convenciones) y `SCHEMA.md` (tablas/triggers/vistas).
+2. Triggers de la DB hacen CPP, prorrateo, snapshot de ganancia y totales — **no dupliques esa lógica en el frontend**.
+3. Pregúntale a Julio antes de cambios grandes (schema, refactors, o algo que toque su data real).

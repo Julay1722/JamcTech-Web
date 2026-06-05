@@ -1,6 +1,6 @@
 # JAMC's Tech — Project Context for Claude Code
 
-> **Lee este archivo primero.** Es el contexto operacional del proyecto. Para historia detallada de la migración, ver `HANDOFF.md`. Para schema de la DB, ver `SCHEMA.md`. Para trabajo pendiente, ver `TODO.md`.
+> **Lee este archivo primero.** Es el contexto operacional del proyecto. Para schema de la DB, ver `SCHEMA.md`. Para trabajo pendiente y notas de desarrollo, ver `TODO.md`. Para el sistema de agentes (futuro), ver `JARVIS.md`. (La historia de la migración Sheets/Airtable → Supabase vive en el historial de git.)
 
 ## Qué es JAMC's Tech
 
