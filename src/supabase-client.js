@@ -2155,6 +2155,11 @@ Object.assign(window.AT_CLIENT, {
   createCompensacion, updateCompensacion, removeCompensacion,
   // Writers genéricos
   create, update, remove,
+  // Auth (login real con Supabase Auth)
+  signIn:  (email, password) => sb.auth.signInWithPassword({ email: (email || '').trim(), password }),
+  signOut: () => sb.auth.signOut(),
+  getSession: () => sb.auth.getSession(),
+  getUserEmail: () => (window.__SB_SESSION__?.user?.email || null),
   // Constantes (los formularios las leen para validar enums)
   SKU_CATEGORIAS: ['Mouse', 'Teclado', 'Headset', 'Stand', 'Mouse Pad', 'Otro'],
   MOVFIN_TIPOS: [
@@ -2183,18 +2188,9 @@ async function _bootCheck() {
 // rápido (~600ms total) y conocido funcional. loadMovFin necesita
 // financiero cargado (para mapear m.prestamo → idFin), y loadResumen
 // necesita ventas + cashflow (espera vía listener si no están listos).
-setTimeout(_bootCheck,                                            100);
-setTimeout(_loadLookups,                                          120);
-setTimeout(loadSKUs,                                              150);
-setTimeout(loadVentas,                                            200);
-setTimeout(loadEntradas,                                          250);
-setTimeout(loadCashflow,                                          300);
-setTimeout(async () => { await loadFinanciero(); await loadCuotas(); loadMovFin(); }, 350);
-setTimeout(loadResumen,                                           400);
-
-// Fallback: re-correr override + re-dispatchear eventos a 1.5s, 3s, 5s para
-// cubrir paneles que monten tarde (React + babel-standalone tarda) o que
-// hayan rendereado antes de que el override mutara los globals.
+// Fallback: re-correr override + re-dispatchear eventos para cubrir paneles
+// que monten tarde (React + babel-standalone tarda) o que hayan rendereado
+// antes de que el override mutara los globals.
 function _scheduledOverride(label) {
   _overrideInFlight = true;
   try {
@@ -2204,9 +2200,40 @@ function _scheduledOverride(label) {
     _overrideInFlight = false;
   }
 }
-setTimeout(() => _scheduledOverride('1.5s'), 1500);
-setTimeout(() => _scheduledOverride('3s'),   3000);
-setTimeout(() => _scheduledOverride('5s'),   5000);
-// Seguro extra para arranques fríos lentos (PC con babel-standalone tardando
-// o red lenta): cubre el caso donde los loaders terminan después de los 5s.
-setTimeout(() => _scheduledOverride('8s'),   8000);
+
+// ── Boot GATEADO por login ──────────────────────────────────────
+// Los loaders SOLO corren con sesión válida (usuario logueado). Sin login,
+// la app no carga datos y la UI muestra la pantalla de acceso. Blindaje real:
+// aunque la llave anon viaje en el bundle, sin un JWT válido el RLS no
+// devuelve NADA (las policies de anon se cierran en la Fase 3).
+let _bootDone = false;
+function _bootLoaders() {
+  if (_bootDone) return;
+  _bootDone = true;
+  setTimeout(_bootCheck,    100);
+  setTimeout(_loadLookups,  120);
+  setTimeout(loadSKUs,      150);
+  setTimeout(loadVentas,    200);
+  setTimeout(loadEntradas,  250);
+  setTimeout(loadCashflow,  300);
+  setTimeout(async () => { await loadFinanciero(); await loadCuotas(); loadMovFin(); }, 350);
+  setTimeout(loadResumen,   400);
+  setTimeout(() => _scheduledOverride('1.5s'), 1500);
+  setTimeout(() => _scheduledOverride('3s'),   3000);
+  setTimeout(() => _scheduledOverride('5s'),   5000);
+  setTimeout(() => _scheduledOverride('8s'),   8000);
+}
+
+// Avisa a la UI el estado de sesión; arranca loaders solo si hay login.
+function _emitAuth(session) {
+  window.__SB_SESSION__ = session || null;
+  window.dispatchEvent(new CustomEvent('sb-auth', { detail: { session: session || null } }));
+}
+sb.auth.getSession().then(({ data }) => {
+  _emitAuth(data.session);
+  if (data.session) _bootLoaders();
+}).catch((e) => { console.error('[SB/auth] getSession falló:', e.message); _emitAuth(null); });
+sb.auth.onAuthStateChange((_event, session) => {
+  _emitAuth(session);
+  if (session) _bootLoaders();
+});

@@ -8293,7 +8293,74 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// ════════════════════════════════════════════════════════════════
+// Auth gate — la app NO se monta sin sesión válida (login real Supabase)
+// ════════════════════════════════════════════════════════════════
+function LoginScreen() {
+  const [email, setEmail] = useState('');
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!email || !pw) { setErr('Escribe tu correo y contraseña'); return; }
+    setBusy(true); setErr('');
+    try {
+      const { error } = await window.AT_CLIENT.signIn(email, pw);
+      if (error) { setErr(error.message || 'No se pudo entrar'); setBusy(false); }
+      // Éxito → el evento 'sb-auth' re-renderiza Root hacia <App/>
+    } catch (e2) { setErr(e2.message || 'Error'); setBusy(false); }
+  };
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #0e0e0e)', fontFamily: 'var(--font-sans, system-ui)' }}>
+      <form onSubmit={submit} style={{ width: 340, maxWidth: '90vw', background: 'var(--surface, #1a1a1a)', border: '1px solid var(--border, #333)', borderRadius: 12, padding: 28, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--accent, #f2b53e)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: '#1a1a1a' }}>J</div>
+          <div>
+            <div style={{ fontWeight: 700, color: 'var(--text, #eee)' }}>JAMC.TECH</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3, #888)' }}>Acceso privado</div>
+          </div>
+        </div>
+        <label style={{ fontSize: 12, color: 'var(--text-2, #aaa)' }}>Correo
+          <input className="input" type="email" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" style={{ width: '100%', marginTop: 4 }} />
+        </label>
+        <label style={{ fontSize: 12, color: 'var(--text-2, #aaa)' }}>Contraseña
+          <input className="input" type="password" autoComplete="current-password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" style={{ width: '100%', marginTop: 4 }} />
+        </label>
+        {err && <div style={{ fontSize: 12, color: 'var(--danger, #f0726e)' }}>{err}</div>}
+        <button className="btn" type="submit" disabled={busy} style={{ marginTop: 6 }}>{busy ? 'Entrando…' : 'Entrar'}</button>
+        <div style={{ fontSize: 10, color: 'var(--text-3, #777)', textAlign: 'center' }}>Solo el dueño tiene acceso · datos protegidos</div>
+      </form>
+    </div>
+  );
+}
+
+function LogoutButton() {
+  const email = window.AT_CLIENT?.getUserEmail?.();
+  return (
+    <button className="btn ghost" title={email ? `Salir (${email})` : 'Cerrar sesión'} onClick={() => window.AT_CLIENT.signOut()}
+      style={{ position: 'fixed', bottom: 34, left: 12, zIndex: 9999, fontSize: 11, padding: '4px 10px', opacity: 0.85 }}>
+      ⎋ Salir
+    </button>
+  );
+}
+
+function Root() {
+  const [auth, setAuth] = useState('loading'); // 'loading' | 'out' | sessionObj
+  useEffect(() => {
+    const onAuth = (e) => setAuth(e.detail && e.detail.session ? e.detail.session : 'out');
+    window.addEventListener('sb-auth', onAuth);
+    if (typeof window.__SB_SESSION__ !== 'undefined') setAuth(window.__SB_SESSION__ || 'out');
+    return () => window.removeEventListener('sb-auth', onAuth);
+  }, []);
+  if (auth === 'loading') {
+    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-3,#888)', fontFamily: 'var(--font-sans,system-ui)' }}>Cargando…</div>;
+  }
+  if (auth === 'out') return <LoginScreen />;
+  return (<><App /><LogoutButton /></>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
 </script>
 
 </body>
