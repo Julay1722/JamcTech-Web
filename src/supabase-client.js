@@ -1340,9 +1340,12 @@ async function updateLoteHeader(loteDashId, patch) {
     if (error) throw new Error(`updateLoteHeader entradas: ${error.message}`);
   }
 
-  // Actualiza columnas que viven en `lotes` (shared costs, proveedor)
+  // Actualiza columnas que viven en `lotes` (shared costs, proveedor, status)
   if (lote._loteIdNum) {
     const lhRow = {};
+    // El status del lote (header) debe seguir al de sus entradas: recibir un
+    // lote en-camino pone tanto las entradas como el header en RECIBIDO.
+    if (patch.status    != null) lhRow.status          = statusMap[patch.status] || 'PENDIENTE';
     if (patch.envio     != null) lhRow.costo_envio     = Number(patch.envio)     || 0;
     if (patch.courier   != null) lhRow.costo_courier   = Number(patch.courier)   || 0;
     if (patch.otros     != null) lhRow.costo_otros     = Number(patch.otros)     || 0;
