@@ -64,7 +64,11 @@ async function gotoAppAndWaitReady(page, path = '/') {
   await page.waitForFunction(
     () => {
       const d = window.__AIRTABLE_DATA__;
-      return d && d.skus && d.cashflow && d.ventas;
+      // Incluye `financiero` (préstamos+inversores): carga a +350ms del boot,
+      // después de skus/ventas/cashflow. Con la latencia del login el snapshot
+      // podía adelantarse y ver financiero vacío (carrera). Esperarlo lo evita.
+      return d && d.skus && d.cashflow && d.ventas
+        && Array.isArray(d.financiero) && d.financiero.length >= 3;
     },
     undefined,
     { timeout: 60000 }
