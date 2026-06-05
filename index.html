@@ -2078,7 +2078,9 @@ function InventarioPage() {
 
   // Excluir SKU placeholder LEGACY-SALE de la lista de inventario para evitar
   // stock negativo y noise. Las ventas legacy se ven aparte en Ventas tab.
-  const SK_FILT = SK.filter(s => s.id !== 'LEGACY-SALE');
+  // Los descontinuados van a su propio apartado (no ensucian la lista activa).
+  const SK_FILT = SK.filter(s => s.id !== 'LEGACY-SALE' && s.estado !== 'descontinuado');
+  const descontinuados = SK.filter(s => s.id !== 'LEGACY-SALE' && s.estado === 'descontinuado');
   let filtered = filter === 'all' ? SK_FILT : SK_FILT.filter(s => s.estado === filter);
   if (search) {
     const q = search.toLowerCase();
@@ -2103,12 +2105,21 @@ function InventarioPage() {
     setBusy(false);
   };
 
+  const doReactivar = async (s) => {
+    try {
+      await window.AT_CLIENT.updateSKU(s.id, { activa: true });
+      window.toastOk('SKU reactivado', `${s.nm || s.id} vuelve a inventario activo`);
+    } catch (e) {
+      window.toastErr('No se pudo reactivar', e.message?.slice(0, 120));
+    }
+  };
+
   return (
     <>
       <div className="topbar">
         <div>
           <h1>Inventario</h1>
-          <div className="sub">{SK.filter(s => s.id !== 'LEGACY-SALE').length} SKUs · {fmtNum(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK.filter(s => s.id !== 'LEGACY-SALE').reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
+          <div className="sub">{SK_FILT.length} SKUs · {fmtNum(SK_FILT.reduce((s, x) => s + (x.s || 0), 0))} ud · {fmtCurrency(SK_FILT.reduce((s, x) => s + (x.s || 0) * (x.cpp || 0), 0))} valor stock · {(data.lotes || []).length} lotes</div>
         </div>
         <div className="topbar-actions">
           {subtab === 'skus' && (<>
@@ -2130,16 +2141,48 @@ function InventarioPage() {
       </div>
 
       <div className="tabs">
-        <button className={`tab ${(subtab === 'skus' || subtab === 'nuevo-sku') ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK.length})</button>
+        <button className={`tab ${(subtab === 'skus' || subtab === 'nuevo-sku') ? 'active' : ''}`} onClick={() => setSubtab('skus')}>SKUs ({SK_FILT.length})</button>
         <button className={`tab ${subtab === 'restock' ? 'active' : ''}`} onClick={() => setSubtab('restock')}>Re-Stock</button>
         <button className={`tab ${(subtab === 'lotes' || subtab === 'nuevo-lote') ? 'active' : ''}`} onClick={() => setSubtab('lotes')}>Lotes ({(data.lotes || []).length})</button>
+        {descontinuados.length > 0 && (
+          <button className={`tab ${subtab === 'descontinuados' ? 'active' : ''}`} onClick={() => setSubtab('descontinuados')}>Descontinuados ({descontinuados.length})</button>
+        )}
       </div>
 
       <div className="section">
         {subtab === 'lotes' ? <LotesTab /> :
          subtab === 'nuevo-sku' ? <FormSKU /> :
          subtab === 'nuevo-lote' ? <FormLote /> :
-         subtab === 'restock' ? <RestockTab skus={SK} /> : (() => {
+         subtab === 'restock' ? <RestockTab skus={SK} /> :
+         subtab === 'descontinuados' ? (
+           <div>
+             <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 'var(--s-3)' }}>
+               Productos que ya no vendes. No aparecen en alertas ni en la lista activa, pero conservas su historial. Reactiva cualquiera cuando quieras.
+             </div>
+             <table className="data">
+               <thead><tr>
+                 <th>Producto</th><th>SKU</th><th className="num right">Stock</th><th className="num right">Precio</th><th></th>
+               </tr></thead>
+               <tbody>
+                 {descontinuados.slice().sort((a, b) => (a.nm || '').localeCompare(b.nm || '')).map(s => (
+                   <tr key={s.id}>
+                     <td>{s.nm}</td>
+                     <td className="muted" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{s.id}</td>
+                     <td className="num right">{s.s || 0}</td>
+                     <td className="num right">{s.pv > 0 ? fmtCurrency(s.pv) : '—'}</td>
+                     <td>
+                       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
+                         <button className="btn ghost" style={{ padding: '2px 10px', fontSize: 11 }} onClick={() => doReactivar(s)}>↑ Reactivar</button>
+                         <button className="icon-btn" title="Editar" style={{ padding: '2px 6px' }} onClick={() => setEdit(s)}>✎</button>
+                         <button className="icon-btn danger" style={{ padding: '2px 6px' }} onClick={() => setDel(s)}>×</button>
+                       </div>
+                     </td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+           </div>
+         ) : (() => {
           // Agrupar SKUs por categoría. Si el SKU tiene categoría "Otro" pero
           // el id_sku empieza con un prefijo distinto a los conocidos (MOU/TEC/
           // HEA/STA/PAD/OTR), usamos ese prefijo como categoría visible.
