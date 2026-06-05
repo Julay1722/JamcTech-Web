@@ -24,6 +24,9 @@ node_modules/
 
 # ── Netlify ──────────────────────────────────────────────────────
 .netlify/
+# Carpeta de publicación generada por el build (allowlist). Netlify la
+# regenera en cada deploy; no se commitea.
+dist/
 # netlify-cli usa deno internamente y crea este lockfile en root
 deno.lock
 

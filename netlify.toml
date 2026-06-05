@@ -4,8 +4,13 @@
 # directamente (sin Netlify Functions post-migración 2026-05-26).
 
 [build]
-  publish = "."
-  command = ""
+  # SEGURIDAD: publica SOLO los archivos del app (allowlist), nunca docs,
+  # backups (.json con data), tests, ni index-legacy.html. dist/ contiene
+  # únicamente index.html + los 2 scripts que carga. Cualquier otra ruta
+  # (p.ej. /CLAUDE.md o /backup_*/*.json) no existe en dist → cae al SPA
+  # fallback (sirve la app), nunca el archivo real.
+  publish = "dist"
+  command = "rm -rf dist && mkdir -p dist/src && cp index.html dist/ && cp src/data.js src/supabase-client.js dist/src/"
 
 [build.environment]
   NODE_VERSION = "20"
