@@ -6,8 +6,44 @@
 //   2. El header con texto "JAMC.TECH" es visible
 //   3. Al menos una tabla de Airtable terminó de cargar (window.__AIRTABLE_DATA__)
 
+// Inicia sesión con el usuario de test (Supabase Auth) antes de cargar datos.
+// Credenciales desde env (NUNCA hardcodeadas): TEST_USER_EMAIL / TEST_USER_PASSWORD.
+// El dashboard ahora gatea los loaders detrás del login, así que sin esto los
+// tests se quedan en la pantalla de acceso y __AIRTABLE_DATA__ nunca carga.
+async function ensureLogin(page) {
+  const email = process.env.TEST_USER_EMAIL;
+  const password = process.env.TEST_USER_PASSWORD;
+  if (!email || !password) {
+    throw new Error(
+      'Faltan credenciales de test. Crea un usuario en Supabase Auth solo para tests ' +
+      'y define TEST_USER_EMAIL y TEST_USER_PASSWORD (en .env, que está gitignored). ' +
+      'Ver tests/README-AUTH.md.'
+    );
+  }
+  // Espera a que el cliente Supabase + AT_CLIENT estén listos.
+  await page.waitForFunction(
+    () => window.AT_CLIENT && typeof window.AT_CLIENT.signIn === 'function',
+    undefined,
+    { timeout: 20000 }
+  );
+  // ¿Ya hay sesión? (puede persistir en localStorage del contexto)
+  const hasSession = await page.evaluate(async () => {
+    const { data } = await window.AT_CLIENT.getSession();
+    return !!(data && data.session);
+  });
+  if (!hasSession) {
+    const errMsg = await page.evaluate(async ([e, p]) => {
+      const { error } = await window.AT_CLIENT.signIn(e, p);
+      return error ? error.message : null;
+    }, [email, password]);
+    if (errMsg) throw new Error('Login de test falló: ' + errMsg);
+  }
+}
+
 async function gotoAppAndWaitReady(page, path = '/') {
   await page.goto(path, { waitUntil: 'domcontentloaded' });
+  // Login (gate de auth) — sin esto los loaders no corren.
+  await ensureLogin(page);
   // Esperar a que el boot skeleton se reemplace por el TerminalApp.
   // OJO: page.waitForFunction(pageFunction, arg, options) — el 2do arg
   // es `arg` no `options`. Para timeout custom hay que pasar arg=undefined
@@ -66,4 +102,4 @@ async function switchToPanel(page, key) {
   await page.waitForTimeout(400);
 }
 
-module.exports = { gotoAppAndWaitReady, airtableSnapshot, switchToPanel, PANEL_LABEL };
+module.exports = { gotoAppAndWaitReady, ensureLogin, airtableSnapshot, switchToPanel, PANEL_LABEL };

@@ -9,6 +9,10 @@
 //   - console events capturados en un fixture por test
 // ════════════════════════════════════════════════════════════════
 
+// Carga credenciales de test desde .env (TEST_USER_EMAIL / TEST_USER_PASSWORD).
+// .env está gitignored — las credenciales del usuario de test no se commitean.
+try { require('dotenv').config(); } catch (_) { /* dotenv opcional */ }
+
 const { defineConfig, devices } = require('@playwright/test');
 
 // El dashboard v3 es una herramienta de ESCRITORIO (la PC de Julio). Por
