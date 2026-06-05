@@ -585,6 +585,18 @@ const fmtCurrency = (n, opts = {}) => {
   const formatted = abs.toLocaleString('es-DO', { maximumFractionDigits: 0 });
   return (n < 0 ? '-' : '') + 'RD$' + formatted;
 };
+// ─── Moneda: tasa USD→RD$ configurable (Julio la elige) + helpers ───
+const getTasaUSD = () => { const v = Number(localStorage.getItem('tasa-cambio-usd')); return v > 0 ? v : 60; };
+const setTasaUSD = (v) => { const n = Number(v); if (n > 0) localStorage.setItem('tasa-cambio-usd', String(n)); };
+const esUSD = (moneda) => /usd|us\$/i.test(String(moneda || ''));
+// Muestra el monto en SU moneda nativa: US$ para USD, RD$ para el resto.
+const fmtMoneda = (n, moneda) => {
+  if (n == null || isNaN(n)) return '—';
+  const formatted = Math.abs(n).toLocaleString('es-DO', { maximumFractionDigits: 0 });
+  return (n < 0 ? '-' : '') + (esUSD(moneda) ? 'US$' : 'RD$') + formatted;
+};
+// Convierte a RD$ (USD × tasa) para consolidar en totales.
+const toRD = (n, moneda) => esUSD(moneda) ? (Number(n) || 0) * getTasaUSD() : (Number(n) || 0);
 const fmtNum = (n, dec = 0) => {
   if (n == null || isNaN(n)) return '—';
   return Number(n).toLocaleString('es-DO', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -3240,11 +3252,22 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
   fin.filter(f => /inversor/i.test(f.tipo)).forEach(i => {
     const esDueno = /\[dueño\]|dueño|aporte propio/i.test(i.notas || '');
     if (esDueno) return;
-    const pendiente = Math.max(0, (i.balance || 0) - (i.totalPagado || 0));
-    // Estimación: pagar pendiente en 24 meses promedio
-    const cuotaProyectada = pendiente / 24;
-    pagosInversor += cuotaProyectada;
-    if (cuotaProyectada > 0) pagosBreakdown.push({ nombre: i.nombre, tipo: 'Inversor (proy. 24m)', monto: cuotaProyectada, color: '#8b5cf6' });
+    // Pago REAL hecho a este inversor (PAGO_INVERSOR linkeado por inversor_id).
+    const invId = Number(String(i._airtableId || '').replace('i-', ''));
+    const pagadoReal = (data.cashflow || []).filter(m => m._inversorId === invId && (m.s || 0) > 0)
+      .reduce((s, m) => s + (m.s || 0), 0);
+    const pendiente = Math.max(0, (i.balance || 0) - pagadoReal);
+    // Pago mensual REALISTA: promedio de lo que YA le has pagado. Si no hay
+    // historial, proyecta el pendiente a 24 meses (fallback).
+    let mensual = pendiente / 24, lbl = 'Inversor (proy. 24m)';
+    if (pagadoReal > 0 && i.fechaInicio) {
+      const hoy = new Date(window.HOY || new Date().toISOString().slice(0, 10));
+      const meses = Math.max(1, (hoy - new Date(i.fechaInicio)) / (30.4 * 86400000));
+      mensual = pagadoReal / meses;
+      lbl = 'Inversor (prom. real)';
+    }
+    pagosInversor += mensual;
+    if (mensual > 0) pagosBreakdown.push({ nombre: i.nombre, tipo: lbl, monto: mensual, color: '#8b5cf6' });
   });
 
   const pagosMensualesTotales = pagosCuotas + pagosMinimos + pagosInversor;
@@ -3288,8 +3311,8 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
   }
 
   // ── Deuda total ───────────────────────────────────────────────────────
-  const deudaPrestamos = prestamosUnified.reduce((s, p) => s + (p.balance || 0), 0);
-  const deudaTarjetas  = tarjetasCredito.reduce((s, t) => s + (t.usado || 0), 0);
+  const deudaPrestamos = prestamosUnified.reduce((s, p) => s + toRD(p.balance || 0, p.moneda), 0);
+  const deudaTarjetas  = tarjetasCredito.reduce((s, t) => s + toRD(t.usado || 0, t.moneda), 0);
   const deudaInversor  = fin.filter(f => /inversor/i.test(f.tipo) && !/\[dueño\]|dueño|aporte propio/i.test(f.notas || ''))
                             .reduce((s, i) => s + Math.max(0, (i.balance || 0) - (i.totalPagado || 0)), 0);
   const deudaTotal = deudaPrestamos + deudaTarjetas + deudaInversor;
@@ -3398,7 +3421,8 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
         <KPI label="Sobra/falta mensual" value={fmtNum(cashFlowMensualProm - pagosMensualesTotales)} currency
              delta={cashFlowMensualProm - pagosMensualesTotales >= 0 ? 1 : -1} deltaLabel="después de deudas" />
         <KPI label="Margen de colapso" value={margenColapso.toFixed(0) + '%'}
-             delta={null} deltaLabel={`puedes bajar ventas hasta esto`} />
+             delta={margenColapso > 0 ? 1 : -1}
+             deltaLabel={margenColapso > 0 ? 'puedes bajar ventas sin dejar de cubrir' : '⚠ tu cash flow YA no cubre la deuda'} />
       </div>
 
       {/* Deuda total */}
@@ -3424,6 +3448,26 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
               <div className="stat-label">Inversores</div>
               <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(deudaInversor)}</div>
             </div>
+          </div>
+          {/* Composición visual + nota de conversión USD (llena el espacio) */}
+          <div style={{ marginTop: 'var(--s-4)' }}>
+            <div className="stat-label" style={{ marginBottom: 6 }}>Composición de la deuda</div>
+            <div style={{ display: 'flex', height: 14, borderRadius: 4, overflow: 'hidden', background: 'var(--surface-2)' }}>
+              {[['Préstamos', deudaPrestamos, '#ef9a3d'], ['Tarjetas', deudaTarjetas, '#f0726e'], ['Inversores', deudaInversor, '#7c5cff']].map(([lbl, val, col]) =>
+                (deudaTotal > 0 && val > 0) ? <div key={lbl} title={`${lbl}: ${fmtCurrency(val)}`} style={{ width: (val / deudaTotal * 100) + '%', background: col }} /> : null)}
+            </div>
+            <div style={{ display: 'flex', gap: 16, marginTop: 6, fontSize: 10, color: 'var(--text-3)' }}>
+              <span style={{ color: '#ef9a3d' }}>■ Préstamos {deudaTotal > 0 ? Math.round(deudaPrestamos / deudaTotal * 100) : 0}%</span>
+              <span style={{ color: '#f0726e' }}>■ Tarjetas {deudaTotal > 0 ? Math.round(deudaTarjetas / deudaTotal * 100) : 0}%</span>
+              <span style={{ color: '#7c5cff' }}>■ Inversores {deudaTotal > 0 ? Math.round(deudaInversor / deudaTotal * 100) : 0}%</span>
+            </div>
+            {tarjetasCredito.some(t => esUSD(t.moneda) && (t.usado || 0) > 0) && (
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10, lineHeight: 1.6 }}>
+                💱 Incluye deuda en US$ convertida a la tasa <b>{getTasaUSD()}</b>:{' '}
+                {tarjetasCredito.filter(t => esUSD(t.moneda) && (t.usado || 0) > 0).map(t =>
+                  <span key={t.id} style={{ marginRight: 10 }}>{t.nombre} <b>{fmtMoneda(t.usado, t.moneda)}</b> → {fmtCurrency(toRD(t.usado, t.moneda))}</span>)}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3463,8 +3507,11 @@ function AnalisisDeudaPanel({ cashflow, prestamosUnified, tarjetasCredito, fin }
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Desglose de pagos mensuales (estimado)</div>
-            <div className="section-desc">{pagosBreakdown.length} obligaciones · total {fmtCurrency(pagosMensualesTotales)}/mes · estimación para el stress test: cuota REAL del préstamo · 5% mín. en tarjetas/líneas · capital del inversor proyectado a 24m</div>
+            <div className="section-title">Pagos mínimos estimados (peor caso · para el stress test)</div>
+            <div className="section-desc">
+              {pagosBreakdown.length} obligaciones · total {fmtCurrency(pagosMensualesTotales)}/mes.{' '}
+              <b>NO es lo que pagas de verdad</b> — es el MÍNIMO si solo pagaras lo obligatorio: cuota real del préstamo · 5% mín. en tarjetas/líneas (si arrastras saldo) · inversor a su promedio real pagado. Los USD se convierten a la tasa {getTasaUSD()}.
+            </div>
           </div>
         </div>
         {pagosBreakdown.length > 0 ? (
@@ -3995,6 +4042,21 @@ function FormInversor({ onDone }) {
   );
 }
 
+// Input de tasa US$→RD$ (Julio la elige). Al cambiar, re-dispara el evento
+// global para que los paneles que convierten USD recalculen.
+function TasaUSDInput() {
+  const [v, setV] = useState(getTasaUSD());
+  return (
+    <label title="Tasa US$→RD$ que usas para convertir los productos en USD a RD$ en los totales."
+      style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+      💱 Tasa US$
+      <input className="input num" type="number" min="1" step="0.5" value={v}
+        onChange={e => { setV(e.target.value); setTasaUSD(e.target.value); window.dispatchEvent(new CustomEvent('airtable-loaded', { detail: { table: 'globals' } })); }}
+        style={{ width: 60, padding: '2px 6px', fontSize: 12 }} />
+    </label>
+  );
+}
+
 function FinanzasPage({ onNavigate }) {
   const data = useATData();
   const productos = data.productos || {};
@@ -4173,9 +4235,12 @@ function FinanzasPage({ onNavigate }) {
           <h1>Finanzas</h1>
           <div className="sub">Préstamos · Inversores · Líneas · Cuentas · todo CRUD</div>
         </div>
-        {['prestamos','tarjetas','inversores','cuentas'].includes(subtab) && (
-          <button className="btn" onClick={() => setShowCreate(true)}>+ Nuevo</button>
-        )}
+        <div className="topbar-actions">
+          <TasaUSDInput />
+          {['prestamos','tarjetas','inversores','cuentas'].includes(subtab) && (
+            <button className="btn" onClick={() => setShowCreate(true)}>+ Nuevo</button>
+          )}
+        </div>
       </div>
 
       {/* Tabs agrupados (4): Resumen · Deudas · Inversores · Banco */}
@@ -4256,64 +4321,69 @@ function FinanzasPage({ onNavigate }) {
       </div>
 
       <div className="grid-2">
-        {(coop && (coop.monto > 0 || coop.saldo > 0)) ? (
-          <div className="section">
-            <div className="section-head">
-              <div>
-                <div className="section-title">{coop.nombre || 'Préstamo Cooperativa'}</div>
-                <div className="section-desc">{coop?.movimientos?.length || 0} pagos registrados</div>
-              </div>
-              <span className="badge neutral">{coop?.tasa?.toFixed?.(2) || 0}% / mes</span>
-            </div>
-            <div className="grid-3">
-              <div className="stat-card">
-                <div className="stat-label">Monto inicial</div>
-                <div className="stat-value">{fmtCurrency(coop?.monto || 0)}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Capital pagado</div>
-                <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(coop?.pagado || 0)}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Saldo</div>
-                <div className="stat-value" style={{ color: 'var(--danger)' }}>{fmtCurrency(coop?.saldo || 0)}</div>
-              </div>
+        {/* §01 · TODOS los préstamos (no solo Coop) */}
+        <div className="section">
+          <div className="section-head">
+            <div>
+              <div className="section-title">Préstamos</div>
+              <div className="section-desc">{(productos['FIN-P'] || []).length} préstamo(s) · saldo y pagos</div>
             </div>
           </div>
-        ) : (
-          <div className="section empty-section">
-            <div className="empty">Sin préstamos · agrega uno en tab <b>Préstamos</b></div>
-          </div>
-        )}
+          {(productos['FIN-P'] || []).length > 0 ? (
+            <table className="data">
+              <thead><tr>
+                <th>Préstamo</th><th className="right">Monto</th>
+                <th className="right">Pagado</th><th className="right">Saldo</th><th className="right">Tasa</th>
+              </tr></thead>
+              <tbody>
+                {(productos['FIN-P'] || []).map(p => (
+                  <tr key={p._airtableId || p.idFin}>
+                    <td>{p.nombre}</td>
+                    <td className="num right">{fmtMoneda(p.monto || 0, p.moneda)}</td>
+                    <td className="num right pos">{fmtMoneda(p.pagado || 0, p.moneda)}</td>
+                    <td className="num right neg">{fmtMoneda(p.saldo || 0, p.moneda)}</td>
+                    <td className="num right">{p.tasa?.toFixed?.(2) || 0}%/mes</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <div className="empty">Sin préstamos · agrega uno en tab <b>Préstamos</b></div>}
+        </div>
 
-        {(andrea && (andrea.aporte > 0 || andrea.pendiente > 0)) ? (
-          <div className="section">
-            <div className="section-head">
-              <div>
-                <div className="section-title">Inversora · {andrea.nombre || 'Andrea Correa'}</div>
-                <div className="section-desc">Retorno {andrea.aporte > 0 ? (andrea.retorno / andrea.aporte).toFixed(1) : 0}× · {andrea?.movimientos?.length || 0} pagos</div>
+        {/* §02 · TODOS los inversores externos (no solo Andrea) */}
+        {(() => {
+          const invExternos = (productos['FIN-I'] || []).filter(i =>
+            !i.esDueno && !/dueñ|aporte propio/i.test((i.notas || i.nota || '')) && !/^julio$/i.test(i.nombre || ''));
+          return (
+            <div className="section">
+              <div className="section-head">
+                <div>
+                  <div className="section-title">Inversores</div>
+                  <div className="section-desc">{invExternos.length} inversor(es) externo(s)</div>
+                </div>
               </div>
+              {invExternos.length > 0 ? (
+                <table className="data">
+                  <thead><tr>
+                    <th>Inversor</th><th className="right">Aporte</th>
+                    <th className="right">Pagado</th><th className="right">Pendiente</th><th className="right">Retorno</th>
+                  </tr></thead>
+                  <tbody>
+                    {invExternos.map(i => (
+                      <tr key={i._airtableId}>
+                        <td>{i.nombre}</td>
+                        <td className="num right">{fmtCurrency(i.aporte || 0)}</td>
+                        <td className="num right pos">{fmtCurrency(i.pagado || 0)}</td>
+                        <td className="num right" style={{ color: 'var(--warning)' }}>{fmtCurrency(i.pendiente || 0)}</td>
+                        <td className="num right">{i.aporte > 0 ? (i.retorno / i.aporte).toFixed(1) : 0}×</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div className="empty">Sin inversores · agrega uno en tab <b>Inversores</b></div>}
             </div>
-            <div className="grid-3">
-              <div className="stat-card">
-                <div className="stat-label">Aporte</div>
-                <div className="stat-value">{fmtCurrency(andrea?.aporte || 0)}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Pagado</div>
-                <div className="stat-value" style={{ color: 'var(--success)' }}>{fmtCurrency(andrea?.pagado || 0)}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label">Pendiente</div>
-                <div className="stat-value" style={{ color: 'var(--warning)' }}>{fmtCurrency(andrea?.pendiente || 0)}</div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="section empty-section">
-            <div className="empty">Sin inversora · agrega una en tab <b>Inversores</b></div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       <div className="grid-2">
@@ -4336,8 +4406,8 @@ function FinanzasPage({ onNavigate }) {
                 return (
                   <tr key={l.id}>
                     <td>{l.nombre}</td>
-                    <td className="num right">{fmtCurrency(l.limite)}</td>
-                    <td className="num right">{fmtCurrency(l.usado)}</td>
+                    <td className="num right">{fmtMoneda(l.limite, l.moneda)}</td>
+                    <td className="num right">{fmtMoneda(l.usado, l.moneda)}</td>
                     <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
                   </tr>
                 );
@@ -4366,8 +4436,8 @@ function FinanzasPage({ onNavigate }) {
                 return (
                   <tr key={l.id}>
                     <td>{l.nombre}</td>
-                    <td className="num right">{fmtCurrency(l.limite)}</td>
-                    <td className="num right">{fmtCurrency(l.usado)}</td>
+                    <td className="num right">{fmtMoneda(l.limite, l.moneda)}</td>
+                    <td className="num right">{fmtMoneda(l.usado, l.moneda)}</td>
                     <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
                   </tr>
                 );
@@ -4456,9 +4526,9 @@ function FinanzasPage({ onNavigate }) {
                     onClick={() => setSelectedId(isSelected ? null : l._airtableId)}>
                     <td>{l.nombre} {isSelected && <span className="muted" style={{ fontSize: 10 }}>(seleccionado ↓)</span>}</td>
                     <td className="muted">{l.tipoSub}</td>
-                    <td className="num right">{fmtCurrency(l.limite)}</td>
-                    <td className="num right">{fmtCurrency(l.usado)}</td>
-                    <td className="num right pos">{fmtCurrency(l.limite - l.usado)}</td>
+                    <td className="num right">{fmtMoneda(l.limite, l.moneda)}</td>
+                    <td className="num right">{fmtMoneda(l.usado, l.moneda)}</td>
+                    <td className="num right pos">{fmtMoneda(l.limite - l.usado, l.moneda)}</td>
                     <td className="num right"><span className={`badge ${cls}`}>{usoPct.toFixed(1)}%</span></td>
                     <td className="num right">{l.tasaAnual?.toFixed?.(1) || '—'}% anual</td>
                     <td className="muted">{l.moneda}</td>
@@ -4700,8 +4770,8 @@ function FinanzasPage({ onNavigate }) {
                     </td>
                     <td><span className={`badge ${c.tipo === 'DEBITO' ? 'success' : c.tipo === 'CREDITO' ? 'warning' : 'neutral'}`}>{c.tipo}</span></td>
                     <td className="muted">{c.moneda}</td>
-                    <td className={`num right ${saldo >= 0 ? 'pos' : 'neg'}`} style={{ fontWeight: 600 }}>{fmtCurrency(saldo)}</td>
-                    <td className="num right">{c.limite_credito ? fmtCurrency(c.limite_credito) : '—'}</td>
+                    <td className={`num right ${saldo >= 0 ? 'pos' : 'neg'}`} style={{ fontWeight: 600 }}>{fmtMoneda(saldo, c.moneda)}</td>
+                    <td className="num right">{c.limite_credito ? fmtMoneda(c.limite_credito, c.moneda) : '—'}</td>
                     <td className="row-actions" onClick={e => e.stopPropagation()}>
                       <div className="row-actions-inner">
                         <button className="icon-btn" title="Editar" onClick={() => openEditCuenta(c)}>✎</button>
