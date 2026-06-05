@@ -15,7 +15,7 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 | **Database** | Supabase (Postgres) | ✓ Reload total del sheet live 1722 ProV2.1 (2026-05-30): 269 movimientos · 196 ventas · 79 entradas · 19 lotes · 49 SKUs (con stock+precio) · 5 préstamos. KPIs cuadran con el sheet: capital 36,960 · revenue 393,450 · ganancia 157,846 · stock 111 ud. Cuadre vs cierre = 1 fila AJUSTE (drift manual del sheet). Generador: `backup_2026-05-30/build_load.js`. |
 | **Frontend dashboard** | HTML/JS estático local (`npx serve .`) | ✓ Apuntando a Supabase via `src/supabase-client.js` (migrado 2026-05-26) |
 | **Cliente Airtable legacy** | `src/airtable-client.js` | Comentado en index.html como rollback fácil |
-| **RLS** | Open para anon (dev local) | ⚠ Revisar policies antes de cualquier deploy a Netlify |
+| **RLS / Auth** | 🔒 Blindado (2026-06-05): solo `authenticated` tiene acceso (login real Supabase Auth). `anon` = 0 policies → la llave pública del bundle NO devuelve nada sin login. Agentes usan rol `jarvis_readonly` (separado). Usuario dueño: jamctech17@gmail.com. Gate en `Root()` (index.html) + boot gateado en supabase-client.js. | ✓ Listo para publicar |
 | **Repo dashboard local** | C:\Users\coco2\OneDrive\Escritorio\V17 | Git inicializado · 5+ commits |
 | **Repo GitHub (legacy)** | github.com/Julay1722/Jamc-s | NO sincronizado con esta versión |
 | **Fuente histórica** | Google Sheets "1722PRO V2.1" (ya migrado a Supabase) | Solo referencia |
