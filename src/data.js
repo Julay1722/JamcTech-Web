@@ -172,7 +172,12 @@ function buildSK(){
     s.leadTimeDias = LEAD_TIME;
     s.ratioCobertura = ratio;  // 1 = justo cubre · >1 sobra · <1 quiebre
 
-    if(s.vendido === 0){
+    if(s.activa === false){
+      // Producto descontinuado: se mantiene el historial pero NO entra en alertas
+      // (crítico/atención/reposición). Se ve en Inventario con badge gris.
+      s.estado = 'descontinuado';
+      s.notaEstado = 'Descontinuado — fuera de alertas';
+    } else if(s.vendido === 0){
       s.estado = 'sin_movimiento';
       s.notaEstado = 'Nunca vendido — no se puede calcular cobertura';
     } else if(s.diasStock === null){

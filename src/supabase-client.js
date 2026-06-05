@@ -115,10 +115,12 @@ async function loadSKUs() {
     const meta = Object.fromEntries((skuRows || []).map((s) => [s.id_sku, s]));
 
     const mapped = (stockRows || [])
-      .filter((r) => meta[r.id_sku]?.activa !== false)
+      // Incluye descontinuados (activa=false): se muestran en Inventario con
+      // badge gris pero buildSK los marca estado='descontinuado' → fuera de alertas.
       .map((r) => ({
         _airtableId: r.id_sku,
         id:          r.id_sku,
+        activa:      meta[r.id_sku]?.activa !== false,
         nm:          r.nombre || '(sin nombre)',
         mk:          r.marca  || '—',
         modelo:      r.modelo || '',
@@ -1024,6 +1026,7 @@ async function updateSKU(airtableId, patch) {
   if (patch.cat    !== undefined && patch.cat !== '') row.categoria = CAT_REV[patch.cat] || 'MOUSE';
   if (patch.pv     !== undefined && patch.pv !== '' && patch.pv !== null) row.precio_venta_sugerido = Number(patch.pv);
   if (patch.notas  !== undefined) row.notas    = patch.notas;
+  if (patch.activa !== undefined) row.activa   = !!patch.activa;  // false = Discontinuado
   // Si quieren renombrar el SKU (cambiar id_sku) — FK cascade on update lo soporta
   if (patch.id     !== undefined && patch.id !== idSku) row.id_sku = patch.id;
   const { data, error } = await sb.from('skus').update(row).eq('id_sku', idSku).select().single();

@@ -2068,6 +2068,7 @@ function InventarioPage() {
         cat: vals.cat,
         pv: vals.pv === '' ? null : Number(vals.pv),
         notas: vals.notas,
+        activa: vals.estadoSku !== 'Discontinuado',
       });
       window.toastOk('SKU actualizado', `${edit.id}`);
       setEdit(null);
@@ -2188,8 +2189,13 @@ function InventarioPage() {
           };
           // Peor estado entre variantes de color → estado del modelo
           const ESTADO_RANK = { critico: 4, atencion: 3, en_reposicion: 2, ok: 1, sin_movimiento: 0 };
-          const estadoPeor = (items) => items.reduce((peor, s) =>
-            (ESTADO_RANK[s.estado] || 0) > (ESTADO_RANK[peor] || 0) ? s.estado : peor, 'ok');
+          const estadoPeor = (items) => {
+            // Si TODAS las variantes están descontinuadas, el modelo es descontinuado.
+            const vivos = items.filter(s => s.estado !== 'descontinuado');
+            if (vivos.length === 0) return 'descontinuado';
+            return vivos.reduce((peor, s) =>
+              (ESTADO_RANK[s.estado] || 0) > (ESTADO_RANK[peor] || 0) ? s.estado : peor, 'ok');
+          };
           return (
           <table className="data">
             <thead><tr>
@@ -2326,6 +2332,9 @@ function InventarioPage() {
           { name: 'cat',    label: 'Categoría',  type: 'select', value: edit.cat || 'Mouse',
             options: ['Mouse','Teclado','Headset','Stand','Mouse Pad','Otro'] },
           { name: 'pv',     label: 'Precio venta (RD$)', type: 'number', value: edit.pv || '' },
+          { name: 'estadoSku', label: 'Estado', type: 'select',
+            value: edit.activa === false ? 'Discontinuado' : 'Activo',
+            options: ['Activo', 'Discontinuado'] },
           { name: 'notas',  label: 'Notas',      type: 'text',   value: edit.notas || '', span: 2 },
         ] : []}
         onCancel={() => setEdit(null)}
