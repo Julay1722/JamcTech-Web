@@ -729,9 +729,14 @@ function _buildFinancieroProductos() {
       // sin distinguir inversor, así que el mismo monto aparecía en todos (incluido el
       // dueño, sin haber cobrado). Dueño paga como entrada; inversor como salida → sumo ambos.
       const ruleIds = (r.compensaciones || []).map((c) => c.id);
-      const pagosCF = cf.filter((m) =>
-        typeof m.notas === 'string' && ruleIds.some((id) => m.notas.includes(`regla #${id}`)),
-      );
+      const invIdNum = Number(String(r._airtableId).replace('i-', ''));
+      const pagosCF = cf.filter((m) => {
+        // (a) tagged a una regla de este inversor (lo pone PagoMensualModal)…
+        if (typeof m.notas === 'string' && ruleIds.some((id) => m.notas.includes(`regla #${id}`))) return true;
+        // (b) …o pago directo linkeado por inversor_id (migrados/sin tag). Solo
+        // SALIDAS: un APORTE (entrada) del inversor/dueño NO es "pagado".
+        return m._inversorId === invIdNum && (m.s || 0) > 0;
+      });
       const pagado  = pagosCF.reduce((sum, m) => sum + (m.s || 0) + (m.e || 0), 0);
       // Para ROYALTY usamos el cap; para los demas el monto_pactado_devolver
       const targetTotal = r.tipoCompensacion === 'ROYALTY' && r.capDevolver
@@ -1741,6 +1746,20 @@ async function create(tableKey, fields) {
       salida,
       notas:          (fields.notas || `${fields.cuenta || ''} | ${fields.auxiliar || ''}`) + extraNotas,
     };
+
+    // ── Auto-link aportes del dueño: un APORTE_DUENO debe acreditarse en el
+    // detalle del inversor-dueño ("Aportes recibidos de"). El form de ajuste
+    // no pasa inversor_id, así que lo resolvemos aquí buscando el inversor
+    // marcado esDueno. Sin esto el aporte no se ve en su sección.
+    if (tipoEnum === 'APORTE_DUENO' && fields.inversor_id == null) {
+      const fin = window.__AIRTABLE_DATA__?.financiero || [];
+      const dueno = fin.find((f) => f.esDueno === true || /dueñ/i.test(f.tipo || ''));
+      const did = dueno?._airtableId && String(dueno._airtableId).startsWith('i-')
+        ? Number(String(dueno._airtableId).slice(2)) : null;
+      if (did) row.inversor_id = did;
+    } else if (fields.inversor_id != null) {
+      row.inversor_id = Number(fields.inversor_id);
+    }
 
     // ── Auto-link: si hubo un createLote reciente, este CF es un satélite
     // (envío, courier, otros, compra) del lote — linkear via lote_id para

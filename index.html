@@ -2918,9 +2918,16 @@ function DetalleInversorMovs({ item, cashflow, esDueno, productoExt }) {
   const cf = (cashflow || []);
   const concepto = esDueno ? 'Aportes para negocio' : 'Pago a Inversores';
   const nameTokens = (item.nombre || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+  // ID real del inversor (item._airtableId viene como 'i-<id>').
+  const invId = item._airtableId && String(item._airtableId).startsWith('i-')
+    ? Number(String(item._airtableId).slice(2)) : null;
   const movs = cf.filter(m => {
+    if (m.c !== concepto) return false;
+    // Match robusto por inversor_id; si el movimiento no lo trae (legacy),
+    // caemos al match por token del nombre en notas/auxiliar.
+    if (invId != null && m._inversorId != null) return m._inversorId === invId;
     const txt = ((m.a || '') + ' ' + (m.notas || '')).toLowerCase();
-    return m.c === concepto && nameTokens.some(t => txt.includes(t));
+    return nameTokens.some(t => txt.includes(t));
   }).slice().sort((a, b) => (a.f || '').localeCompare(b.f || ''));
   // Running acumulado POR REGLA (no per-inversor): cada fila muestra cuánto se
   // lleva pagado a SU propio método de compensación. Así el historial "toma en
@@ -3831,6 +3838,17 @@ const TIPO_COMPENSACION_META = {
     frecuencia: 'anual',
     simExample: { pct: 80 },
   },
+  EXCEDENTE_REAL: {
+    label: 'D6 · % del Excedente Real Mensual',
+    desc: 'Cobras X% de lo que QUEDA cada mes DESPUÉS de cubrir gastos operativos y servicio de deuda (ganancia − gastos − deuda). Solo paga en meses positivos: si el mes da pérdida, cobras RD$0. Tu "sueldo" nunca ahoga la operación.',
+    color: '#22c55e',
+    fields: ['pct'],
+    ownerOnly: true,
+    group: 'Dueño',
+    paquete: 'Paquete Dueño',
+    frecuencia: 'mensual',
+    simExample: { pct: 40 },
+  },
 };
 
 // Presets para "Aplicar Paquete" — genera N reglas de una vez
@@ -4562,6 +4580,17 @@ function FinanzasPage({ onNavigate }) {
                 const dueno = isDueno(i);
                 const isSelected = selectedId === i._airtableId;
                 const m = computeMetricas(i);
+                // Equity del dueño = aportes propios (entradas linkeadas por
+                // inversor_id, sin tag de regla = no son pagos de compensación)
+                // + lo reinvertido (montoTotal/capital_invertido).
+                const _invId = Number(String(i._airtableId).slice(2));
+                const aportesPropios = dueno
+                  ? (data.cashflow || []).filter(x =>
+                      x._inversorId === _invId && (x.e || 0) > 0 &&
+                      x.c === 'Aportes para negocio'   // solo aportes reales, NO drawdowns/financiero
+                    ).reduce((s, x) => s + (x.e || 0), 0)
+                  : 0;
+                const capitalMostrar = dueno ? (Number(i.montoTotal) || 0) + aportesPropios : i.montoTotal;
                 return (
                   <tr key={i._airtableId}
                     style={{ cursor: 'pointer', background: isSelected ? 'var(--surface-2)' : undefined }}
@@ -4578,8 +4607,8 @@ function FinanzasPage({ onNavigate }) {
                       )}
                     </td>
                     <td className="num right">
-                      {fmtCurrency(i.montoTotal)}
-                      {dueno && <div style={{ fontSize: 9, color: 'var(--text-3)' }}>equity acumulado</div>}
+                      {fmtCurrency(capitalMostrar)}
+                      {dueno && <div style={{ fontSize: 9, color: 'var(--text-3)' }}>equity (aportes + reinvertido)</div>}
                     </td>
                     <td className="num right">
                       {dueno ? <span style={{ fontSize: 18, color: 'var(--text-3)' }}>∞</span> : fmtCurrency(m.target)}
@@ -5137,6 +5166,55 @@ function ReglasCompensacionList({ inversor, esDueno }) {
   const capital = Number(inversor.montoTotal) || 0;
   const HOY_REAL = new Date(window.HOY || new Date().toISOString().slice(0, 10));
 
+  // ─── Fecha de corte configurable ───────────────────────────────────────
+  // El devengado/pagable se calcula hasta el ÚLTIMO corte que ya pasó (no hasta
+  // hoy). Así las ventas posteriores al corte NO mueven el monto a pagar: el
+  // número queda "congelado" hasta el próximo corte. Día global, en localStorage.
+  const [diasAntesCorte, setDiasAntesCorte] = useState(() => {
+    const stored = localStorage.getItem('comp-dias-antes-corte');
+    if (stored == null || stored === '') return 5;   // default: corte 5 días antes del pago
+    const v = Number(stored);
+    return v >= 0 && v <= 28 ? v : 5;
+  });
+  const setDiasAntesCorteSafe = (v) => {
+    const n = Math.max(0, Math.min(28, Number(v) || 0));
+    setDiasAntesCorte(n); localStorage.setItem('comp-dias-antes-corte', String(n));
+  };
+  // Corte de una regla = (su día de pago − N días), el más reciente que ya pasó.
+  // Así el monto se "congela" N días antes de pagar; las ventas de esos últimos
+  // días cuentan para el próximo ciclo.
+  const corteDeRegla = (regla) => {
+    const diaPago = (regla && regla.diaPago) || 17;
+    const diaC = Math.max(1, diaPago - diasAntesCorte);
+    const clampDia = (yy, mm) => Math.min(diaC, new Date(yy, mm + 1, 0).getDate());
+    const y = HOY_REAL.getFullYear(), mo = HOY_REAL.getMonth(), d = HOY_REAL.getDate();
+    if (d >= clampDia(y, mo)) return new Date(y, mo, clampDia(y, mo));
+    const py = mo === 0 ? y - 1 : y, pm = mo === 0 ? 11 : mo - 1;
+    return new Date(py, pm, clampDia(py, pm));
+  };
+
+  // ─── Excedente real de un mes (YYYY-MM): ganancia bruta − gastos operativos
+  // (ads, comisión, courier, fees, compra operativa) − servicio de deuda.
+  // NO resta COGS (compra mercancía / envío de lote ya están en la ganancia)
+  // ni movimientos de capital (aportes, transferencias). `hasta` opcional cap
+  // las fechas al corte (para el mes parcial del corte).
+  const _esGastoOp = (c) => /Pago ADS|Pago Comision|Courier|Compra operativa|Fee bancario|Ajuste/i.test(c || '');
+  const computeExcedenteMes = (ym, hasta, desde) => {
+    const hastaStr = hasta ? hasta.toISOString().slice(0, 10) : null;
+    const desdeStr = desde ? desde.toISOString().slice(0, 10) : null;
+    const okFecha = (f) => typeof f === 'string' && f.slice(0, 7) === ym
+      && (!hastaStr || f <= hastaStr) && (!desdeStr || f >= desdeStr);
+    const ganancia = (data.ventas || []).filter(v => okFecha(v.fecha))
+      .reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const cfMes = (data.cashflow || []).filter(m => okFecha(m.f));
+    const gastosOp = cfMes.filter(m => (m.s || 0) > 0 && m._naturaleza === 'CASHFLOW'
+        && _esGastoOp(m.c) && !(typeof m.notas === 'string' && /regla #/.test(m.notas)))
+      .reduce((s, m) => s + (m.s || 0), 0);
+    const deuda = cfMes.filter(m => (m.s || 0) > 0 && m._naturaleza === 'FINANCIERO')
+      .reduce((s, m) => s + (m.s || 0), 0);
+    return ganancia - gastosOp - deuda;
+  };
+
   // ─── Computa "monto pagado a fecha" por regla (filtra cashflow por notas) ──
   // Cuando PagoMensualModal crea movimientos, mete "regla #ID" en las notas.
   // Eso es nuestro tag para asociar movimientos a su regla origen.
@@ -5151,6 +5229,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
 
   // ─── Computa "monto generado a fecha" automatico por regla ───
   const computeDevengado = (regla) => {
+    const corteFecha = corteDeRegla(regla);
     const tipo = regla.tipoCompensacion;
     const pct = Number(regla.pctAplicado || 0) / 100;
     const cuota = Number(regla.cuotaMensual || 0);
@@ -5158,16 +5237,17 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     const montoPorUnidad = Number(regla.montoPorUnidad || 0);
     const inicio = regla.fechaInicio ? new Date(regla.fechaInicio) : (inversor.fechaInicio ? new Date(inversor.fechaInicio) : null);
     if (!inicio) return { generado: 0, detalle: 'Sin fecha de inicio' };
-    const ms = HOY_REAL - inicio;
+    // Calcula HASTA el corte (no hasta hoy) → monto a pagar estable.
+    const ms = corteFecha - inicio;
     const dias = Math.max(0, ms / 86400000);
     const meses = Math.max(0, dias / 30.4);
     const trimestres = Math.floor(meses / 3);
     const años = meses / 12;
 
-    // Ventas dentro del periodo de la regla
+    // Ventas dentro del periodo de la regla (inicio → corte)
     const ventas = (data.ventas || []).filter(v => {
       const f = v.fecha ? new Date(v.fecha) : null;
-      return f && f >= inicio && f <= HOY_REAL;
+      return f && f >= inicio && f <= corteFecha;
     });
     const revenueDesdeInicio = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
     const gananciaDesdeInicio = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
@@ -5227,6 +5307,20 @@ function ReglasCompensacionList({ inversor, esDueno }) {
           : `Próximo cierre fiscal: ${nextStr} (en ${diasFaltantes}d) · ${(pct*100).toFixed(0)}% del cashflow`;
         break;
       }
+      case 'EXCEDENTE_REAL': {
+        // Suma del excedente real de cada mes POSITIVO, desde inicio hasta corte, × pct.
+        let acum = 0, mesesPos = 0;
+        const cur = new Date(inicio.getFullYear(), inicio.getMonth(), 1);
+        while (cur <= corteFecha) {
+          const ym = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+          const exc = computeExcedenteMes(ym, corteFecha, inicio);
+          if (exc > 0) { acum += exc * pct; mesesPos++; }
+          cur.setMonth(cur.getMonth() + 1);
+        }
+        generado = acum;
+        detalle = `${(pct * 100).toFixed(0)}% del excedente (ganancia − gastos − deuda) · ${mesesPos} mes(es) positivo(s)`;
+        break;
+      }
       default: detalle = '—';
     }
     const esInfoOnly = tipo === 'REINVERSION';
@@ -5235,6 +5329,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
 
   // ─── Computa lo generado SOLO en el mes calendario actual (dinámico) ───
   const computeDevengadoMes = (regla) => {
+    const corteFecha = corteDeRegla(regla);
     const tipo = regla.tipoCompensacion;
     const pct = Number(regla.pctAplicado || 0) / 100;
     const cuota = Number(regla.cuotaMensual || 0);
@@ -5242,13 +5337,14 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     const capitalInv = Number(inversor.montoTotal) || 0;
     // Respeta la fecha de inicio de la regla: si todavía no arranca, no genera nada.
     const inicioRegla = regla.fechaInicio ? new Date(regla.fechaInicio) : (inversor.fechaInicio ? new Date(inversor.fechaInicio) : null);
-    if (inicioRegla && inicioRegla > HOY_REAL) return 0;
-    // Ventas desde el 1ro del mes (o desde el arranque de la regla si es más tarde) → hoy.
-    const inicioMesRaw = new Date(HOY_REAL.getFullYear(), HOY_REAL.getMonth(), 1);
+    if (inicioRegla && inicioRegla > corteFecha) return 0;
+    // Ventas desde el 1ro del mes del corte (o desde el arranque de la regla si
+    // es más tarde) → fecha de corte.
+    const inicioMesRaw = new Date(corteFecha.getFullYear(), corteFecha.getMonth(), 1);
     const inicioMes = (inicioRegla && inicioRegla > inicioMesRaw) ? inicioRegla : inicioMesRaw;
     const vsMes = (data.ventas || []).filter(v => {
       const f = v.fecha ? new Date(v.fecha) : null;
-      return f && f >= inicioMes && f <= HOY_REAL;
+      return f && f >= inicioMes && f <= corteFecha;
     });
     const revMes = vsMes.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
     const ganMes = vsMes.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
@@ -5262,6 +5358,10 @@ function ReglasCompensacionList({ inversor, esDueno }) {
       case 'RBF':                  return revMes * pct;
       case 'CASHFLOW_ANUAL':       return Math.max(0, ganMes) * pct;   // acumula hacia el cierre
       case 'DIVIDENDO_PREFERENTE': return capitalInv * pct / 12;       // prorrateo mensual del anual
+      case 'EXCEDENTE_REAL': {                                          // excedente del mes del corte
+        const ym = `${corteFecha.getFullYear()}-${String(corteFecha.getMonth() + 1).padStart(2, '0')}`;
+        return Math.max(0, computeExcedenteMes(ym, corteFecha, inicioRegla)) * pct;
+      }
       default: return 0;
     }
   };
@@ -5292,7 +5392,9 @@ function ReglasCompensacionList({ inversor, esDueno }) {
         <div>
           <div className="section-title" style={{ fontSize: 14 }}>📋 Reglas de compensación activas</div>
           <div className="section-desc" style={{ fontSize: 11 }}>
-            Paquete {esDueno ? 'Dueño' : 'Inversor'} · {reglas.length} regla(s) en paralelo · montos calculados automático
+            Paquete {esDueno ? 'Dueño' : 'Inversor'} · {reglas.length} regla(s) · corte{' '}
+            <b style={{ color: 'var(--accent)' }}>{diasAntesCorte} días antes del pago</b>{' '}
+            <span style={{ color: 'var(--text-4)' }}>(ventas posteriores no afectan)</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -5304,6 +5406,14 @@ function ReglasCompensacionList({ inversor, esDueno }) {
           )}
           {reglas.length > 0 && (
             <>
+              <label title="Días antes del día de pago en que se 'congela' el monto. Las ventas de esos últimos días cuentan para el próximo ciclo."
+                style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                ✂️ Corte:
+                <input className="input num" type="number" min="0" max="28" value={diasAntesCorte}
+                  onChange={e => setDiasAntesCorteSafe(e.target.value)}
+                  style={{ width: 48, padding: '2px 6px', fontSize: 12 }} />
+                días antes del pago
+              </label>
               <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }}
                 onClick={() => setSimPaqueteOpen(true)}>
                 🧮 Simular paquete
@@ -5358,7 +5468,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
             {/* STATS: Cálculo / Este mes / Devengado / Pagado / Pendiente lado a lado */}
             <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 1fr 1fr', gap: 8, padding: 'var(--s-2)', background: 'var(--surface)', borderRadius: 3 }}>
               <div>
-                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>Cálculo a hoy</div>
+                <div style={{ fontSize: 9, textTransform: 'uppercase', color: 'var(--text-3)', letterSpacing: '0.05em' }}>Cálculo al corte</div>
                 <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{dev.detalle}</div>
               </div>
               <div>
