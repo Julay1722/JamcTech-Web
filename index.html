@@ -2040,6 +2040,40 @@ function EditLoteModal({ open, lote, onClose }) {
           {renderCostRow('Otros (aduana, comisión)',   'Aduana / fee / comisión',                               otros,     setOtros,    cuentaOtros,    setCuentaOtros)}
         </div>
 
+        {/* CPP FINAL por SKU (landed cost): base + prorrateo por valor de los
+            costos compartidos. Mismo cálculo que el trigger de la DB. En vivo. */}
+        {(() => {
+          const tasa = Number(tasaCambio) || 60;
+          const rd = (v, cta) => (isUSDCuenta(cta) ? (Number(v) || 0) * tasa : (Number(v) || 0));
+          const sharedRD = rd(envio, cuentaEnvio) + rd(courier, cuentaCourier) + rd(otros, cuentaOtros);
+          const totalBase = lineas.reduce((s, l) => s + Number(l.qty || 0) * Number(l.costoUd || 0), 0);
+          const validas = lineas.filter(l => l.skuId && Number(l.qty) > 0 && Number(l.costoUd) > 0);
+          if (!validas.length || totalBase <= 0) return null;
+          return (
+            <div style={{ marginTop: 'var(--s-4)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: '1px solid var(--border)' }}>
+              <div className="field-label" style={{ marginBottom: 8 }}>
+                CPP final por SKU <span style={{ color: 'var(--text-3)', textTransform: 'none', fontWeight: 400 }}>
+                  · costo base + prorrateo de RD${fmtNum(Math.round(sharedRD))} (envío+courier+otros) por valor
+                </span>
+              </div>
+              {validas.map(l => {
+                const base = Number(l.costoUd);
+                const compartidoUd = sharedRD * base / totalBase;
+                const cppFinal = base + compartidoUd;
+                const sku = skus.find(s => s.id === l.skuId);
+                return (
+                  <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0' }}>
+                    <span>{sku ? sku.nm : l.skuId}</span>
+                    <span className="num" style={{ color: 'var(--text-3)' }}>
+                      {fmtCurrency(base)} + {fmtCurrency(compartidoUd)} = <strong style={{ color: 'var(--accent)' }}>{fmtCurrency(cppFinal)}/ud</strong>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
         <div className="modal-actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
           <button className="btn" onClick={onSave} disabled={busy}>{busy ? 'Guardando…' : 'Guardar cambios'}</button>
@@ -6596,6 +6630,38 @@ function FormLote() {
         <div className="summary-item"><span className="lbl">Total lote</span><span className="val">{fmtCurrency(total)}</span></div>
         <div className="summary-item"><span className="lbl">SKUs</span><span className="val">{lineasValidas.length}</span></div>
       </div>
+
+      {/* CPP FINAL por SKU (landed): base + prorrateo por valor. Igual que la DB. */}
+      {(() => {
+        const tasa = Number(tasaCambio) || 60;
+        const rd = (v, cta) => (isUSDCuenta(cta) ? (Number(v) || 0) * tasa : (Number(v) || 0));
+        const sharedRD = rd(envio, cuentaEnvio) + rd(courier, cuentaCourier) + rd(otros, cuentaOtros);
+        const totalBase = lineas.reduce((s, l) => s + Number(l.qty || 0) * Number(l.costoUd || 0), 0);
+        const validas = lineas.filter(l => l.skuId && Number(l.qty) > 0 && Number(l.costoUd) > 0);
+        if (!validas.length || totalBase <= 0) return null;
+        return (
+          <div style={{ marginBottom: 'var(--s-4)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, border: '1px solid var(--border)' }}>
+            <div className="field-label" style={{ marginBottom: 8 }}>
+              CPP final por SKU <span style={{ color: 'var(--text-3)', textTransform: 'none', fontWeight: 400 }}>
+                · base + prorrateo de RD${fmtNum(Math.round(sharedRD))} (envío+courier+otros) por valor
+              </span>
+            </div>
+            {validas.map(l => {
+              const base = Number(l.costoUd);
+              const compartidoUd = sharedRD * base / totalBase;
+              const sku = skus.find(s => s.id === l.skuId);
+              return (
+                <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0' }}>
+                  <span>{sku ? sku.nm : l.skuId}</span>
+                  <span className="num" style={{ color: 'var(--text-3)' }}>
+                    {fmtCurrency(base)} + {fmtCurrency(compartidoUd)} = <strong style={{ color: 'var(--accent)' }}>{fmtCurrency(base + compartidoUd)}/ud</strong>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
