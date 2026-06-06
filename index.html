@@ -7271,9 +7271,18 @@ function VentasPageExt({ period }) {
               // SKU id → nombre lookup
               const skuName = {};
               (data.skus || []).forEach(s => { skuName[s.id] = s.nm || s.id; });
+              // Gastos asociados por venta (courier/comisión registrados como
+              // movimiento separado con nota "Asociado a venta {código}").
+              const gastoPorVenta = {};
+              (data.cashflow || []).forEach(cf => {
+                const m = (cf.notas || '').match(/Asociado a venta (\S+)/);
+                if (m && Number(cf.s) > 0) gastoPorVenta[m[1]] = (gastoPorVenta[m[1]] || 0) + Number(cf.s);
+              });
               return filtered.map(v => {
                 const items = v.lineas || [];
                 const costoTotal = items.reduce((s, l) => s + (l.baseCost || (Number(l.costoUd || 0) * Number(l.qty || 0))), 0);
+                const gastoAsoc = gastoPorVenta[v.idVenta] || 0;
+                const gananciaNeta = (v.gananciaTotal || 0) - gastoAsoc;
                 return (
                   <tr key={v.idVenta}>
                     <td>
@@ -7295,7 +7304,14 @@ function VentasPageExt({ period }) {
                     <td className="num right">{v.cantidadTotal || 0}</td>
                     <td className="num right neg">{fmtCurrency(costoTotal)}</td>
                     <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
-                    <td className="num right pos">{fmtCurrency(v.gananciaTotal)}</td>
+                    <td className="num right pos">{fmtCurrency(v.gananciaTotal)}
+                      {gastoAsoc > 0 && (
+                        <div style={{ fontSize: 10, fontWeight: 400, color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)' }}
+                          title={`Ganancia neta = bruta ${fmtCurrency(v.gananciaTotal)} − gastos asociados ${fmtCurrency(gastoAsoc)}`}>
+                          neta {fmtCurrency(gananciaNeta)}
+                        </div>
+                      )}
+                    </td>
                     <td className="num right muted">{(v.margenPct || 0).toFixed(1)}%</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'inline-flex', gap: 4 }}>
@@ -7381,6 +7397,12 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   const margen = subtotalItems > 0 ? (ganancia / subtotalItems) * 100 : 0;
   const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
   const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
+  // Gastos asociados ya registrados (courier/comisión) + el que se esté agregando ahora.
+  const gastosExistentes = (data.cashflow || []).reduce((sum, cf) => {
+    const m = (cf.notas || '').match(/Asociado a venta (\S+)/);
+    return (m && venta && m[1] === venta.idVenta && Number(cf.s) > 0) ? sum + Number(cf.s) : sum;
+  }, 0);
+  const gananciaNeta = ganancia - gastosExistentes - (Number(gastoMonto) || 0);
 
   const doSave = async () => {
     setBusy(true);
@@ -7485,6 +7507,11 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           {Number(envio) > 0 && <span className="muted">+ Envío: {fmtCurrency(Number(envio))}</span>}
           <span>Total facturado: <b>{fmtCurrency(totalFacturado)}</b></span>
           <span className="pos">Ganancia: {fmtCurrency(ganancia)}</span>
+          {(gastosExistentes > 0 || Number(gastoMonto) > 0) && (
+            <span title={`Ganancia − gastos asociados (${fmtCurrency(gastosExistentes + (Number(gastoMonto) || 0))})`} style={{ color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
+              Neta: {fmtCurrency(gananciaNeta)}
+            </span>
+          )}
           <span className="muted" title="Ganancia sobre el precio de venta">Margen: {margen.toFixed(1)}%</span>
           <span className="muted" title="Cuánto le metiste por encima del costo">Markup: {markup.toFixed(1)}%</span>
         </div>
