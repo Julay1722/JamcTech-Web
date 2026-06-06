@@ -1892,6 +1892,7 @@ function EditLoteModal({ open, lote, onClose }) {
 
   const costoBase = lineas.filter(l => l.skuId && Number(l.qty) > 0)
                           .reduce((s, l) => s + Number(l.qty) * Number(l.costoUd || 0), 0);
+  const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
 
   const onSave = async () => {
     setBusy(true);
@@ -2007,14 +2008,23 @@ function EditLoteModal({ open, lote, onClose }) {
           </div>
           {lineas.map(l => {
             const subtotal = Number(l.qty) * Number(l.costoUd || 0);
+            const lineCat = l.cat || skus.find(s => s.id === l.skuId)?.cat || '';
             return (
               <div key={l.id} className="line-row">
-                <select className="select" value={l.skuId} onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
-                  <option value="">— selecciona SKU —</option>
-                  {skus.filter(s => s.id !== 'LEGACY-SALE').map(s => (
-                    <option key={s.id} value={s.id}>{s.nm} · {s.id}</option>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
+                  <select className="select" style={{ flex: '0 0 118px' }} value={lineCat}
+                    onChange={e => updateLinea(l.id, { cat: e.target.value, skuId: '' })}>
+                    <option value="">Categoría…</option>
+                    {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <select className="select" style={{ flex: 1, minWidth: 0 }} value={l.skuId} disabled={!lineCat}
+                    onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
+                    <option value="">{lineCat ? '— artículo —' : '↤ elige categoría'}</option>
+                    {skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat === lineCat)
+                         .sort((a, b) => (a.nm || '').localeCompare(b.nm || ''))
+                         .map(s => <option key={s.id} value={s.id}>{s.nm}</option>)}
+                  </select>
+                </div>
                 <input className="input num" type="number" min="1" value={l.qty} onChange={e => updateLinea(l.id, { qty: e.target.value })} />
                 <input className="input num" type="number" value={l.costoUd} onChange={e => updateLinea(l.id, { costoUd: e.target.value })} />
                 <span className="num" style={{ fontSize: 12, textAlign: 'right' }}>
@@ -6512,6 +6522,8 @@ function FormLote() {
     setBusy(false);
   };
 
+  const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
       <div className="row-4">
@@ -6549,14 +6561,23 @@ function FormLote() {
         </div>
         {lineas.map(l => {
           const subtotal = Number(l.qty) * Number(l.costoUd || 0);
+          const lineCat = l.cat || skus.find(s => s.id === l.skuId)?.cat || '';
           return (
             <div key={l.id} className="line-row">
-              <select className="select" value={l.skuId} onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
-                <option value="">— selecciona SKU —</option>
-                {skus.filter(s => s.id !== 'LEGACY-SALE').map(s => (
-                  <option key={s.id} value={s.id}>{s.nm} · {s.id}</option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
+                <select className="select" style={{ flex: '0 0 118px' }} value={lineCat}
+                  onChange={e => updateLinea(l.id, { cat: e.target.value, skuId: '' })}>
+                  <option value="">Categoría…</option>
+                  {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select className="select" style={{ flex: 1, minWidth: 0 }} value={l.skuId} disabled={!lineCat}
+                  onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
+                  <option value="">{lineCat ? '— artículo —' : '↤ elige categoría'}</option>
+                  {skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat === lineCat)
+                       .sort((a, b) => (a.nm || '').localeCompare(b.nm || ''))
+                       .map(s => <option key={s.id} value={s.id}>{s.nm}</option>)}
+                </select>
+              </div>
               <input className="input num" type="number" min="1" value={l.qty}
                 onChange={e => updateLinea(l.id, { qty: e.target.value })} placeholder="0" />
               <input className="input num" type="number" value={l.costoUd}
@@ -7328,6 +7349,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   const ganancia = subtotalItems - costoTotal;
   const margen = subtotalItems > 0 ? (ganancia / subtotalItems) * 100 : 0;
   const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
+  const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
 
   const doSave = async () => {
     setBusy(true);
@@ -7378,19 +7400,33 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
             <th className="right">Subtotal</th>
           </tr></thead>
           <tbody>
-            {lineas.map((l, idx) => (
+            {lineas.map((l, idx) => {
+              const lineCat = l.cat || skus.find(s => s.id === l.sku)?.cat || '';
+              return (
               <tr key={l._airtableId || idx}>
                 <td>
-                  <select className="select" value={l.sku} onChange={e => updateLinea(idx, { sku: e.target.value })} style={{ maxWidth: 250 }}>
-                    {l.sku && !skus.find(s => s.id === l.sku) && <option value={l.sku}>{l.sku}</option>}
-                    {skus.map(s => <option key={s.id} value={s.id}>{s.nm || s.id}</option>)}
-                  </select>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <select className="select" style={{ flex: '0 0 110px' }} value={lineCat}
+                      onChange={e => updateLinea(idx, { cat: e.target.value, sku: '' })}>
+                      <option value="">Categoría…</option>
+                      {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <select className="select" style={{ flex: 1, maxWidth: 200 }} value={l.sku} disabled={!lineCat}
+                      onChange={e => updateLinea(idx, { sku: e.target.value })}>
+                      <option value="">{lineCat ? '— artículo —' : '↤ categoría'}</option>
+                      {l.sku && !skus.find(s => s.id === l.sku) && <option value={l.sku}>{l.sku}</option>}
+                      {skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat === lineCat)
+                           .sort((a, b) => (a.nm || '').localeCompare(b.nm || ''))
+                           .map(s => <option key={s.id} value={s.id}>{s.nm || s.id}</option>)}
+                    </select>
+                  </div>
                 </td>
                 <td className="right"><input className="input num" type="number" style={{ width: 64 }} value={l.qty} onChange={e => updateLinea(idx, { qty: e.target.value })} /></td>
                 <td className="right"><input className="input num" type="number" style={{ width: 100 }} value={l.precio} onChange={e => updateLinea(idx, { precio: e.target.value })} /></td>
                 <td className="num right">{fmtCurrency((Number(l.precio) || 0) * (Number(l.qty) || 0))}</td>
               </tr>
-            ))}
+              );
+            })}
             {lineas.length === 0 && <tr><td colSpan={4} className="muted">Esta venta no tiene líneas registradas.</td></tr>}
           </tbody>
         </table>
