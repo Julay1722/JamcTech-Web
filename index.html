@@ -6201,6 +6201,7 @@ function RegistrarPage() {
 function FormVenta() {
   const data = useATData();
   const skus = data.skus || [];
+  const cuentas = data._cuentas || [];
   const [fecha, setFecha] = useState(window.HOY || HOY);
   const [canal, setCanal] = useState('Facebook');
   const [envio, setEnvio] = useState(0);
@@ -6213,6 +6214,7 @@ function FormVenta() {
   // fila de la venta. Así Resumen no mezcla ingreso con gasto.
   const [gastoEnvio, setGastoEnvio] = useState(0);
   const [gastoConcepto, setGastoConcepto] = useState('Pago Envio');
+  const [gastoCuenta, setGastoCuenta] = useState('BHD Débito');  // de qué cuenta/tarjeta salió el gasto
 
   const addLinea = () => setLineas(arr => [...arr, { id: Date.now(), skuId: '', qty: 1 }]);
   const removeLinea = (id) => setLineas(arr => arr.filter(l => l.id !== id));
@@ -6257,7 +6259,7 @@ function FormVenta() {
         try {
           const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
           await window.AT_CLIENT.create('cashflow', {
-            fecha, cuenta: 'BHD Debito',
+            fecha, cuenta: gastoCuenta || 'BHD Débito',
             auxiliar: canal,
             concepto: gastoConcepto,
             tipo: TIPO_MAP[gastoConcepto] || 'OTROS',
@@ -6366,10 +6368,15 @@ function FormVenta() {
           <input className="input num" type="number" value={gastoEnvio} onChange={e => setGastoEnvio(e.target.value)} placeholder="0" />
           <div className="field-hint">Se registra como movimiento SEPARADO (no se resta de la venta)</div>
         </div>
-        <div className="field" style={{ opacity: 0.6 }}>
-          <div className="field-label">Resultado</div>
-          <div style={{ fontSize: 12, color: 'var(--text-3)', paddingTop: 4 }}>
-            {Number(gastoEnvio) > 0 ? `Venta ${fmtCurrency(precio || 0)} → BHD · Gasto ${fmtCurrency(gastoEnvio)} ← BHD (2 mov)` : 'Solo venta (1 mov)'}
+        <div className="field">
+          <div className="field-label">Gasto asociado · cuenta origen</div>
+          <select className="select" value={gastoCuenta} onChange={e => setGastoCuenta(e.target.value)} disabled={!(Number(gastoEnvio) > 0)}>
+            {cuentas.length > 0
+              ? cuentas.map(c => <option key={c.nombre} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
+              : <option value="BHD Débito">BHD Débito</option>}
+          </select>
+          <div className="field-hint">
+            {Number(gastoEnvio) > 0 ? `De aquí sale RD$${fmtNum(gastoEnvio)} (tarjeta de crédito = cargo a la tarjeta)` : 'Solo venta (1 mov)'}
           </div>
         </div>
       </div>
