@@ -1417,8 +1417,12 @@ function RestockTab({ skus }) {
   const [filterEstado, setFilterEstado] = useState('todos-pedir');
   const [expandedModels, setExpandedModels] = useState({});
 
-  // Computar info de reposición para cada SKU
-  const items = (skus || []).map(s => {
+  // Computar info de reposición para cada SKU.
+  // Excluimos el placeholder LEGACY-SALE y los SKUs descontinuados: no se
+  // vuelven a pedir, así que no deben ensuciar la lista de reorden.
+  const items = (skus || [])
+    .filter(s => s.id !== 'LEGACY-SALE' && s.activa !== false && s.estado !== 'descontinuado')
+    .map(s => {
     const lead = leadOverride;
     const buffer = Number(bufferDias) || 0;
     const diasObjetivo = lead + buffer;  // queremos stock para todo este período
