@@ -6219,6 +6219,7 @@ function FormVenta() {
   }, 0);
   const ganancia = (Number(precio) || 0) - costoTotal;
   const margen = Number(precio) > 0 ? (ganancia / Number(precio)) * 100 : 0;
+  const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
 
   const valid = lineasValidas.length > 0 && Number(precio) > 0;
 
@@ -6362,7 +6363,8 @@ function FormVenta() {
           <div className="summary-item"><span className="lbl">Facturado</span><span className="val">{fmtCurrency(Number(precio) || 0)}</span></div>
           <div className="summary-item"><span className="lbl">Costo</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
           <div className="summary-item"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
-          <div className="summary-item"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
+          <div className="summary-item" title="Ganancia sobre el precio de venta"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
+          <div className="summary-item" title="Cuánto le metiste por encima del costo"><span className="lbl">Markup</span><span className="val">{markup.toFixed(1)}%</span></div>
         </div>
       )}
     </div>
@@ -7312,6 +7314,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   // Ganancia = sólo productos (la DB no suma el envío a la ganancia).
   const ganancia = subtotalItems - costoTotal;
   const margen = subtotalItems > 0 ? (ganancia / subtotalItems) * 100 : 0;
+  const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
 
   const doSave = async () => {
     setBusy(true);
@@ -7384,7 +7387,8 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           {Number(envio) > 0 && <span className="muted">+ Envío: {fmtCurrency(Number(envio))}</span>}
           <span>Total facturado: <b>{fmtCurrency(totalFacturado)}</b></span>
           <span className="pos">Ganancia: {fmtCurrency(ganancia)}</span>
-          <span className="muted">Margen: {margen.toFixed(1)}%</span>
+          <span className="muted" title="Ganancia sobre el precio de venta">Margen: {margen.toFixed(1)}%</span>
+          <span className="muted" title="Cuánto le metiste por encima del costo">Markup: {markup.toFixed(1)}%</span>
         </div>
 
         <div className="field" style={{ marginBottom: 'var(--s-4)' }}><div className="field-label">Notas</div>
