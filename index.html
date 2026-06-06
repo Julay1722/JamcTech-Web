@@ -7334,12 +7334,18 @@ function VentasPageExt({ period }) {
 function EditVentaModal({ open, venta, onCancel, onSaved }) {
   const data = useATData();
   const skus = data.skus || [];
+  const cuentas = data._cuentas || [];
   const [fecha, setFecha] = useState('');
   const [canal, setCanal] = useState('');
   const [envio, setEnvio] = useState(0);
   const [notas, setNotas] = useState('');
   const [lineas, setLineas] = useState([]);
   const [busy, setBusy] = useState(false);
+  // Gasto asociado: registrar un courier/comisión de ESTA venta como movimiento
+  // separado (útil cuando se olvidó al crear la venta). Solo crea si monto > 0.
+  const [gastoConcepto, setGastoConcepto] = useState('Pago Envio');
+  const [gastoMonto, setGastoMonto] = useState(0);
+  const [gastoCuenta, setGastoCuenta] = useState('BHD Débito');
 
   useEffect(() => {
     if (open && venta) {
@@ -7347,6 +7353,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
       setCanal(venta.canal || '');
       setEnvio(venta.envio || 0);
       setNotas(venta.notas || '');
+      setGastoMonto(0);  // el gasto arranca vacío; solo se crea si se llena
       setLineas((venta.lineas || []).map(l => {
         const sku = l.skuLinked || l.skuRef || '';
         return {
@@ -7394,6 +7401,24 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
         });
       if (changed.length > 0) await window.AT_CLIENT.updateVentaLineas(venta.idVenta, changed);
       window.toastOk('Venta actualizada', `${venta.idVenta} · ${fmtCurrency(totalFacturado)}`);
+      // Gasto asociado (courier/comisión) → movimiento SEPARADO desde la cuenta indicada
+      if (Number(gastoMonto) > 0) {
+        try {
+          const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
+          await window.AT_CLIENT.create('cashflow', {
+            fecha, cuenta: gastoCuenta || 'BHD Débito',
+            auxiliar: canal,
+            concepto: gastoConcepto,
+            tipo: TIPO_MAP[gastoConcepto] || 'OTROS',
+            entrada: 0,
+            salida: Number(gastoMonto),
+            notas: `Asociado a venta ${venta.idVenta}`,
+          });
+          window.toastOk('Gasto registrado', `${gastoConcepto} · ${fmtCurrency(gastoMonto)} ← ${gastoCuenta}`);
+        } catch (e) {
+          window.toastWarn?.('Gasto asociado falló', e.message?.slice(0, 100));
+        }
+      }
       onSaved && onSaved();
     } catch (e) {
       window.toastErr('No se pudo guardar', e.message?.slice(0, 120));
@@ -7466,6 +7491,32 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
 
         <div className="field" style={{ marginBottom: 'var(--s-4)' }}><div className="field-label">Notas</div>
           <input className="input" type="text" value={notas} onChange={e => setNotas(e.target.value)} /></div>
+
+        {/* Agregar un gasto (courier/comisión) a esta venta como movimiento separado */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 'var(--s-4)', paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div className="field">
+            <div className="field-label">Agregar gasto · concepto</div>
+            <select className="select" value={gastoConcepto} onChange={e => setGastoConcepto(e.target.value)}>
+              <option value="Pago Envio">Pago Envío (courier)</option>
+              <option value="Pago Comision">Pago Comisión</option>
+              <option value="Otro">Otro gasto</option>
+            </select>
+          </div>
+          <div className="field">
+            <div className="field-label">Gasto · monto (RD$)</div>
+            <input className="input num" type="number" value={gastoMonto} onChange={e => setGastoMonto(e.target.value)} placeholder="0" />
+            <div className="field-hint">Movimiento SEPARADO (no se resta de la venta)</div>
+          </div>
+          <div className="field">
+            <div className="field-label">Gasto · cuenta origen</div>
+            <select className="select" value={gastoCuenta} onChange={e => setGastoCuenta(e.target.value)} disabled={!(Number(gastoMonto) > 0)}>
+              {cuentas.length > 0
+                ? cuentas.map(c => <option key={c.nombre} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
+                : <option value="BHD Débito">BHD Débito</option>}
+            </select>
+            <div className="field-hint">{Number(gastoMonto) > 0 ? `Sale RD$${fmtNum(gastoMonto)} de aquí` : 'Déjalo en 0 si no aplica'}</div>
+          </div>
+        </div>
 
         <div className="modal-actions">
           <button className="btn ghost" onClick={onCancel} disabled={busy}>Cancelar</button>
