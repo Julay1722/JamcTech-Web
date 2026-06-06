@@ -6221,6 +6221,9 @@ function FormVenta() {
   const margen = Number(precio) > 0 ? (ganancia / Number(precio)) * 100 : 0;
   const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
 
+  // Categorías presentes (para el selector en 2 pasos: categoría → artículo)
+  const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
+
   const valid = lineasValidas.length > 0 && Number(precio) > 0;
 
   const onSubmit = async () => {
@@ -6290,14 +6293,24 @@ function FormVenta() {
         {lineas.map((l, i) => {
           const sku = skus.find(s => s.id === l.skuId);
           const subtotal = (sku?.cpp || 0) * Number(l.qty);
+          const lineCat = l.cat || sku?.cat || '';
           return (
             <div key={l.id} className="line-row">
-              <select className="select" value={l.skuId} onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
-                <option value="">— selecciona SKU —</option>
-                {skus.filter(s => s.id !== 'LEGACY-SALE').map(s => (
-                  <option key={s.id} value={s.id}>{s.nm} · {s.id}</option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
+                <select className="select" style={{ flex: '0 0 118px' }} value={lineCat}
+                  onChange={e => updateLinea(l.id, { cat: e.target.value, skuId: '' })}>
+                  <option value="">Categoría…</option>
+                  {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <select className="select" style={{ flex: 1, minWidth: 0 }} value={l.skuId}
+                  disabled={!lineCat}
+                  onChange={e => updateLinea(l.id, { skuId: e.target.value })}>
+                  <option value="">{lineCat ? '— artículo —' : '↤ elige categoría'}</option>
+                  {skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat === lineCat)
+                       .sort((a, b) => (a.nm || '').localeCompare(b.nm || ''))
+                       .map(s => <option key={s.id} value={s.id}>{s.nm}</option>)}
+                </select>
+              </div>
               <input className="input num" type="number" min="1" value={l.qty}
                 onChange={e => updateLinea(l.id, { qty: e.target.value })} placeholder="Cant." />
               <span className="num" style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'right' }}>
