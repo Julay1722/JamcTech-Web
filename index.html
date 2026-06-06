@@ -1902,6 +1902,9 @@ function EditLoteModal({ open, lote, onClose }) {
         envio:   Number(envio)   || 0,
         courier: Number(courier) || 0,
         otros:   Number(otros)   || 0,
+        // Cuentas de cada costo: si un costo es nuevo, updateLoteHeader crea
+        // la salida de caja desde la cuenta indicada.
+        cuentaEnvio, cuentaCourier, cuentaOtros,
         notas,
       });
       // 2) Líneas: persistir nuevas, actualizar las modificadas

@@ -1358,30 +1358,45 @@ async function updateLoteHeader(loteDashId, patch) {
       const { error } = await sb.from('lotes').update(lhRow).eq('id', lote._loteIdNum);
       if (error) throw new Error(`updateLoteHeader lote: ${error.message}`);
     }
-    // ── Sincroniza los CFs satélites linkeados a este lote:
-    // si se cambió envío/courier/otros, actualiza la salida del CF
-    // correspondiente para que el balance de la cuenta refleje el nuevo monto.
-    // Los CFs se identifican por concepto/notas porque createLote crea uno por costo.
+    // ── Sincroniza los CFs satélites (salidas de caja) linkeados a este lote:
+    // si un costo (envío/courier/otros) tiene CF, actualiza su salida; si NO
+    // tiene y el costo es NUEVO (cambió respecto al valor previo del lote),
+    // CREA la salida de caja. Así pagar el courier al editar el lote SÍ genera
+    // registro en la cuenta. Delta-based para no duplicar costos ya migrados.
     if (patch.envio != null || patch.courier != null || patch.otros != null) {
       const { data: cfsLote } = await sb.from('movimientos')
         .select('id, notas, salida')
         .eq('lote_id', lote._loteIdNum);
-      if (Array.isArray(cfsLote)) {
-        const updates = [];
-        cfsLote.forEach((cf) => {
-          const n = (cf.notas || '').toLowerCase();
-          let newSalida = null;
-          if      (patch.envio   != null && n.includes('envío china') ) newSalida = Number(patch.envio)   || 0;
-          else if (patch.courier != null && n.includes('courier usa') ) newSalida = Number(patch.courier) || 0;
-          else if (patch.otros   != null && n.includes('aduana')      ) newSalida = Number(patch.otros)   || 0;
-          if (newSalida != null && newSalida !== cf.salida) {
-            updates.push(sb.from('movimientos').update({ salida: newSalida }).eq('id', cf.id));
-          }
-        });
-        if (updates.length > 0) {
-          await Promise.all(updates);
-          await loadCashflow();
+      const existentes = Array.isArray(cfsLote) ? cfsLote : [];
+      const costos = [
+        { val: patch.envio,   old: lote.envio,   pat: 'envío china', cuenta: patch.cuentaEnvio,   tipo: 'ENVIO_LOTE',       label: 'Envío China → USA' },
+        { val: patch.courier, old: lote.courier, pat: 'courier usa', cuenta: patch.cuentaCourier, tipo: 'ENVIO_LOTE',       label: 'Courier USA → DR'  },
+        { val: patch.otros,   old: lote.otros,   pat: 'aduana',      cuenta: patch.cuentaOtros,   tipo: 'COMPRA_OPERATIVA', label: 'Otros (aduana/comisión) lote' },
+      ];
+      const ops = [];
+      for (const c of costos) {
+        if (c.val == null) continue;
+        const nuevo = Number(c.val) || 0;
+        const cf = existentes.find((x) => (x.notas || '').toLowerCase().includes(c.pat));
+        if (cf) {
+          if (nuevo !== Number(cf.salida)) ops.push(sb.from('movimientos').update({ salida: nuevo }).eq('id', cf.id));
+        } else if (nuevo > 0 && nuevo !== (Number(c.old) || 0)) {
+          // Costo nuevo sin CF previo → registrar la salida de caja
+          ops.push(sb.from('movimientos').insert({
+            fecha:          patch.fecha || lote.fecha,
+            tipo:           c.tipo,
+            cuenta_id:      _findCuentaId(c.cuenta, DEFAULT_CUENTA_ID),
+            contraparte_id: null,
+            entrada:        0,
+            salida:         nuevo,
+            lote_id:        lote._loteIdNum,
+            notas:          `${c.label} · lote ${lote.id}`,
+          }));
         }
+      }
+      if (ops.length > 0) {
+        await Promise.all(ops);
+        await loadCashflow();
       }
     }
   } else {
