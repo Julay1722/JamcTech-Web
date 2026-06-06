@@ -6344,9 +6344,9 @@ function FormVenta() {
 
       <div className="row">
         <div className="field">
-          <div className="field-label">Precio facturado total (RD$)</div>
+          <div className="field-label">Precio de los productos (RD$)</div>
           <input className="input num" type="number" value={precio} onChange={e => setPrecio(e.target.value)} placeholder="0" />
-          <div className="field-hint">Lo que efectivamente cobraste · ganancia se prorratea ponderado por costo</div>
+          <div className="field-hint">Solo los productos · el <b>envío cobrado</b> (arriba) se suma aparte al facturado</div>
         </div>
         <div className="field">
           <div className="field-label">Notas</div>
@@ -6392,15 +6392,28 @@ function FormVenta() {
         }}>Limpiar</button>
       </div>
 
-      {(precio || lineasValidas.length > 0) && (
+      {(precio || lineasValidas.length > 0) && (() => {
+        const envioCobrado = Number(envio) || 0;
+        const courier = Number(gastoEnvio) || 0;
+        const facturadoTotal = (Number(precio) || 0) + envioCobrado;  // productos + envío (= lo que pagó el cliente)
+        const netoEnvio = envioCobrado - courier;
+        return (
         <div className="summary">
-          <div className="summary-item"><span className="lbl">Facturado</span><span className="val">{fmtCurrency(Number(precio) || 0)}</span></div>
-          <div className="summary-item"><span className="lbl">Costo</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
-          <div className="summary-item"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
-          <div className="summary-item" title="Ganancia sobre el precio de venta"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
+          <div className="summary-item" title="Productos + envío cobrado = lo que pagó el cliente">
+            <span className="lbl">Facturado{envioCobrado > 0 ? ` (incl. envío ${fmtCurrency(envioCobrado)})` : ''}</span>
+            <span className="val">{fmtCurrency(facturadoTotal)}</span></div>
+          <div className="summary-item"><span className="lbl">Costo productos</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
+          <div className="summary-item" title="Ganancia de los productos (el envío no entra aquí)"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
+          <div className="summary-item" title="Ganancia sobre el precio de los productos"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
           <div className="summary-item" title="Cuánto le metiste por encima del costo"><span className="lbl">Markup</span><span className="val">{markup.toFixed(1)}%</span></div>
+          {(envioCobrado > 0 || courier > 0) && (
+            <div className="summary-item" title="Envío cobrado al cliente − courier que pagaste">
+              <span className="lbl">Neto envío</span>
+              <span className="val" style={{ color: netoEnvio >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(netoEnvio)}</span></div>
+          )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
