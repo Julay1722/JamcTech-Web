@@ -183,6 +183,7 @@ async function loadVentas() {
         )
       `)
       .order('fecha', { ascending: false })
+      .order('id', { ascending: false })  // mismo día → la venta más reciente arriba
       .limit(2000);
     if (error) throw error;
 
@@ -230,6 +231,39 @@ async function loadVentas() {
         })),
       };
     });
+
+    // ── Ganancia NETA: restar los gastos DIRECTOS linkeados a cada venta
+    // (courier/comisión registrados como movimiento con nota "Asociado a venta
+    // {código}"). El dashboard muestra la ganancia real, no el margen bruto.
+    // gananciaTotal pasa a ser NETA → Resumen, gráficos y listas la usan directo.
+    try {
+      const { data: gastosAsoc } = await sb
+        .from('movimientos')
+        .select('salida, notas')
+        .ilike('notas', '%Asociado a venta %')
+        .gt('salida', 0);
+      const gastoMap = {};
+      (gastosAsoc || []).forEach((g) => {
+        const m = (g.notas || '').match(/Asociado a venta (\S+)/);
+        if (m) gastoMap[m[1]] = (gastoMap[m[1]] || 0) + (parseFloat(g.salida) || 0);
+      });
+      ventas.forEach((v) => {
+        const gasto = gastoMap[v.idVenta] || 0;
+        v.gastoAsociado = gasto;
+        v.gananciaBruta = v.gananciaTotal;  // margen de producto (DB) — lo usan compensaciones
+        // Ganancia REAL (neta) = todo lo recibido (facturado, incl. envío cobrado)
+        // − costo del producto − gastos directos de la venta (courier/comisión).
+        // Solo cuando conocemos el costo real; las legacy (costo 0) mantienen su estimado.
+        if ((v.baseCostTotal || 0) > 0) {
+          v.gananciaTotal = (v.precioFacturadoTotal || 0) - (v.baseCostTotal || 0) - gasto;
+        } else {
+          v.gananciaTotal = v.gananciaTotal - gasto;
+        }
+        v.margenPct = v.precioFacturadoTotal > 0 ? (v.gananciaTotal / v.precioFacturadoTotal) * 100 : 0;
+      });
+    } catch (e) {
+      console.warn('[SB/ventas] no se pudieron restar gastos asociados:', e.message);
+    }
 
     // Lineas planas (mismo shape que ventasRaw de airtable)
     const lineas = [];
@@ -1102,6 +1136,26 @@ async function createVenta(venta) {
   // 3. Refetch para que los totales recalculados por trigger lleguen al cache
   await loadVentas();
   const newGrouped = (window.__AIRTABLE_DATA__.ventas || []).find((v) => v.idVenta === codigo);
+  // 4. INGRESO DE CAJA: el dinero que pagó el cliente entra a la cuenta de cobro.
+  // Sin esto la venta NO sube el capital ni aparece en movimientos.
+  try {
+    const entrada = Number(newGrouped?.precioFacturadoTotal) || Number(venta.precioFacturadoTotal) || 0;
+    if (entrada > 0) {
+      await sb.from('movimientos').insert({
+        fecha:          venta.fecha,
+        tipo:           'VENTA',
+        cuenta_id:      _findCuentaId(venta.cuentaCobro, DEFAULT_CUENTA_ID),
+        contraparte_id: canalId,
+        entrada,
+        salida:         0,
+        venta_id:       header.id,
+        notas:          `Ingreso venta ${codigo}`,
+      });
+      await loadCashflow();
+    }
+  } catch (e) {
+    console.warn('[SB/createVenta] no se pudo crear el ingreso de caja:', e.message);
+  }
   return {
     idVenta:     codigo,
     airtableIds: (items || []).map((i) => 'vi-' + i.id),
@@ -1114,10 +1168,12 @@ async function removeVenta(idVenta) {
   const venta = (window.__AIRTABLE_DATA__?.ventas || []).find((v) => v.idVenta === idVenta);
   if (!venta) throw new Error(`venta no encontrada: ${idVenta}`);
   const vid = _stripPrefix(venta._airtableId);
-  // ventas_items cascadea via FK. Movimientos con venta_id quedan huérfanos
-  // (mismo comportamiento que tenías con Airtable).
+  // Borra el movimiento de ingreso linkeado (entrada de caja) para no dejarlo
+  // huérfano inflando el capital. ventas_items cascadea via FK.
+  await sb.from('movimientos').delete().eq('venta_id', vid);
   const { error } = await sb.from('ventas').delete().eq('id', vid);
   if (error) throw new Error(`removeVenta: ${error.message}`);
+  await loadCashflow();
   // Sincroniza cache
   if (window.__AIRTABLE_DATA__.ventas) {
     window.__AIRTABLE_DATA__.ventas    = window.__AIRTABLE_DATA__.ventas.filter((v) => v.idVenta !== idVenta);

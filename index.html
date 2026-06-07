@@ -1105,7 +1105,7 @@ function OverviewPage({ period }) {
       <div className="kpi-row">
         <KPI label={period === 'todo' ? 'Ventas histórico' : 'Ventas en período'} value={fmtNum(totalVentas)} currency
              delta={period === 'todo' ? growthMoM : null} deltaLabel={period === 'todo' ? 'MoM' : `${ventas.length} ventas`} />
-        <KPI label="Ganancia bruta" value={fmtNum(totalGanancia)} currency
+        <KPI label="Ganancia neta" value={fmtNum(totalGanancia)} currency
              delta={margenPct} deltaLabel="margen" />
         <KPI label="Capital actual" value={fmtNum(capitalActual)} currency
              delta={null} deltaLabel={cuentasLiquidasCount > 0 ? `${cuentasLiquidasCount} cuenta(s) líquida(s)` : 'cash flow neto'} />
@@ -5378,7 +5378,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     const okFecha = (f) => typeof f === 'string' && f.slice(0, 7) === ym
       && (!hastaStr || f <= hastaStr) && (!desdeStr || f >= desdeStr);
     const ganancia = (data.ventas || []).filter(v => okFecha(v.fecha))
-      .reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+      .reduce((s, v) => s + (v.gananciaBruta != null ? v.gananciaBruta : (v.gananciaTotal || 0)), 0);
     const cfMes = (data.cashflow || []).filter(m => okFecha(m.f));
     const gastosOp = cfMes.filter(m => (m.s || 0) > 0 && m._naturaleza === 'CASHFLOW'
         && _esGastoOp(m.c) && !(typeof m.notas === 'string' && /regla #/.test(m.notas)))
@@ -5423,7 +5423,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
       return f && f >= inicio && f <= corteFecha;
     });
     const revenueDesdeInicio = ventas.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
-    const gananciaDesdeInicio = ventas.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const gananciaDesdeInicio = ventas.reduce((s, v) => s + (v.gananciaBruta != null ? v.gananciaBruta : (v.gananciaTotal || 0)), 0);
     const unidadesDesdeInicio = ventas.reduce((s, v) => s + (v.cantidadTotal || 0), 0);
 
     let generado = 0, detalle = '';
@@ -5466,7 +5466,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
             const f = v.fecha ? new Date(v.fecha) : null;
             return f && f >= desde && f < hasta;
           });
-          const gananciaAño = ventasAño.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+          const gananciaAño = ventasAño.reduce((s, v) => s + (v.gananciaBruta != null ? v.gananciaBruta : (v.gananciaTotal || 0)), 0);
           acumulado += Math.max(0, gananciaAño) * pct;
         }
         generado = acumulado;
@@ -5520,7 +5520,7 @@ function ReglasCompensacionList({ inversor, esDueno }) {
       return f && f >= inicioMes && f <= corteFecha;
     });
     const revMes = vsMes.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
-    const ganMes = vsMes.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const ganMes = vsMes.reduce((s, v) => s + (v.gananciaBruta != null ? v.gananciaBruta : (v.gananciaTotal || 0)), 0);
     const udMes  = vsMes.reduce((s, v) => s + (v.cantidadTotal || 0), 0);
     switch (tipo) {
       case 'SALARIO_PRO_LABORE':   return cuota;                       // fijo
@@ -5808,7 +5808,7 @@ function SimuladorModal({ open, tipo, params, onClose }) {
     const ventasReales = ventas.filter(v => v.idVenta !== 'V-LEG-0000');
     if (ventasReales.length === 0) return null;
     const revenue   = ventasReales.reduce((s, v) => s + (v.precioFacturadoTotal || 0), 0);
-    const ganancia  = ventasReales.reduce((s, v) => s + (v.gananciaTotal || 0), 0);
+    const ganancia  = ventasReales.reduce((s, v) => s + (v.gananciaBruta != null ? v.gananciaBruta : (v.gananciaTotal || 0)), 0);
     const mesesUnicos = new Set(ventasReales.map(v => (v.fecha || '').slice(0, 7))).size;
     const nMeses = Math.max(1, mesesUnicos);
     // Drawdown promedio: salidas APORTE_DUENO si las hay (raro), o fallback
@@ -6205,6 +6205,7 @@ function FormVenta() {
   const [fecha, setFecha] = useState(window.HOY || HOY);
   const [canal, setCanal] = useState('Facebook');
   const [envio, setEnvio] = useState(0);
+  const [cuentaCobro, setCuentaCobro] = useState('BHD Débito');  // a qué cuenta entra el pago de la venta
   const [precio, setPrecio] = useState('');
   const [notas, setNotas] = useState('');
   const [lineas, setLineas] = useState([{ id: 1, skuId: '', qty: 1 }]);
@@ -6249,6 +6250,7 @@ function FormVenta() {
         fecha, canal,
         envio: Number(envio) || 0,
         precioFacturadoTotal: Number(precio),
+        cuentaCobro,
         lineas: lineasValidas.map(l => ({ skuId: l.skuId, qty: Number(l.qty) })),
         nota: notas,
       });
@@ -6283,7 +6285,7 @@ function FormVenta() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
-      <div className="row-3">
+      <div className="row-4">
         <div className="field">
           <div className="field-label">Fecha</div>
           <input className="input num" type="date" value={fecha} onChange={e => setFecha(e.target.value)} />
@@ -6301,6 +6303,14 @@ function FormVenta() {
         <div className="field">
           <div className="field-label">Envío cobrado (RD$)</div>
           <input className="input num" type="number" value={envio} onChange={e => setEnvio(e.target.value)} />
+        </div>
+        <div className="field">
+          <div className="field-label">Cuenta de cobro</div>
+          <select className="select" value={cuentaCobro} onChange={e => setCuentaCobro(e.target.value)}>
+            {cuentas.length > 0
+              ? cuentas.map(c => <option key={c.nombre} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
+              : <option value="BHD Débito">BHD Débito</option>}
+          </select>
         </div>
       </div>
 
@@ -6395,22 +6405,22 @@ function FormVenta() {
       {(precio || lineasValidas.length > 0) && (() => {
         const envioCobrado = Number(envio) || 0;
         const courier = Number(gastoEnvio) || 0;
-        const facturadoTotal = (Number(precio) || 0) + envioCobrado;  // productos + envío (= lo que pagó el cliente)
-        const netoEnvio = envioCobrado - courier;
+        const facturadoTotal = (Number(precio) || 0) + envioCobrado;     // todo lo que pagó el cliente
+        const gananciaReal = facturadoTotal - costoTotal - courier;       // ganancia neta real
+        const margenReal = facturadoTotal > 0 ? (gananciaReal / facturadoTotal) * 100 : 0;
+        const markupReal = costoTotal > 0 ? (gananciaReal / costoTotal) * 100 : 0;
         return (
         <div className="summary">
           <div className="summary-item" title="Productos + envío cobrado = lo que pagó el cliente">
             <span className="lbl">Facturado{envioCobrado > 0 ? ` (incl. envío ${fmtCurrency(envioCobrado)})` : ''}</span>
             <span className="val">{fmtCurrency(facturadoTotal)}</span></div>
           <div className="summary-item"><span className="lbl">Costo productos</span><span className="val">{fmtCurrency(costoTotal)}</span></div>
-          <div className="summary-item" title="Ganancia de los productos (el envío no entra aquí)"><span className="lbl">Ganancia</span><span className="val" style={{ color: ganancia > 0 ? 'var(--success)' : 'var(--text)' }}>{fmtCurrency(ganancia)}</span></div>
-          <div className="summary-item" title="Ganancia sobre el precio de los productos"><span className="lbl">Margen</span><span className="val">{margen.toFixed(1)}%</span></div>
-          <div className="summary-item" title="Cuánto le metiste por encima del costo"><span className="lbl">Markup</span><span className="val">{markup.toFixed(1)}%</span></div>
-          {(envioCobrado > 0 || courier > 0) && (
-            <div className="summary-item" title="Envío cobrado al cliente − courier que pagaste">
-              <span className="lbl">Neto envío</span>
-              <span className="val" style={{ color: netoEnvio >= 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(netoEnvio)}</span></div>
-          )}
+          {courier > 0 && <div className="summary-item"><span className="lbl">Courier/gasto</span><span className="val" style={{ color: 'var(--danger)' }}>−{fmtCurrency(courier)}</span></div>}
+          <div className="summary-item" title="Ganancia REAL = facturado − costo − courier (lo que de verdad te queda)">
+            <span className="lbl">Ganancia real</span>
+            <span className="val" style={{ color: gananciaReal > 0 ? 'var(--success)' : 'var(--danger)' }}>{fmtCurrency(gananciaReal)}</span></div>
+          <div className="summary-item" title="Ganancia real sobre lo facturado"><span className="lbl">Margen</span><span className="val">{margenReal.toFixed(1)}%</span></div>
+          <div className="summary-item" title="Ganancia real sobre el costo"><span className="lbl">Markup</span><span className="val">{markupReal.toFixed(1)}%</span></div>
         </div>
         );
       })()}
@@ -7271,18 +7281,9 @@ function VentasPageExt({ period }) {
               // SKU id → nombre lookup
               const skuName = {};
               (data.skus || []).forEach(s => { skuName[s.id] = s.nm || s.id; });
-              // Gastos asociados por venta (courier/comisión registrados como
-              // movimiento separado con nota "Asociado a venta {código}").
-              const gastoPorVenta = {};
-              (data.cashflow || []).forEach(cf => {
-                const m = (cf.notas || '').match(/Asociado a venta (\S+)/);
-                if (m && Number(cf.s) > 0) gastoPorVenta[m[1]] = (gastoPorVenta[m[1]] || 0) + Number(cf.s);
-              });
               return filtered.map(v => {
                 const items = v.lineas || [];
                 const costoTotal = items.reduce((s, l) => s + (l.baseCost || (Number(l.costoUd || 0) * Number(l.qty || 0))), 0);
-                const gastoAsoc = gastoPorVenta[v.idVenta] || 0;
-                const gananciaNeta = (v.gananciaTotal || 0) - gastoAsoc;
                 return (
                   <tr key={v.idVenta}>
                     <td>
@@ -7305,10 +7306,10 @@ function VentasPageExt({ period }) {
                     <td className="num right neg">{fmtCurrency(costoTotal)}</td>
                     <td className="num right">{fmtCurrency(v.precioFacturadoTotal)}</td>
                     <td className="num right pos">{fmtCurrency(v.gananciaTotal)}
-                      {gastoAsoc > 0 && (
-                        <div style={{ fontSize: 10, fontWeight: 400, color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)' }}
-                          title={`Ganancia neta = bruta ${fmtCurrency(v.gananciaTotal)} − gastos asociados ${fmtCurrency(gastoAsoc)}`}>
-                          neta {fmtCurrency(gananciaNeta)}
+                      {v.gastoAsociado > 0 && (
+                        <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-3)' }}
+                          title={`Ganancia real (ya se restó RD$${fmtNum(v.gastoAsociado)} de courier/comisión)`}>
+                          neto · −{fmtCurrency(v.gastoAsociado)}
                         </div>
                       )}
                     </td>
@@ -7506,14 +7507,14 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           <span className="muted">Productos: {fmtCurrency(subtotalItems)}</span>
           {Number(envio) > 0 && <span className="muted">+ Envío: {fmtCurrency(Number(envio))}</span>}
           <span>Total facturado: <b>{fmtCurrency(totalFacturado)}</b></span>
-          <span className="pos">Ganancia: {fmtCurrency(ganancia)}</span>
-          {(gastosExistentes > 0 || Number(gastoMonto) > 0) && (
-            <span title={`Ganancia − gastos asociados (${fmtCurrency(gastosExistentes + (Number(gastoMonto) || 0))})`} style={{ color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
-              Neta: {fmtCurrency(gananciaNeta)}
-            </span>
-          )}
-          <span className="muted" title="Ganancia sobre el precio de venta">Margen: {margen.toFixed(1)}%</span>
-          <span className="muted" title="Cuánto le metiste por encima del costo">Markup: {markup.toFixed(1)}%</span>
+          <span className="pos" style={{ color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+            Ganancia: {fmtCurrency(gananciaNeta)}
+            {(gastosExistentes + (Number(gastoMonto) || 0)) > 0 && (
+              <span style={{ fontSize: 10, color: 'var(--text-3)', marginLeft: 4 }}>(real, −{fmtCurrency(gastosExistentes + (Number(gastoMonto) || 0))} gastos)</span>
+            )}
+          </span>
+          <span className="muted" title="Ganancia real sobre el precio de venta">Margen: {(subtotalItems > 0 ? (gananciaNeta / subtotalItems) * 100 : 0).toFixed(1)}%</span>
+          <span className="muted" title="Ganancia real sobre el costo">Markup: {(costoTotal > 0 ? (gananciaNeta / costoTotal) * 100 : 0).toFixed(1)}%</span>
         </div>
 
         <div className="field" style={{ marginBottom: 'var(--s-4)' }}><div className="field-label">Notas</div>
