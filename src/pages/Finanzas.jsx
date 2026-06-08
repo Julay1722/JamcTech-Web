@@ -109,51 +109,67 @@ function ResumenTab({ prestamos, inversores, cuentas }) {
   const invExternos = inversores.filter((i) => !i.esDueno);
   const pendienteInv = invExternos.reduce((s, i) => s + i.saldoPendiente, 0);
   const aportadoInv = invExternos.reduce((s, i) => s + i.capitalInvertido, 0);
+  const coop = prestamos.find((p) => p.tipo === 'PRESTAMO');
+  const nConSaldo = prestamos.filter((p) => p.saldoPendiente > 0).length;
+  const prestamosNoTarjeta = prestamos.filter((p) => p.tipo !== 'TARJETA_CREDITO');
+  const lineasYTarjetas = prestamos.filter((p) => p.tipo === 'LINEA_CREDITO' || p.tipo === 'TARJETA_CREDITO');
 
   return (
     <>
       <div className="kpi-row">
-        <KPI label="Deuda total" currency value={intNum(deudaTotal)} deltaLabel={`${prestamos.filter((p) => p.saldoPendiente > 0).length} productos con saldo`} />
         <KPI label="Capital líquido" currency value={intNum(liquido)} deltaLabel="débito + efectivo" />
-        <KPI label="Pendiente a inversores" currency value={intNum(pendienteInv)} deltaLabel={`${invExternos.length} externo(s)`} />
-        <KPI label="Capital de inversores" currency value={intNum(aportadoInv)} deltaLabel="aportado al negocio" />
+        <KPI label="Deuda total" currency value={intNum(deudaTotal)} tone="neg" deltaLabel={`${nConSaldo} con saldo`} />
+        {coop && <KPI label="Saldo Coop" currency value={intNum(coop.saldoPendiente)} deltaLabel="préstamo principal" />}
+        <KPI label="Pendiente a inversores" currency value={intNum(pendienteInv)} deltaLabel={`${invExternos.length} externo(s) · ${money(aportadoInv)} aportado`} />
       </div>
 
       <div className="grid-2">
         <div className="section">
           <div className="section-head">
-            <div className="section-title">Deudas</div>
-            <div className="section-desc">{prestamos.length} producto(s) · saldo desde vw_saldo_prestamo</div>
+            <div><div className="section-title">Préstamos y líneas</div><div className="section-desc">{prestamosNoTarjeta.length} producto(s)</div></div>
           </div>
-          <DataTable
-            getRowKey={(p) => p.id}
+          <DataTable getRowKey={(p) => p.id}
             columns={[
               { key: 'nombre', label: 'Producto' },
-              { key: 'tipo', label: 'Tipo', render: (p) => <span className="muted">{p.tipo.replace('_', ' ').toLowerCase()}</span> },
-              { key: 'saldoPendiente', label: 'Saldo', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
+              { key: 'tipo', label: 'Tipo', render: (p) => <span className="muted">{p.tipo === 'LINEA_CREDITO' ? 'línea' : 'préstamo'}</span> },
+              { key: 'monto', label: 'Monto / Límite', align: 'right', num: true, render: (p) => money(p.tipo === 'LINEA_CREDITO' ? p.limiteCredito : p.montoInicial, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+              { key: 'cap', label: 'Pagado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(p.capitalPagado)}</span> },
+              { key: 'saldo', label: 'Saldo', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
+              { key: 'tasa', label: 'Tasa', align: 'right', num: true, render: (p) => (p.tasaMensual ? `${(p.tasaMensual * 100).toFixed(2)}%` : '—') },
             ]}
-            rows={prestamos}
-            empty="Sin préstamos · agrégalos en Deudas › Préstamos"
-          />
+            rows={prestamosNoTarjeta} empty="Sin préstamos · agrégalos en Deudas" />
         </div>
 
         <div className="section">
           <div className="section-head">
-            <div className="section-title">Inversores externos</div>
-            <div className="section-desc">{invExternos.length} inversor(es) que esperan retorno</div>
+            <div><div className="section-title">Inversores externos</div><div className="section-desc">{invExternos.length} esperan retorno</div></div>
           </div>
-          <DataTable
-            getRowKey={(i) => i.id}
+          <DataTable getRowKey={(i) => i.id}
             columns={[
               { key: 'nombre', label: 'Inversor' },
-              { key: 'capitalInvertido', label: 'Aporte', align: 'right', num: true, render: (i) => money(i.capitalInvertido) },
-              { key: 'totalDevuelto', label: 'Pagado', align: 'right', num: true, render: (i) => <span style={{ color: 'var(--success)' }}>{money(i.totalDevuelto)}</span> },
-              { key: 'saldoPendiente', label: 'Pendiente', align: 'right', num: true, render: (i) => <span style={{ color: 'var(--warning)' }}>{money(i.saldoPendiente)}</span> },
+              { key: 'cap', label: 'Aporte', align: 'right', num: true, render: (i) => money(i.capitalInvertido) },
+              { key: 'pag', label: 'Pagado', align: 'right', num: true, render: (i) => <span style={{ color: 'var(--success)' }}>{money(i.totalDevuelto)}</span> },
+              { key: 'pen', label: 'Pendiente', align: 'right', num: true, render: (i) => <span style={{ color: 'var(--warning)' }}>{money(i.saldoPendiente)}</span> },
             ]}
-            rows={invExternos}
-            empty="Sin inversores externos · agrégalos en la pestaña Inversores"
-          />
+            rows={invExternos} empty="Sin inversores externos" />
         </div>
+      </div>
+
+      <div className="section">
+        <div className="section-head">
+          <div><div className="section-title">Uso de líneas y tarjetas</div><div className="section-desc">crédito revolvente · % utilizado del límite</div></div>
+        </div>
+        <DataTable getRowKey={(p) => p.id}
+          columns={[
+            { key: 'nombre', label: 'Producto' },
+            { key: 'usado', label: 'Usado', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            { key: 'limite', label: 'Límite', align: 'right', num: true, render: (p) => money(p.limiteCredito, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            {
+              key: 'uso', label: 'Utilización', align: 'right',
+              render: (p) => { const pct = p.limiteCredito > 0 ? (p.usado / p.limiteCredito) * 100 : 0; return <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}><div style={{ width: 100 }}><Bar pct={pct} /></div><span className={`badge ${usoCls(pct)}`} style={{ minWidth: 42, textAlign: 'center' }}>{pct.toFixed(0)}%</span></div>; },
+            },
+          ]}
+          rows={lineasYTarjetas} empty="Sin líneas ni tarjetas" />
       </div>
     </>
   );
@@ -211,51 +227,110 @@ function AnalisisTab({ prestamosTab, tarjetas, inversores, cuentas }) {
     if (cobertura < 1) { semaforo = 'danger'; mensaje = 'Riesgo: el flujo mensual NO cubre los pagos de deuda.'; }
     else if (cobertura < 1.5) { semaforo = 'warning'; mensaje = 'Ajustado: el flujo cubre los pagos pero con poco margen.'; }
 
-    const deudaTotal = [...prestamosTab, ...tarjetas].reduce((s, p) => s + p.saldoPendiente, 0);
-    return { cashflowProm, pagoTotal, pagoPrestamos, pagoTarjetas, cobertura, semaforo, mensaje, breakdown, deudaTotal, nMeses: meses.length };
-  }, [data.movimientos, data.cuotas, prestamosTab, tarjetas]);
+    const deudaPrestamos = prestamosTab.reduce((s, p) => s + p.saldoPendiente, 0);
+    const deudaTarjetas = tarjetas.reduce((s, p) => s + p.saldoPendiente, 0);
+    const deudaInversores = (inversores || []).filter((i) => !i.esDueno).reduce((s, i) => s + i.saldoPendiente, 0);
+    const deudaTotal = deudaPrestamos + deudaTarjetas + deudaInversores;
+
+    // Sobra/falta mensual y margen de colapso.
+    const sobraFalta = cashflowProm - pagoTotal;
+    const margenColapso = cashflowProm > pagoTotal && cashflowProm > 0 ? (sobraFalta / cashflowProm) * 100 : 0;
+
+    // Utilización por línea/tarjeta (barras de progreso).
+    const utilizacion = [...tarjetas, ...prestamosTab.filter((p) => p.tipo === 'LINEA_CREDITO')]
+      .filter((p) => p.limiteCredito > 0)
+      .map((p) => ({ id: p.id, nombre: p.nombre, usado: p.usado, limite: p.limiteCredito, moneda: p.moneda, pct: (p.usado / p.limiteCredito) * 100 }));
+
+    // Orden de pago (avalancha): la deuda más cara primero (tasa mensual DESC).
+    const ordenPago = [...prestamosTab, ...tarjetas]
+      .filter((p) => p.saldoPendiente > 0)
+      .map((p) => ({ id: p.id, nombre: p.nombre, tipo: p.tipo, saldo: p.saldoPendiente, tasa: p.tasaMensual || 0, interesMensual: p.saldoPendiente * (p.tasaMensual || 0), moneda: p.moneda }))
+      .sort((x, y) => (y.tasa - x.tasa) || (y.interesMensual - x.interesMensual));
+
+    return { cashflowProm, pagoTotal, pagoPrestamos, pagoTarjetas, cobertura, semaforo, mensaje, breakdown, deudaTotal, deudaPrestamos, deudaTarjetas, deudaInversores, sobraFalta, margenColapso, utilizacion, ordenPago, nMeses: meses.length };
+  }, [data.movimientos, data.cuotas, prestamosTab, tarjetas, inversores]);
 
   return (
     <>
       <div className="kpi-row">
         <KPI label="Cash flow mensual prom." currency value={intNum(a.cashflowProm)} delta={a.cashflowProm >= 0 ? 1 : -1} deltaLabel={`últimos ${a.nMeses} mes(es)`} />
         <KPI label="Pago mensual a deudas" currency value={intNum(a.pagoTotal)} deltaLabel="cuotas + mínimos est." />
-        <KPI label="Cobertura" value={a.cobertura >= 99 ? '∞' : a.cobertura.toFixed(2) + '×'} deltaLabel="flujo / pagos" />
-        <KPI label="Deuda total" currency value={intNum(a.deudaTotal)} deltaLabel="saldo pendiente" />
+        <KPI label="Cobertura" value={a.cobertura >= 99 ? '∞' : a.cobertura.toFixed(2) + '×'} tone={a.semaforo} deltaLabel="flujo / pagos" />
+        <KPI label="Sobra / falta mensual" currency value={intNum(a.sobraFalta)} tone={a.sobraFalta >= 0 ? 'success' : 'danger'} deltaLabel={a.sobraFalta >= 0 ? `margen ${a.margenColapso.toFixed(0)}%` : 'déficit'} />
       </div>
 
-      <div className="section">
-        <div className="section-head"><div className="section-title">Semáforo de deuda</div></div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 'var(--s-3)' }}>
-          <span style={{ width: 18, height: 18, borderRadius: '50%', background: `var(--${a.semaforo})`, flexShrink: 0 }} />
-          <div>
+      {/* Semáforo grande con barra de cobertura */}
+      <div className="section" style={{ borderLeft: `3px solid var(--${a.semaforo})` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 'var(--s-2) var(--s-3)' }}>
+          <span style={{ width: 16, height: 16, borderRadius: '50%', background: `var(--${a.semaforo})`, flexShrink: 0, boxShadow: `0 0 8px var(--${a.semaforo})` }} />
+          <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, color: `var(--${a.semaforo})` }}>
-              {a.semaforo === 'success' ? 'Verde' : a.semaforo === 'warning' ? 'Amarillo' : 'Rojo'}
+              {a.semaforo === 'success' ? 'Cómodo' : a.semaforo === 'warning' ? 'Ajustado' : 'Riesgo'}
             </div>
             <div style={{ fontSize: 13, color: 'var(--text-2)' }}>{a.mensaje}</div>
           </div>
-        </div>
-        <div className="field-hint" style={{ padding: '0 var(--s-3) var(--s-3)' }}>
-          Estimación: préstamos amortizados usan la cuota mediana del schedule; líneas/tarjetas usan 5% del saldo
-          como pago mínimo. El flujo operacional excluye movimientos financieros.
+          <div style={{ width: 200 }}>
+            <Bar pct={Math.min(100, a.cobertura * 33)} color={`var(--${a.semaforo})`} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--text-3)', marginTop: 2 }}><span>0×</span><span>1×</span><span>2×</span><span>3×+</span></div>
+          </div>
         </div>
       </div>
 
+      <div className="grid-2">
+        {/* Utilización de crédito (barras de progreso) */}
+        <div className="section">
+          <div className="section-head"><div><div className="section-title">Utilización de crédito</div><div className="section-desc">% usado del límite por línea/tarjeta</div></div></div>
+          {a.utilizacion.length === 0 ? <div className="empty">Sin líneas ni tarjetas con límite.</div> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)', padding: 'var(--s-2) 0' }}>
+              {a.utilizacion.map((u) => (
+                <div key={u.id}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <span>{u.nombre}</span>
+                    <span className="muted">{money(u.usado, u.moneda === 'USD' ? 'USD$' : 'RD$')} / {money(u.limite, u.moneda === 'USD' ? 'USD$' : 'RD$')} · <b className={usoCls(u.pct)} style={{ color: `var(--${u.pct > 85 ? 'danger' : u.pct > 60 ? 'warning' : 'success'})` }}>{u.pct.toFixed(0)}%</b></span>
+                  </div>
+                  <Bar pct={u.pct} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Desglose de deuda total */}
+        <div className="section">
+          <div className="section-head"><div><div className="section-title">Deuda total · {money(a.deudaTotal)}</div><div className="section-desc">composición por tipo</div></div></div>
+          <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
+            <div className="stat-card"><div className="stat-label">Préstamos/líneas</div><div className="stat-value">{money(a.deudaPrestamos)}</div></div>
+            <div className="stat-card"><div className="stat-label">Tarjetas</div><div className="stat-value">{money(a.deudaTarjetas)}</div></div>
+            <div className="stat-card"><div className="stat-label">Inversores</div><div className="stat-value">{money(a.deudaInversores)}</div></div>
+          </div>
+          {a.deudaTotal > 0 && (
+            <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: `${(a.deudaPrestamos / a.deudaTotal) * 100}%`, background: 'var(--accent)' }} title="Préstamos/líneas" />
+              <div style={{ width: `${(a.deudaTarjetas / a.deudaTotal) * 100}%`, background: 'var(--danger)' }} title="Tarjetas" />
+              <div style={{ width: `${(a.deudaInversores / a.deudaTotal) * 100}%`, background: 'var(--warning)' }} title="Inversores" />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Orden de pago (avalancha) */}
       <div className="section">
         <div className="section-head">
-          <div className="section-title">Desglose de pagos mensuales</div>
-          <div className="section-desc">{a.breakdown.length} producto(s) con saldo</div>
+          <div><div className="section-title">Orden de pago sugerido (avalancha)</div><div className="section-desc">paga primero la deuda más cara · ahorra más interés</div></div>
         </div>
-        <DataTable
-          getRowKey={(r) => r.nombre}
+        <DataTable getRowKey={(r) => r.id}
           columns={[
-            { key: 'nombre', label: 'Producto' },
+            { key: 'prio', label: '#', align: 'right', num: true, render: (r) => a.ordenPago.indexOf(r) + 1 },
+            { key: 'nombre', label: 'Deuda', render: (r) => <>{r.nombre}{a.ordenPago.indexOf(r) === 0 && <span className="badge danger" style={{ marginLeft: 8 }}>Pagar primero</span>}</> },
             { key: 'tipo', label: 'Tipo', render: (r) => <span className="muted">{r.tipo.replace('_', ' ').toLowerCase()}</span> },
-            { key: 'monto', label: 'Pago mensual est.', align: 'right', num: true, render: (r) => money(r.monto) },
+            { key: 'saldo', label: 'Saldo', align: 'right', num: true, render: (r) => money(r.saldo, r.moneda === 'USD' ? 'USD$' : 'RD$') },
+            { key: 'tasa', label: 'Tasa/mes', align: 'right', num: true, render: (r) => (r.tasa ? `${(r.tasa * 100).toFixed(2)}%` : '—') },
+            { key: 'interes', label: 'Interés/mes', align: 'right', num: true, render: (r) => <span style={{ color: 'var(--danger)' }}>{r.interesMensual > 0 ? money(r.interesMensual) : '—'}</span> },
           ]}
-          rows={a.breakdown}
-          empty="Sin deudas con saldo pendiente"
-        />
+          rows={a.ordenPago} empty="Sin deudas con saldo" />
+        <div className="field-hint" style={{ padding: 'var(--s-2) 0 0' }}>
+          Estimación: préstamos amortizados usan la cuota mediana del schedule; líneas/tarjetas usan 5% del saldo como pago mínimo. El flujo operacional excluye movimientos financieros.
+        </div>
       </div>
     </>
   );
@@ -593,6 +668,13 @@ function DetalleInversor({ inversor }) {
           <div className="section-title">{esDueno ? 'Aportes y reglas' : 'Reglas y pagos'} · {inversor.nombre}</div>
           <div className="section-desc">{pagos.length} movimiento(s) · total {esDueno ? 'aportado' : 'pagado'} {money(totalPagado)}</div>
         </div>
+      </div>
+
+      <div className="kpi-row" style={{ marginBottom: 'var(--s-4)' }}>
+        <KPI label="Capital invertido" currency value={intNum(inversor.capitalInvertido)} deltaLabel="aportado al negocio" />
+        <KPI label={esDueno ? 'A devolver' : 'Target a devolver'} value={esDueno ? '∞' : money(inversor.montoPactadoDevolver)} deltaLabel={esDueno ? 'dueño' : 'pactado'} />
+        <KPI label={esDueno ? 'Recibido' : 'Devuelto'} currency value={intNum(inversor.totalDevuelto)} deltaLabel="pagos registrados" />
+        <KPI label="Pendiente" value={esDueno ? '—' : money(inversor.saldoPendiente)} deltaLabel={esDueno ? 'n/a' : 'por devolver'} tone={!esDueno && inversor.saldoPendiente > 0 ? 'warning' : undefined} />
       </div>
 
       <ReglasCompensacionList inversor={inversor} esDueno={esDueno} />
