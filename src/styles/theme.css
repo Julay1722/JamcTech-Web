@@ -336,7 +336,23 @@ textarea:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible 
   .row, .row-3, .row-4 { grid-template-columns: 1fr; }
 }
 @media (max-width: 768px) {
-  .nav { display: none; }
+  /* En móvil la barra lateral pasa a ser una tira horizontal arriba (scrollable)
+     para que la app siga siendo navegable. Desktop no se toca. */
+  .app { flex-direction: column; height: auto; min-height: 100vh; }
+  .app > aside.nav {
+    display: flex !important; flex-direction: row; align-items: center;
+    width: 100% !important; min-width: 0 !important; max-width: none !important;
+    flex: 0 0 auto !important; height: auto;
+    overflow-x: auto; overflow-y: hidden;
+    position: sticky; top: 0; z-index: 60;
+    border-right: none; border-bottom: 1px solid var(--border);
+    padding: 8px var(--s-3); gap: 4px;
+  }
+  .nav .brand, .nav-section-label, .nav-toggle,
+  .nav > div[style*="margin-top"] { display: none; }
+  .nav-item { flex: 0 0 auto; padding: 6px 12px; white-space: nowrap; }
+  .nav-item.active::before { display: none; }
+  .app > main { height: auto; overflow-y: visible; }
   .main { padding: var(--s-4); }
   .kpi-row { grid-template-columns: 1fr 1fr; gap: var(--s-3); }
   .topbar h1 { font-size: 18px; }
