@@ -101,10 +101,11 @@ C:\Users\coco2\OneDrive\Escritorio\V17\
 3. Vende por Facebook → registra venta con SKU + precio. cpp_historico se snapshota
 4. Cliente paga → registra movimiento de cash inflow
 
-**Flujo de dinero:**
-- Cuentas de débito: BHD, Scotia RD, Scotia USD, Qik, Efectivo (5 cuentas)
-- Deudas: 1 préstamo (Coop), 1 línea de crédito (BHD), 3 tarjetas (Scotia RD, Scotia USD, Qik)
-- Inversora: Andrea Correa
+**Flujo de dinero (IDs REALES verificados 2026-06-07 — ver `SCHEMA.md`/`BUGS_DATOS.md`):**
+- **Cuentas (7):** 1 BHD Débito · 2 Efectivo · 3 Scotia CC RD (CREDITO) · 4 Scotia CC USD (CREDITO/USD) · 5 Qik (CREDITO) · 6 BHD Línea (CREDITO) · 7 Scotia Debito USD (DEBITO/USD). Líquidas = solo DEBITO+EFECTIVO (1, 2, 7).
+- **Préstamos (5):** 1 Scotia CC RD · 2 Scotia CC USD · 3 Qik (las 3 TARJETA_CREDITO) · 4 Coop Prestamo (PRESTAMO) · 5 BHD Línea (LINEA_CREDITO).
+- **Modelo dual:** las tarjetas/línea existen como cuenta CREDITO **y** como préstamo (un cargo = DRAWDOWN/entrada ligado al `prestamo_id`, ver regla 7/8).
+- **Inversora:** Andrea Correa (contraparte 8). `inversores` tiene 2 filas (Andrea + dueño; ojo data de prueba "Hola").
 
 **Movimientos tienen `naturaleza` calculada automáticamente:**
 - `CASHFLOW` — ventas, compras, ads, aportes del dueño, etc. (operacional)
@@ -151,7 +152,7 @@ Si Julio decide hacer abonos extra al capital, regenerar el schedule (ver funci�
 
 ## Tipos enum importantes
 
-### `movimiento_tipo` (22 valores)
+### `tipo_movimiento` (22 valores)
 ```
 APORTE_DUENO, APORTE_INVERSOR, VENTA, ENVIO_COBRADO,
 COMPRA_MERCANCIA, COMPRA_OPERATIVA, ENVIO_LOTE,
@@ -161,19 +162,29 @@ PAGO_TRANSPORTE, DRAWDOWN, FEE_BANCARIO, TRANSFERENCIA_INTERNA,
 REFUND_PROVEEDOR, REFUND_CLIENTE, AJUSTE, OTROS
 ```
 
-### `prestamos.tipo`
+> **Nombres reales de los enums** (las docs viejas decían `movimiento_tipo`/
+> `entrada_status`/`lote_status` — incorrecto): `tipo_movimiento`,
+> `tipo_prestamo`, `status_entrada`, `status_lote`, `moneda_tipo`,
+> `categoria_sku`, `tipo_cuenta`, `tipo_contraparte`, `tipo_compensacion`.
+
+### `tipo_prestamo`
 ```
 PRESTAMO, LINEA_CREDITO, TARJETA_CREDITO
 ```
 
-### `entradas.status`
+### `status_entrada`
 ```
 PENDIENTE, RECIBIDO, PERDIDO
 ```
 
-### `categoria` (SKU)
+### `status_lote` (5 valores)
 ```
-Stand, Mouse, Teclado, Headset, Mouse Pad
+PENDIENTE, EN_TRANSITO, EN_COURIER_USA, RECIBIDO, CANCELADO
+```
+
+### `categoria_sku` (UPPERCASE en DB; dashboard mapea a display)
+```
+MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO
 ```
 
 ## Discrepancia conocida

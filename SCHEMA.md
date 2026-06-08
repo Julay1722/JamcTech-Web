@@ -1,6 +1,30 @@
 # JAMC's Tech — Supabase Schema Reference
 
-## Tablas (13)
+> **Verificado contra la DB el 2026-06-07** (proyecto `oicxvnnzocwnqlsojhco`).
+> Los IDs de cuentas/préstamos/contrapartes y los nombres de enum de aquí son
+> los REALES (versiones anteriores de este doc estaban desactualizadas — ver
+> `BUGS_DATOS.md`). Para reglas de negocio ver `CLAUDE.md` y la skill `jamc-reglas`.
+
+## Conteos reales (2026-06-07)
+
+| Tabla | Filas |
+|---|---|
+| skus | 50 (49 reales + placeholder `LEGACY-SALE`) |
+| ventas | 201 |
+| ventas_items | 201 |
+| entradas | 84 |
+| lotes | 20 |
+| movimientos | 288 |
+| cuotas | 4 (todas del Coop; faltan 44 del schedule — ver DEU-3) |
+| prestamos | 5 |
+| inversores | 2 (Andrea + dueño; ojo data de prueba) |
+| contrapartes | 19 |
+| disenos | 4 |
+| cuentas | 7 |
+
+---
+
+## Tablas (15)
 
 ### `skus` — Productos
 PK: `id_sku` (text, formato `CAT-MAR-MOD-COL`)
@@ -9,16 +33,16 @@ PK: `id_sku` (text, formato `CAT-MAR-MOD-COL`)
 |---|---|---|
 | id_sku | text PK | `MOU-HXS-T90-NEG` |
 | nombre | text | "Mouse HXSJ T90 Negro" |
-| categoria | enum | Stand, Mouse, Teclado, Headset, Mouse Pad |
+| categoria | enum `categoria_sku` | MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO (UPPERCASE) |
 | marca | text | HXSJ, Attack Shark, Ajazz, Razer, etc. |
 | modelo | text | |
 | color | text | |
-| requiere_diseno | bool | true para Stands (necesitan diseño impreso) |
 | precio_venta_sugerido | numeric | |
 | cpp_actual | numeric | **Calculado por trigger** (weighted avg lifetime) |
-| activa | bool | default true |
+| notas | text | |
+| activa | bool | default true; false = Descontinuado |
 
-**Count actual: 50** (49 reales + 1 placeholder `LEGACY-SALE`)
+> No hay columna `requiere_diseno`. El vínculo a diseño es `entradas.diseno_id` / `ventas_items.diseno_id`.
 
 ### `entradas` — Compras de inventario (líneas de un lote)
 PK: `id` (bigint)
@@ -27,129 +51,137 @@ PK: `id` (bigint)
 |---|---|---|
 | fecha | date | |
 | sku_id | text FK→skus | ON UPDATE CASCADE |
-| diseno_id | bigint FK→disenos | NULL si no requiere diseño |
+| diseno_id | bigint FK→disenos | NULL si no aplica |
 | lote_id | bigint FK→lotes | NULL si entrada suelta |
-| status | enum | PENDIENTE, RECIBIDO, PERDIDO |
+| status | enum `status_entrada` | PENDIENTE, RECIBIDO, PERDIDO |
 | cantidad | int | |
-| costo_unitario_base | numeric | costo del producto sin shared costs |
-| costo_compartido_asignado | numeric | **Calculado por trigger** (prorrateo de envío/impuestos del lote) |
-| costo_unitario_total | numeric | base + compartido. Esto es lo que entra al CPP |
+| costo_unitario_base | numeric | costo del producto sin shared costs. **OJO INV-1: debe estar en RD$ (si la compra fue USD, convertir antes de guardar).** |
+| costo_compartido_asignado | numeric | **Calculado por trigger** (prorrateo de envío/courier/impuestos/otros del lote) |
+| costo_unitario_total | numeric | base + compartido. Esto entra al CPP |
+| notas | text | |
 
-**Count actual: 79** (60 RECIBIDO, 19 PENDIENTE)
+### `lotes` — Agrupa entradas que compartieron costos
+PK: `id` (bigint)
 
-### `lotes` — Agrupa entradas que compartieron costos (envío, courier, impuestos)
 | Columna | Tipo | Notas |
 |---|---|---|
-| codigo | text | identificador del lote |
+| codigo | text | identificador del lote (ej. `L-260512-01`) |
 | fecha_pedido | date | |
 | fecha_recibido | date | |
 | proveedor_id | bigint FK→contrapartes | |
-| status | enum | PENDIENTE, RECIBIDO |
-| costo_envio | numeric | se prorratea entre entradas del lote |
+| status | enum `status_lote` | **PENDIENTE, EN_TRANSITO, EN_COURIER_USA, RECIBIDO, CANCELADO** (5 valores) |
+| costo_envio | numeric | se prorratea entre entradas |
 | costo_courier | numeric | idem |
 | costo_impuestos | numeric | idem |
 | costo_otros | numeric | idem |
-| moneda | enum | RD, USD |
-
-**Count actual: 0** (V2.1 no modelaba lotes; trabajo futuro asignar entradas a lotes)
+| moneda | enum `moneda_tipo` | RD, USD |
+| notas | text | |
 
 ### `ventas` — Encabezado de venta
 PK: `id` (bigint), UNIQUE: `codigo`
 
 | Columna | Tipo | Notas |
 |---|---|---|
-| codigo | text UNIQUE | `V-MIG-0001`, `V-LEG-0001`, etc. |
+| codigo | text UNIQUE | `V-MIG-0001`, `V-LEG-0001`, `VTA-YYMMDD-NNN` (nuevas) |
 | fecha | date | |
-| canal_id | bigint FK→contrapartes | Facebook=9 (canal de venta) |
+| canal_id | bigint FK→contrapartes | Facebook=9 (CANAL_VENTA) |
 | cliente_nombre | text | opcional |
 | envio_cobrado | numeric | cobrado al cliente |
 | descuento | numeric | |
-| total_facturado | numeric | **Calculado por trigger** |
+| total_facturado | numeric | **Calculado por trigger** (Σ subtotales + envío − descuento) |
 | total_ganancia | numeric | **Calculado por trigger** |
-
-**Count actual: 190** (94 V-MIG modernas + 96 V-LEG legacy)
+| notas | text | |
 
 ### `ventas_items` — Líneas de cada venta
 | Columna | Tipo | Notas |
 |---|---|---|
-| venta_id | bigint FK→ventas | |
+| venta_id | bigint FK→ventas | ON DELETE CASCADE |
 | sku_id | text FK→skus | ON UPDATE CASCADE |
 | diseno_id | bigint FK→disenos | NULL si no aplica |
 | cantidad | int | |
 | precio_unitario | numeric | |
-| cpp_historico | numeric | **Snapshot del CPP al momento de venta** |
-| subtotal | numeric | cantidad * precio_unitario |
-| ganancia_unitaria | numeric | precio - cpp_historico |
-| ganancia_total | numeric | cantidad * ganancia_unitaria |
-| margen_pct | numeric | ganancia / cpp |
+| cpp_historico | numeric | **Snapshot del CPP al INSERT** (trigger; no se recaptura en UPDATE) |
+| subtotal | numeric | **Calculado** cantidad × precio_unitario |
+| ganancia_unitaria | numeric | **Calculado** precio − cpp_historico |
+| ganancia_total | numeric | **Calculado** cantidad × ganancia_unitaria |
+| margen_pct | numeric | **Calculado** |
 
-**Count actual: 190**
-
-### `movimientos` — Cash flow + financiero
+### `movimientos` — Cash flow + financiero (UNA sola tabla)
 PK: `id` (bigint)
 
 | Columna | Tipo | Notas |
 |---|---|---|
 | fecha | date | |
-| tipo | enum | 22 valores (ver CLAUDE.md) |
+| tipo | enum `tipo_movimiento` | 22 valores (ver enums abajo) |
 | cuenta_id | bigint FK→cuentas | de qué cuenta sale/entra |
-| contraparte_id | bigint FK→contrapartes | con quién se hizo |
-| entrada | numeric NOT NULL | usar 0, no NULL |
-| salida | numeric NOT NULL | usar 0, no NULL |
-| monto_usd | numeric | si fue en USD |
+| contraparte_id | bigint FK→contrapartes | con quién |
+| entrada | numeric NOT NULL | usar 0, nunca NULL |
+| salida | numeric NOT NULL | usar 0, nunca NULL |
+| monto_usd | numeric | si fue en USD (**INV-4: hoy casi nunca poblado — la reescritura DEBE persistirlo**) |
 | tasa_cambio | numeric | RD/USD |
-| lote_id | bigint FK→lotes | si linkea a un lote (ej: pago de envío) |
-| venta_id | bigint FK→ventas | si linkea a una venta |
-| prestamo_id | bigint FK→prestamos | si es pago a deuda |
-| inversor_id | bigint FK→inversores | si es pago a inversor |
-| cuota_id | bigint FK→cuotas | si específicamente paga una cuota |
-| cuenta_destino_id | bigint FK→cuentas | para transferencias internas |
-| notas | text | descripción libre |
-| **naturaleza** | text GENERATED | `CASHFLOW` o `FINANCIERO` (auto) |
+| lote_id | bigint FK→lotes | pago de envío/compra ligado a lote |
+| venta_id | bigint FK→ventas | ingreso/gasto ligado a venta |
+| prestamo_id | bigint FK→prestamos | pago/cargo a deuda o tarjeta |
+| inversor_id | bigint FK→inversores | aporte/pago a inversor |
+| cuota_id | bigint FK→cuotas | si paga una cuota específica |
+| cuenta_destino_id | bigint FK→cuentas | transferencias internas |
+| notas | text | |
+| **naturaleza** | text GENERATED | `CASHFLOW` o `FINANCIERO` (auto, no escribir) |
 
-**Constraints activos:**
-- `entrada >= 0 AND salida >= 0`
-- `entrada > 0 OR salida > 0` (al menos uno)
-- (NO HAY constraint que prohíba ambas positivas — fue eliminado para soportar "venta + envío")
+**Constraints activos:** `entrada >= 0 AND salida >= 0` · `entrada > 0 OR salida > 0`.
+NO hay constraint que prohíba ambas > 0 (eliminado para soportar "venta + envío").
 
-**Count actual: 276**
-
-### `cuentas` — Bancos / efectivo
+### `cuentas` — Bancos / efectivo / tarjetas (7) ⚠️ IDs REALES
 | ID | Nombre | Tipo | Moneda |
 |---|---|---|---|
-| 1 | BHD Debito | DEBITO | RD |
-| 2 | Scotia RD | DEBITO | RD |
-| 3 | Scotia USD | DEBITO | USD |
-| 4 | Qik | DEBITO | RD |
-| 5 | Efectivo | EFECTIVO | RD |
+| 1 | BHD Débito | DEBITO | RD |
+| 2 | Efectivo | EFECTIVO | RD |
+| 3 | Scotia CC RD | CREDITO | RD |
+| 4 | Scotia CC USD | CREDITO | USD |
+| 5 | Qik | CREDITO | RD |
+| 6 | BHD Línea | CREDITO | RD |
+| 7 | Scotia Debito USD | DEBITO | USD |
 
-### `prestamos` — Deudas (unificado)
-| ID | Nombre | Tipo | Monto/Límite |
+> Columnas: id, nombre, tipo, moneda, limite_credito, notas, activa.
+> Las tarjetas/líneas (3,4,5,6) son tipo CREDITO **y** existen como préstamo
+> (modelo dual — ver regla 8). El panel de cuentas líquidas excluye CREDITO.
+
+### `prestamos` — Deudas unificadas (5) ⚠️ IDs REALES
+| ID | Nombre | Tipo | Notas |
 |---|---|---|---|
-| 1 | Coop Prestamo | PRESTAMO | 115,000 |
-| 2 | BHD Linea | LINEA_CREDITO | 112,000 (límite) |
-| 3 | Scotia CC RD | TARJETA_CREDITO | 20,000 (límite) |
-| 4 | Scotia CC USD | TARJETA_CREDITO | 450 USD (límite) |
-| 5 | Qik CC | TARJETA_CREDITO | 18,000 (límite) |
+| 1 | Scotia CC RD | TARJETA_CREDITO | gemelo de cuenta 3 |
+| 2 | Scotia CC USD | TARJETA_CREDITO | gemelo de cuenta 4 |
+| 3 | Qik | TARJETA_CREDITO | gemelo de cuenta 5 |
+| 4 | Coop Prestamo | PRESTAMO | monto_inicial 115,000 |
+| 5 | BHD Línea | LINEA_CREDITO | gemelo de cuenta 6 |
+
+> Columnas: id, nombre, tipo, contraparte_id, monto_inicial, limite_credito,
+> tasa_mensual, seguro_mensual, plazo_meses, fecha_inicio, fecha_primer_pago,
+> moneda, activa, notas, dia_corte, dia_vencimiento, **saldo_corte, fecha_corte**.
+> `saldo_corte`/`fecha_corte` son snapshots manuales (DEU-4: ningún writer los
+> mantiene → la vista se congela; la reescritura debe dejar de depender de ellos).
 
 ### `cuotas` — Schedule de pagos
 | Columna | Tipo | Notas |
 |---|---|---|
 | prestamo_id | bigint FK→prestamos | |
-| numero | int | 1, 2, 3... |
+| numero | int | 1, 2, 3… |
 | fecha_pago | date | día programado |
 | capital | numeric | |
 | interes | numeric | |
 | seguro | numeric | |
 | abono_capital | numeric | extra al capital |
+| monto_total | numeric | |
 | saldo_post | numeric | saldo después de esta cuota |
 | pagada | bool | |
 | fecha_pagada | date | |
 | movimiento_id | bigint FK→movimientos | link al pago real |
+| notas | text | |
 
-**Count actual: 48** (todas son del Coop. 3 pagadas, 45 pendientes)
+**Count: 4** (todas del Coop, sin `saldo_post`). DEU-2/DEU-3: pagar una cuota
+NO toca esta tabla hoy, y faltan 44 cuotas del schedule de 48.
 
-### `contrapartes` — Personas/empresas con quien transacciono
+### `contrapartes` — Personas/empresas (19) ⚠️ IDs REALES
 | ID | Nombre | Tipo |
 |---|---|---|
 | 1 | BHD | BANCO |
@@ -160,124 +192,161 @@ PK: `id` (bigint)
 | 6 | Temu | PROVEEDOR |
 | 7 | Amazon | PROVEEDOR |
 | 8 | Andrea Correa | INVERSOR |
-| 9 | Facebook | CANAL |
-| 10 | Teo | PERSONA |
-| 11 | Alexander | CLIENTE |
-| 12 | Ramon | CLIENTE |
-| 13 | Braulio | PERSONA |
+| 9 | Facebook | CANAL_VENTA |
+| 10 | Teo | PERSONA_OPERATIVA |
+| 11 | Alexander | PERSONA_OPERATIVA |
+| 12 | Ramon | PERSONA_OPERATIVA |
+| 13 | Braulio | CLIENTE_FAMILIAR |
 | 14 | Uber | SERVICIO |
 | 15 | Courrier | SERVICIO |
 | 16 | Facebook Ads | SERVICIO |
-| 17 | Cliente Generico | CLIENTE |
+| 17 | Cliente Generico | OTRO |
+| 20 | Julio | INVERSOR |
+| 22 | Hola | INVERSOR |
 
-### `inversores`
-| ID | Nombre | Capital | A devolver | Pagado |
-|---|---|---|---|---|
-| 1 | Andrea Correa | 50,000 | 100,000 | 5,000 |
+> Defaults usados por el cliente: cuenta=1 (BHD Débito) **(CTA-1: dejar de
+> defaultear silenciosamente — exigir cuenta real)**, contraparte=17 (Cliente
+> Generico), canal venta=9 (Facebook), proveedor=5 (Alibaba). `Julio` y `Hola`
+> parecen data de prueba/dueño — no asumir.
 
-### `disenos`
-Tabla vacía. Para futuras Stands con diseño impreso (Hollow Knight, etc.). El usuario llenará después.
+### `inversores` (2)
+| Columna | Tipo | Notas |
+|---|---|---|
+| id | bigint PK | |
+| nombre | text | |
+| contraparte_id | bigint FK | NOT NULL |
+| capital_invertido | numeric | |
+| monto_pactado_devolver | numeric | |
+| fecha_inicio | date | |
+| plazo_meses | int | |
+| es_dueno | bool | true = dueño (recibe paquete distinto). **INVR-3: createInversor debe escribirlo.** |
+| tipo_compensacion | enum `tipo_compensacion` | método legacy simple |
+| pct_aplicado, cuota_mensual, bonus_threshold, cap_devolver | numeric | params legacy |
+| activa | bool | |
+| notas | text | |
+
+### `compensaciones_inversor` — N reglas de compensación por inversor
+| Columna | Tipo | Notas |
+|---|---|---|
+| inversor_id | bigint FK→inversores | |
+| tipo_compensacion | enum `tipo_compensacion` | 22 valores (FLAT, AMORTIZACION, PCT_GANANCIA, …) |
+| monto_pactado, pct_aplicado, cuota_mensual, bonus_threshold, cap_devolver, monto_por_unidad | numeric | |
+| dia_pago | smallint | default 17 |
+| subordina_a | bigint | **INVR-4: create/updateCompensacion debe escribirlo** |
+| frecuencia | text | **INVR-4: idem** |
+| fecha_inicio, fecha_fin | date | |
+| activa | bool | |
+| notas | text | |
+
+### `disenos` (4)
+Diseños impresos para Stands (Hollow Knight, etc.). Vinculados vía
+`entradas.diseno_id` / `ventas_items.diseno_id`.
 
 ### `tasas_cambio`
-Tabla vacía. Para registrar histórico de tasa RD/USD si se quiere granular. Por ahora cada movimiento USD lleva su propia `tasa_cambio`.
+Histórico RD/USD opcional. Por ahora cada movimiento USD lleva su `tasa_cambio`.
+
+### `agente_memoria`
+Tabla de soporte para el sistema de agentes (futuro, `JARVIS.md`). No la usa el dashboard.
 
 ---
 
-## Views (6)
+## Views (6) — columnas reales
 
 ### `vw_cashflow`
-Movimientos con `naturaleza = 'CASHFLOW'`. Columnas: id, fecha, tipo, cuenta (nombre), contraparte (nombre), entrada, salida, neto, venta_id, lote_id, notas. Ordenado por fecha.
+`id, fecha, tipo, cuenta, contraparte, entrada, salida, neto, venta_id, lote_id, notas`
+(solo `naturaleza='CASHFLOW'`).
 
-### `vw_financiero`  
-Movimientos con `naturaleza = 'FINANCIERO'`. Mismo formato + prestamo (nombre).
+### `vw_financiero`
+`id, fecha, tipo, cuenta, contraparte, prestamo, entrada, salida, neto, cuota_id, inversor_id, notas`
+(solo `naturaleza='FINANCIERO'`).
 
 ### `vw_saldo_cuenta`
-Saldo actual por cuenta. Suma de (entrada - salida) por `cuenta_id`.
+`id, nombre, tipo, moneda, limite_credito, total_entradas, total_salidas, saldo_actual, credito_disponible`.
+**Fuente de verdad del saldo por cuenta** (Σ entrada − salida por cuenta_id).
 
 ### `vw_saldo_prestamo`
-Estado de cada préstamo: monto_inicial, capital_pagado (suma de cuotas pagadas), saldo_pendiente.
+`id, nombre, tipo, monto_inicial, limite_credito, tasa_mensual, plazo_meses, capital_pagado, interes_pagado, saldo_pendiente`.
+⚠️ DEU-1/DEU-2: `capital_pagado` se calcula desde `cuotas.pagada`, así que un pago
+que no toque `cuotas` NO baja el saldo. La reescritura debe sincronizar `cuotas`.
 
 ### `vw_saldo_inversor`
-Estado de cada inversora: capital_invertido, pagado_total, monto_pactado_devolver, % completado.
+`id, nombre, capital_invertido, monto_pactado_devolver, total_devuelto, saldo_pendiente`.
+⚠️ INVR-1: `total_devuelto` requiere que el pago lleve `inversor_id`.
 
 ### `vw_stock_sku`
-Por cada SKU: stock_fisico (entradas RECIBIDO - ventas), stock_camino (entradas PENDIENTE), cpp_actual.
+`id_sku, nombre, categoria, marca, modelo, color, cpp_actual, precio_venta_sugerido, uds_recibidas, uds_en_transito, uds_vendidas, stock_actual, ingresos_totales, ganancia_total, activa`.
+⚠️ KPI-1: `LEGACY-SALE` tiene `stock_actual` negativo (−88) — filtrarlo en el stock total.
 
 ---
 
-## Triggers automáticos
+## Triggers automáticos (no replicar en frontend)
 
-**No replicar esta lógica en el frontend:**
-
-1. **`trg_lote_prorratear`** — al actualizar costos del lote, recalcula `costo_compartido_asignado` en cada entrada hija
-2. **`trg_entrada_prorratear_lote_ins_del`** / **`_upd`** — cuando entran/cambian/salen entradas del lote, redistribuye costos compartidos
-3. **`trg_entrada_recalcular_cpp`** — al cambiar entradas RECIBIDO, recalcula `skus.cpp_actual`
-4. **`trg_ventas_items_capturar_cpp`** — al insertar línea de venta, snapshot `cpp_historico` desde `skus.cpp_actual`
-5. **`trg_ventas_items_recalc_venta`** — al cambiar líneas, recalcula totales del encabezado
-6. **`trg_ventas_envio_descuento_recalc`** — al cambiar envío/descuento del encabezado, recalcula totales
+1. Prorrateo de costos del lote → `costo_compartido_asignado` por entrada.
+2. Redistribución al insertar/cambiar/borrar entradas del lote.
+3. Recálculo de `skus.cpp_actual` al cambiar entradas RECIBIDO (weighted avg lifetime).
+4. Snapshot `cpp_historico` al INSERT de `ventas_items`.
+5. Recálculo de `ventas.total_facturado` / `total_ganancia` al cambiar líneas.
+6. Recálculo de totales al cambiar `envio_cobrado` / `descuento` del encabezado.
 
 ---
 
-## Enums (verificados vs Supabase 2026-05-26)
+## Enums (verificados vs Supabase 2026-06-07)
 
 ```sql
-movimiento_tipo: APORTE_DUENO, APORTE_INVERSOR, VENTA, ENVIO_COBRADO,
+tipo_movimiento:  APORTE_DUENO, APORTE_INVERSOR, VENTA, ENVIO_COBRADO,
   COMPRA_MERCANCIA, COMPRA_OPERATIVA, ENVIO_LOTE, PAGO_PRESTAMO,
   PAGO_LINEA_CREDITO, PAGO_TARJETA_CREDITO, PAGO_INTERESES, PAGO_ADS,
   PAGO_COMISION, PAGO_INVERSOR, PAGO_TRANSPORTE, DRAWDOWN, FEE_BANCARIO,
-  TRANSFERENCIA_INTERNA, REFUND_PROVEEDOR, REFUND_CLIENTE, AJUSTE, OTROS
+  TRANSFERENCIA_INTERNA, REFUND_PROVEEDOR, REFUND_CLIENTE, AJUSTE, OTROS  (22)
 
-prestamo_tipo:    PRESTAMO, LINEA_CREDITO, TARJETA_CREDITO
-entrada_status:   PENDIENTE, RECIBIDO, PERDIDO
-lote_status:      PENDIENTE, RECIBIDO
-moneda:           RD, USD
-categoria_sku:    MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO
-                  (UPPERCASE en DB. Dashboard mapea a 'Mouse'/'Teclado'/...
-                   vía CAT_MAP en src/supabase-client.js. 'OTRO' se agregó
-                   2026-05-26 en migración add_categoria_sku_otro.)
-cuenta_tipo:      DEBITO, CREDITO, EFECTIVO
-                  (DEBITO=cuenta operativa; CREDITO=tarjeta de crédito;
-                   EFECTIVO=caja física)
-contraparte_tipo: BANCO, PROVEEDOR, INVERSOR, CANAL_VENTA, PERSONA_OPERATIVA,
-                  CLIENTE_FAMILIAR, SERVICIO, OTRO
+tipo_prestamo:     PRESTAMO, LINEA_CREDITO, TARJETA_CREDITO
+status_entrada:    PENDIENTE, RECIBIDO, PERDIDO
+status_lote:       PENDIENTE, EN_TRANSITO, EN_COURIER_USA, RECIBIDO, CANCELADO  (5)
+moneda_tipo:       RD, USD
+categoria_sku:     MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO
+                   (UPPERCASE; dashboard mapea a 'Mouse'/'Teclado'/… vía CAT_MAP)
+tipo_cuenta:       DEBITO, CREDITO, EFECTIVO
+tipo_contraparte:  PROVEEDOR, BANCO, INVERSOR, CANAL_VENTA, PERSONA_OPERATIVA,
+                   CLIENTE_FAMILIAR, SERVICIO, OTRO
+tipo_compensacion: FLAT, AMORTIZACION, PCT_GANANCIA, PCT_REVENUE, CUOTA_BONUS,
+                   ROYALTY, SALARIO_FIJO, PCT_UTILIDADES, DRAWDOWN_LIBRE,
+                   PCT_REVENUE_PROP, BONUS_HITOS, REEMBOLSO_GASTOS,
+                   DIVIDENDO_PREFERENTE, ROYALTY_BRUTO, RBF, SALARIO_PRO_LABORE,
+                   UTILIDADES_SUBORD, SWEAT_EQUITY, REINVERSION, CASHFLOW_ANUAL,
+                   COMISION_SKU, EXCEDENTE_REAL  (22)
 ```
+
+> Nota: los nombres de enum son `tipo_movimiento` / `status_entrada` /
+> `status_lote` / `moneda_tipo` / `categoria_sku` / `tipo_cuenta` /
+> `tipo_prestamo` / `tipo_contraparte` / `tipo_compensacion` (NO
+> `movimiento_tipo` / `entrada_status` / `lote_status` como decían docs viejas).
 
 ---
 
 ## Queries comunes (cheat sheet)
 
 ```sql
--- Cash flow del último mes
-SELECT * FROM vw_cashflow 
-WHERE fecha >= CURRENT_DATE - INTERVAL '30 days' 
-ORDER BY fecha DESC;
-
--- Saldo de cuenta operativa BHD
-SELECT * FROM vw_saldo_cuenta WHERE nombre = 'BHD Debito';
+-- Saldo por cuenta (fuente de verdad del capital líquido)
+SELECT nombre, saldo_actual FROM vw_saldo_cuenta WHERE tipo IN ('DEBITO','EFECTIVO');
 
 -- Estado del préstamo Coop
 SELECT * FROM vw_saldo_prestamo WHERE nombre = 'Coop Prestamo';
 
--- Top 10 SKUs más vendidos en mes actual
-SELECT s.nombre, SUM(vi.cantidad) as unidades, SUM(vi.ganancia_total) as ganancia
+-- Stock total real (excluye placeholder LEGACY-SALE)
+SELECT SUM(stock_actual) FROM vw_stock_sku WHERE id_sku <> 'LEGACY-SALE';
+
+-- Top SKUs por unidades vendidas del mes
+SELECT s.nombre, SUM(vi.cantidad) uds, SUM(vi.ganancia_total) ganancia
 FROM ventas_items vi
 JOIN ventas v ON v.id = vi.venta_id
-JOIN skus s ON s.id_sku = vi.sku_id
+JOIN skus s   ON s.id_sku = vi.sku_id
 WHERE v.fecha >= date_trunc('month', CURRENT_DATE)
-GROUP BY s.nombre ORDER BY unidades DESC LIMIT 10;
-
--- Stock actual por categoría
-SELECT s.categoria, SUM(vs.stock_fisico) as unidades_fisicas, 
-       SUM(vs.stock_fisico * s.cpp_actual) as valor_inventario
-FROM vw_stock_sku vs
-JOIN skus s ON s.id_sku = vs.id_sku
-WHERE s.activa = true
-GROUP BY s.categoria;
+GROUP BY s.nombre ORDER BY uds DESC LIMIT 10;
 
 -- Próximas cuotas a pagar
-SELECT p.nombre as prestamo, c.numero, c.fecha_pago, c.capital, c.interes, c.seguro
-FROM cuotas c
-JOIN prestamos p ON p.id = c.prestamo_id
-WHERE NOT c.pagada
-ORDER BY c.fecha_pago ASC LIMIT 5;
+SELECT p.nombre, c.numero, c.fecha_pago, c.capital, c.interes, c.seguro
+FROM cuotas c JOIN prestamos p ON p.id = c.prestamo_id
+WHERE NOT c.pagada ORDER BY c.fecha_pago ASC LIMIT 5;
 ```
+</content>
+</invoke>
