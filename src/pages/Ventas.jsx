@@ -39,6 +39,16 @@ export default function VentasPage({ period, customRange }) {
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState(null); // venta seleccionada para editar
 
+  // Mapa SKU id → nombre, para mostrar el producto en vez del código en la lista.
+  const skuNameById = useMemo(
+    () => Object.fromEntries(data.skus.map((s) => [s.id, s.nombre])),
+    [data.skus],
+  );
+  const nameOf = (id) => {
+    if (id === 'LEGACY-SALE') return '(venta legacy)';
+    return skuNameById[id] || id;
+  };
+
   if (data.loading) {
     return (
       <div>
@@ -52,7 +62,11 @@ export default function VentasPage({ period, customRange }) {
   const filtered = ventasPeriodo.filter((v) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return (v.codigo || '').toLowerCase().includes(q) || (v.canal || '').toLowerCase().includes(q);
+    return (
+      (v.codigo || '').toLowerCase().includes(q) ||
+      (v.canal || '').toLowerCase().includes(q) ||
+      (v.lineas || []).some((l) => nameOf(l.skuId).toLowerCase().includes(q))
+    );
   });
 
   // KPIs del período
@@ -63,8 +77,18 @@ export default function VentasPage({ period, customRange }) {
   const ticket = ventasPeriodo.length > 0 ? revenue / ventasPeriodo.length : 0;
 
   function exportarCSV() {
-    const headers = ['Código', 'Fecha', 'Canal', 'Cliente', 'Líneas', 'Facturado', 'Ganancia neta', 'Gasto asociado'];
-    const rows = filtered.map((v) => [v.codigo, v.fecha, v.canal, v.clienteNombre, v.lineas.length, v.facturado, v.gananciaNeta, v.gastoAsociado]);
+    const headers = ['Código', 'Fecha', 'Canal', 'Cliente', 'Productos', 'Líneas', 'Facturado', 'Ganancia neta', 'Gasto asociado'];
+    const rows = filtered.map((v) => [
+      v.codigo,
+      v.fecha,
+      v.canal,
+      v.clienteNombre,
+      (v.lineas || []).map((l) => nameOf(l.skuId)).join(', '),
+      v.lineas.length,
+      v.facturado,
+      v.gananciaNeta,
+      v.gastoAsociado,
+    ]);
     const n = downloadCSV(csvName('ventas'), headers, rows);
     t.ok('Ventas exportadas', `${n} fila(s) · CSV`);
   }
@@ -86,7 +110,32 @@ export default function VentasPage({ period, customRange }) {
   }
 
   const columns = [
-    { key: 'codigo', label: 'Código', render: (v) => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{v.codigo}</span> },
+    {
+      key: 'producto', label: 'Producto',
+      render: (v) => {
+        const lineas = v.lineas || [];
+        if (lineas.length === 0) {
+          return (
+            <div>
+              <div><span className="muted">—</span></div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{v.codigo}</div>
+            </div>
+          );
+        }
+        const primero = nameOf(lineas[0].skuId);
+        const todos = lineas.map((l) => nameOf(l.skuId)).join(', ');
+        const extra = lineas.length - 1;
+        return (
+          <div>
+            <div title={todos}>
+              {primero}
+              {extra > 0 && <span style={{ color: 'var(--text-3)' }}> (+{extra} más)</span>}
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-3)' }}>{v.codigo}</div>
+          </div>
+        );
+      },
+    },
     { key: 'fecha', label: 'Fecha', render: (v) => fmtDate(v.fecha) },
     { key: 'canal', label: 'Canal', render: (v) => v.canal || <span className="muted">—</span> },
     { key: 'lineas', label: '#Líneas', align: 'right', num: true, render: (v) => v.lineas.length },
@@ -120,7 +169,7 @@ export default function VentasPage({ period, customRange }) {
         </div>
         {tab === 'lista' && (
           <div className="topbar-actions">
-            <input className="input" style={{ width: 200 }} type="text" placeholder="Buscar código o canal…"
+            <input className="input" style={{ width: 200 }} type="text" placeholder="Buscar producto, código o canal…"
               value={search} onChange={(e) => setSearch(e.target.value)} />
             <button className="btn ghost" onClick={exportarCSV} disabled={!filtered.length} title="Descargar CSV">⤓ CSV</button>
             <span className="pill">{filtered.length} mostrando</span>

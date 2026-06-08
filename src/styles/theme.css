@@ -357,6 +357,10 @@ textarea:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible 
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
+/* Barra de progreso / utilización */
+.bar { height: 7px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: 999px; transition: width 450ms cubic-bezier(0.22,1,0.36,1); }
+
 /* Login / centered screens */
 .center-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
 .login-card { width: 340px; max-width: 90vw; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 14px; }

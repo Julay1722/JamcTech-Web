@@ -20,7 +20,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import {
-  createCuenta, createPrestamo, createInversor, updateInversor,
+  createCuenta, createPrestamo, updatePrestamo, createInversor, updateInversor,
   createCompensacion, updateCompensacion, removeCompensacion,
   createPagoFinanciero,
   removeCuenta, removePrestamo, removeInversor,
@@ -29,7 +29,7 @@ import { Modal, useConfirm } from '../components/Modal.jsx';
 import { Field, TextInput, NumberInput, MoneyInput, DateInput, TextArea, Select } from '../components/Form.jsx';
 import { DataTable } from '../components/Table.jsx';
 import { CuentaSelect, MedioPagoSelect, ContraparteSelect } from '../components/Pickers.jsx';
-import { KPI } from '../components/Charts.jsx';
+import { KPI, Bar } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
 
@@ -73,14 +73,12 @@ export default function FinanzasPage({ onNavigate }) {
   // Tarjetas: TARJETA_CREDITO (revolventes con corte).
   const tarjetas = prestamos.filter((p) => p.tipo === 'TARJETA_CREDITO');
 
-  const showNuevo = ['prestamos', 'tarjetas', 'inversores', 'cuentas'].includes(tab);
-
   return (
     <div>
       <div className="topbar">
         <div>
           <h1>Finanzas</h1>
-          <div className="sub">Préstamos · tarjetas · inversores · banco</div>
+          <div className="sub">Deudas · inversores · banco</div>
         </div>
       </div>
 
@@ -88,16 +86,14 @@ export default function FinanzasPage({ onNavigate }) {
       <div className="tabs">
         <button className={tab === 'resumen' ? 'tab active' : 'tab'} onClick={() => setTab('resumen')}>Resumen</button>
         <button className={tab === 'analisis' ? 'tab active' : 'tab'} onClick={() => setTab('analisis')}>Análisis deuda</button>
-        <button className={tab === 'prestamos' ? 'tab active' : 'tab'} onClick={() => setTab('prestamos')}>Préstamos</button>
-        <button className={tab === 'tarjetas' ? 'tab active' : 'tab'} onClick={() => setTab('tarjetas')}>Tarjetas</button>
+        <button className={['deudas', 'prestamos', 'tarjetas'].includes(tab) ? 'tab active' : 'tab'} onClick={() => setTab('deudas')}>Deudas</button>
         <button className={tab === 'inversores' ? 'tab active' : 'tab'} onClick={() => setTab('inversores')}>Inversores</button>
-        <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Cuentas</button>
+        <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Banco</button>
       </div>
 
       {tab === 'resumen' && <ResumenTab prestamos={prestamos} inversores={inversores} cuentas={cuentas} />}
       {tab === 'analisis' && <AnalisisTab prestamosTab={prestamosTab} tarjetas={tarjetas} inversores={inversores} cuentas={cuentas} />}
-      {tab === 'prestamos' && <PrestamosTab prestamos={prestamosTab} />}
-      {tab === 'tarjetas' && <TarjetasTab tarjetas={tarjetas} />}
+      {['deudas', 'prestamos', 'tarjetas'].includes(tab) && <DeudasTab prestamos={prestamosTab} tarjetas={tarjetas} />}
       {tab === 'inversores' && <InversoresTab inversores={inversores} />}
       {tab === 'cuentas' && <CuentasTab cuentas={cuentas} />}
     </div>
@@ -264,19 +260,32 @@ function AnalisisTab({ prestamosTab, tarjetas, inversores, cuentas }) {
 }
 
 /* ════════════════════════ PRÉSTAMOS ════════════════════════ */
-function PrestamosTab({ prestamos }) {
+// Deudas unificadas: préstamos/líneas + tarjetas en una sola vista (idea 1701),
+// con editar (updatePrestamo) y click-en-fila → historial inline (mío).
+function DeudasTab({ prestamos, tarjetas }) {
   const data = useData();
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
-  const [showNuevo, setShowNuevo] = useState(false);
-  const [sel, setSel] = useState(null);
+  const [nuevo, setNuevo] = useState(null);   // 'prestamo' | 'tarjeta'
+  const [editar, setEditar] = useState(null); // registro a editar
+  const [selP, setSelP] = useState(null);     // préstamo expandido
+  const [selT, setSelT] = useState(null);     // tarjeta expandida
 
-  const doDelete = async (p) => {
-    const ok = await confirm({ title: `¿Eliminar ${p.nombre}?`, body: 'Se desactiva el préstamo (soft-delete). Los movimientos quedan en el historial.', confirmLabel: 'Eliminar' });
+  const doDelete = async (p, esTarjeta) => {
+    const ok = await confirm({ title: `¿Eliminar ${p.nombre}?`, body: `Se desactiva ${esTarjeta ? 'la tarjeta' : 'el préstamo'} (soft-delete). Los movimientos quedan en el historial.`, confirmLabel: 'Eliminar' });
     if (!ok) return;
-    try { await removePrestamo(p.id); await data.refreshAll(); t.ok('Préstamo eliminado', p.nombre); }
+    try { await removePrestamo(p.id); await data.refreshAll(); t.ok(esTarjeta ? 'Tarjeta eliminada' : 'Préstamo eliminado', p.nombre); }
     catch (e) { t.err('No se pudo eliminar', e.message); }
   };
+  const accionesCol = (esTarjeta) => ({
+    key: 'acc', label: '', align: 'right',
+    render: (p) => (
+      <span className="row-actions-inner" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="Editar" onClick={() => setEditar(p)}>✎</button>
+        <button className="icon-btn danger" title="Eliminar" onClick={() => doDelete(p, esTarjeta)}>×</button>
+      </span>
+    ),
+  });
 
   return (
     <>
@@ -284,32 +293,57 @@ function PrestamosTab({ prestamos }) {
         <div className="section-head">
           <div>
             <div className="section-title">Préstamos y líneas de crédito</div>
-            <div className="section-desc">Click en una fila para ver el detalle de amortización</div>
+            <div className="section-desc">Click en una fila para ver la amortización · ✎ para editar</div>
           </div>
-          <button className="btn" onClick={() => setShowNuevo(true)}>+ Nuevo préstamo</button>
+          <button className="btn" onClick={() => setNuevo('prestamo')}>+ Préstamo / línea</button>
         </div>
-        <DataTable
-          getRowKey={(p) => p.id}
-          onRowClick={(p) => setSel(sel?.id === p.id ? null : p)}
+        <DataTable getRowKey={(p) => p.id} onRowClick={(p) => setSelP(selP?.id === p.id ? null : p)}
           columns={[
             { key: 'nombre', label: 'Nombre' },
             { key: 'tipo', label: 'Tipo', render: (p) => <span className="muted">{p.tipo === 'LINEA_CREDITO' ? 'línea de crédito' : 'préstamo amortizado'}</span> },
-            { key: 'montoInicial', label: 'Monto / Límite', align: 'right', num: true, render: (p) => money(p.tipo === 'LINEA_CREDITO' ? p.limiteCredito : p.montoInicial, p.moneda === 'USD' ? 'USD$' : 'RD$') },
-            { key: 'capitalPagado', label: 'Capital pagado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(p.capitalPagado)}</span> },
-            { key: 'saldoPendiente', label: 'Saldo / Usado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
-            { key: 'tasaMensual', label: 'Tasa', align: 'right', num: true, render: (p) => (p.tasaMensual ? `${(p.tasaMensual * 100).toFixed(2)}%/mes` : '—') },
-            { key: 'acciones', label: '', align: 'right', render: (p) => <button className="icon-btn danger" title="Eliminar" onClick={(e) => { e.stopPropagation(); doDelete(p); }}>×</button> },
+            { key: 'monto', label: 'Monto / Límite', align: 'right', num: true, render: (p) => money(p.tipo === 'LINEA_CREDITO' ? p.limiteCredito : p.montoInicial, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            { key: 'cap', label: 'Capital pagado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(p.capitalPagado)}</span> },
+            { key: 'saldo', label: 'Saldo / Usado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
+            { key: 'tasa', label: 'Tasa', align: 'right', num: true, render: (p) => (p.tasaMensual ? `${(p.tasaMensual * 100).toFixed(2)}%/mes` : '—') },
+            accionesCol(false),
           ]}
-          rows={prestamos}
-          empty="Sin préstamos · click + Nuevo préstamo"
-        />
+          rows={prestamos} empty="Sin préstamos · + Préstamo / línea" />
       </div>
+      {selP && <DetalleAmortizacion prestamo={selP} />}
 
-      {sel && <DetalleAmortizacion prestamo={sel} />}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Tarjetas de crédito</div>
+            <div className="section-desc">Click en una fila para ver los usos (cargos y pagos) · ✎ para editar</div>
+          </div>
+          <button className="btn" onClick={() => setNuevo('tarjeta')}>+ Tarjeta</button>
+        </div>
+        <DataTable getRowKey={(p) => p.id} onRowClick={(p) => setSelT(selT?.id === p.id ? null : p)}
+          columns={[
+            { key: 'nombre', label: 'Tarjeta' },
+            { key: 'moneda', label: 'Moneda', render: (p) => <span className="muted">{p.moneda}</span> },
+            { key: 'limite', label: 'Límite', align: 'right', num: true, render: (p) => money(p.limiteCredito, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            { key: 'usado', label: 'Usado', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            { key: 'disp', label: 'Disponible', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(Math.max(0, p.limiteCredito - p.usado), p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
+            {
+              key: 'uso', label: '% uso', align: 'right',
+              render: (p) => { const pct = p.limiteCredito > 0 ? (p.usado / p.limiteCredito) * 100 : 0; return <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}><div style={{ width: 56 }}><Bar pct={pct} /></div><span className={`badge ${usoCls(pct)}`}>{pct.toFixed(0)}%</span></div>; },
+            },
+            accionesCol(true),
+          ]}
+          rows={tarjetas} empty="Sin tarjetas · + Tarjeta" />
+      </div>
+      {selT && <DetalleUsosTarjeta tarjeta={selT} />}
 
-      {showNuevo && (
-        <Modal title="Nuevo préstamo o línea de crédito" width={640} onClose={() => setShowNuevo(false)}>
-          <FormPrestamo onDone={() => setShowNuevo(false)} />
+      {nuevo && (
+        <Modal title={nuevo === 'tarjeta' ? 'Nueva tarjeta de crédito' : 'Nuevo préstamo o línea'} width={640} onClose={() => setNuevo(null)}>
+          <FormPrestamo tipoFijo={nuevo === 'tarjeta' ? 'TARJETA_CREDITO' : undefined} onDone={() => setNuevo(null)} />
+        </Modal>
+      )}
+      {editar && (
+        <Modal title={`Editar ${editar.nombre}`} width={640} onClose={() => setEditar(null)}>
+          <FormPrestamo prestamo={editar} tipoFijo={editar.tipo === 'TARJETA_CREDITO' ? 'TARJETA_CREDITO' : undefined} onDone={() => setEditar(null)} />
         </Modal>
       )}
       {confirmNode}
@@ -413,60 +447,7 @@ function DetalleAmortizacion({ prestamo }) {
 }
 
 /* ════════════════════════ TARJETAS ════════════════════════ */
-function TarjetasTab({ tarjetas }) {
-  const data = useData();
-  const t = useToast();
-  const [confirm, confirmNode] = useConfirm();
-  const [showNuevo, setShowNuevo] = useState(false);
-  const [sel, setSel] = useState(null);
-
-  const doDelete = async (p) => {
-    const ok = await confirm({ title: `¿Eliminar ${p.nombre}?`, body: 'Se desactiva la tarjeta (soft-delete). Los movimientos quedan en el historial.', confirmLabel: 'Eliminar' });
-    if (!ok) return;
-    try { await removePrestamo(p.id); await data.refreshAll(); t.ok('Tarjeta eliminada', p.nombre); }
-    catch (e) { t.err('No se pudo eliminar', e.message); }
-  };
-
-  return (
-    <>
-      <div className="section">
-        <div className="section-head">
-          <div>
-            <div className="section-title">Tarjetas de crédito</div>
-            <div className="section-desc">Click en una fila para ver los usos (cargos y pagos)</div>
-          </div>
-          <button className="btn" onClick={() => setShowNuevo(true)}>+ Nueva tarjeta</button>
-        </div>
-        <DataTable
-          getRowKey={(p) => p.id}
-          onRowClick={(p) => setSel(sel?.id === p.id ? null : p)}
-          columns={[
-            { key: 'nombre', label: 'Tarjeta' },
-            { key: 'limiteCredito', label: 'Límite', align: 'right', num: true, render: (p) => money(p.limiteCredito, p.moneda === 'USD' ? 'USD$' : 'RD$') },
-            { key: 'usado', label: 'Usado', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
-            { key: 'disp', label: 'Disponible', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(Math.max(0, p.limiteCredito - p.usado), p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
-            {
-              key: 'uso', label: '% uso', align: 'right',
-              render: (p) => { const pct = p.limiteCredito > 0 ? (p.usado / p.limiteCredito) * 100 : 0; return <span className={`badge ${usoCls(pct)}`}>{pct.toFixed(1)}%</span>; },
-            },
-            { key: 'acciones', label: '', align: 'right', render: (p) => <button className="icon-btn danger" title="Eliminar" onClick={(e) => { e.stopPropagation(); doDelete(p); }}>×</button> },
-          ]}
-          rows={tarjetas}
-          empty="Sin tarjetas · click + Nueva tarjeta"
-        />
-      </div>
-
-      {sel && <DetalleUsosTarjeta tarjeta={sel} />}
-
-      {showNuevo && (
-        <Modal title="Nueva tarjeta de crédito" width={640} onClose={() => setShowNuevo(false)}>
-          <FormPrestamo tipoFijo="TARJETA_CREDITO" onDone={() => setShowNuevo(false)} />
-        </Modal>
-      )}
-      {confirmNode}
-    </>
-  );
-}
+// (TarjetasTab fusionado en DeudasTab — ver arriba.)
 
 // Usos de la tarjeta: movimientos ligados por prestamoId (regla 7/8).
 function DetalleUsosTarjeta({ tarjeta }) {
@@ -1109,22 +1090,24 @@ function FormCuenta({ onDone }) {
 }
 
 // ──────────── Nuevo préstamo / línea / tarjeta ────────────
-function FormPrestamo({ tipoFijo, onDone }) {
+function FormPrestamo({ tipoFijo, prestamo, onDone }) {
+  const editing = !!prestamo;
   const data = useData();
   const t = useToast();
-  const [nombre, setNombre] = useState('');
-  const [tipo, setTipo] = useState(tipoFijo || 'PRESTAMO');
-  const [monto, setMonto] = useState('');
-  const [limite, setLimite] = useState('');
-  const [tasaAnual, setTasaAnual] = useState('');
-  const [seguro, setSeguro] = useState('');
-  const [plazo, setPlazo] = useState('');
-  const [fechaInicio, setFechaInicio] = useState('');
-  const [fechaPrimerPago, setFechaPrimerPago] = useState('');
-  const [diaCorte, setDiaCorte] = useState('');
-  const [diaVencimiento, setDiaVencimiento] = useState('');
-  const [moneda, setMoneda] = useState('RD');
-  const [notas, setNotas] = useState('');
+  const [nombre, setNombre] = useState(prestamo?.nombre || '');
+  const [tipo, setTipo] = useState(prestamo?.tipo || tipoFijo || 'PRESTAMO');
+  const [monto, setMonto] = useState(prestamo?.montoInicial || '');
+  const [limite, setLimite] = useState(prestamo?.limiteCredito || '');
+  // tasa guardada es decimal mensual; el input es % anual → reconstruir × 1200.
+  const [tasaAnual, setTasaAnual] = useState(prestamo?.tasaMensual ? String(+(prestamo.tasaMensual * 1200).toFixed(4)) : '');
+  const [seguro, setSeguro] = useState(prestamo?.seguroMensual || '');
+  const [plazo, setPlazo] = useState(prestamo?.plazoMeses || '');
+  const [fechaInicio, setFechaInicio] = useState(prestamo?.fechaInicio || '');
+  const [fechaPrimerPago, setFechaPrimerPago] = useState(prestamo?.fechaPrimerPago || '');
+  const [diaCorte, setDiaCorte] = useState(prestamo?.diaCorte || '');
+  const [diaVencimiento, setDiaVencimiento] = useState(prestamo?.diaVencimiento || '');
+  const [moneda, setMoneda] = useState(prestamo?.moneda || 'RD');
+  const [notas, setNotas] = useState(prestamo?.notas || '');
   const [busy, setBusy] = useState(false);
 
   const esLinea = tipo === 'LINEA_CREDITO' || tipo === 'TARJETA_CREDITO';
@@ -1136,7 +1119,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
     if (!valid) { t.warn('Datos incompletos', esLinea ? 'Falta nombre y límite' : 'Falta nombre y monto inicial'); return; }
     setBusy(true);
     try {
-      await createPrestamo({
+      const payload = {
         nombre: nombre.trim(), tipo, moneda,
         montoInicial: esLinea ? null : num(monto),
         limiteCredito: esLinea ? num(limite) : null,
@@ -1148,12 +1131,13 @@ function FormPrestamo({ tipoFijo, onDone }) {
         diaCorte: esTarjeta && diaCorte ? num(diaCorte) : null,
         diaVencimiento: esTarjeta && diaVencimiento ? num(diaVencimiento) : null,
         notas,
-      });
-      await data.refreshAll();
+      };
       const label = { PRESTAMO: 'Préstamo', LINEA_CREDITO: 'Línea', TARJETA_CREDITO: 'Tarjeta' }[tipo];
-      t.ok(`${label} creado`, nombre);
+      if (editing) { await updatePrestamo(prestamo.id, payload); t.ok(`${label} actualizado`, nombre); }
+      else { await createPrestamo(payload); t.ok(`${label} creado`, nombre); }
+      await data.refreshAll();
       onDone?.();
-    } catch (e) { t.err('No se pudo crear', e.message); }
+    } catch (e) { t.err(editing ? 'No se pudo guardar' : 'No se pudo crear', e.message); }
     setBusy(false);
   };
 
@@ -1161,7 +1145,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
       <div className="grid-2">
         <Field label="Nombre" required><TextInput value={nombre} onChange={setNombre} placeholder={esTarjeta ? 'ej. Scotia CC RD' : 'ej. Coop préstamo'} /></Field>
-        {!tipoFijo && (
+        {!tipoFijo && !editing && (
           <Field label="Tipo">
             <Select value={tipo} onChange={setTipo} options={[{ value: 'PRESTAMO', label: 'Préstamo amortizado' }, { value: 'LINEA_CREDITO', label: 'Línea de crédito' }, { value: 'TARJETA_CREDITO', label: 'Tarjeta de crédito' }]} />
           </Field>
@@ -1195,7 +1179,7 @@ function FormPrestamo({ tipoFijo, onDone }) {
 
       <Field label="Notas"><TextInput value={notas} onChange={setNotas} placeholder="opcional" /></Field>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Creando…' : 'Crear'}</button>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Guardando…' : (editing ? 'Guardar cambios' : 'Crear')}</button>
       </div>
     </div>
   );

@@ -18,7 +18,7 @@
 //  - EditLoteModal usa updateLoteHeader/updateEntrada/addEntradaToLote/
 //    removeEntrada con (moneda, tasa) correctos.
 // ════════════════════════════════════════════════════════════════
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { Modal, useConfirm } from '../components/Modal.jsx';
@@ -44,6 +44,20 @@ const statusLote = (s) => STATUS_LABEL[s] || s;
 const statusCls = (s) => (s === 'RECIBIDO' ? 'success' : s === 'CANCELADO' ? 'danger' : 'warning');
 const estadoCls = (e) => (e === 'critico' ? 'danger' : e === 'atencion' ? 'warning' : e === 'descontinuado' ? 'neutral' : 'success');
 const estadoLabel = (e) => (e === 'critico' ? 'crítico' : e === 'atencion' ? 'atención' : e);
+
+// Ranking de severidad para derivar el estado "peor" de un grupo de variantes.
+const ESTADO_RANK = { critico: 4, atencion: 3, ok: 1 };
+// Comparación natural (numérica-aware) para que T90 y T90 Pro queden juntos.
+const naturalCmp = (a, b) => (a || '').localeCompare(b || '', 'es', { numeric: true, sensitivity: 'base' });
+// Orden de categorías en la vista jerárquica.
+const CAT_ORDER = ['Mouse', 'Teclado', 'Headset', 'Mouse Pad', 'Stand', 'Otro'];
+// Si la categoría es "Otro" pero el prefijo del id es conocido, usarlo como categoría visible.
+const PREFIX_CAT = { MOU: 'Mouse', TEC: 'Teclado', HEA: 'Headset', STA: 'Stand', PAD: 'Mouse Pad', OTR: 'Otro' };
+const catVisible = (s) => {
+  if (s.categoria && s.categoria !== 'Otro') return s.categoria;
+  const prefix = (s.id || '').split('-')[0];
+  return PREFIX_CAT[prefix] || s.categoria || 'Otro';
+};
 
 export default function InventarioPage() {
   const data = useData();
@@ -195,38 +209,85 @@ export default function InventarioPage() {
 }
 
 /* ════════════════════════ Sub-tab: SKUs ════════════════════════ */
+// Vista jerárquica de 3 niveles (recuperada del monolito):
+//   N1 categoría    → fila-cabecera con subtotales (modelos · SKUs · ud · stock RD$)
+//   N2 marca+modelo → 1 sola variante = SKU directo; >1 = fila colapsable con agregados
+//   N3 variantes    → al expandir, cada color como sub-row indentada
+// DataTable no soporta filas-cabecera ni hijas colapsables, así que renderizamos
+// una <table className="data"> custom. Misma firma de props que la tabla plana.
 function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, onDel }) {
   const t = useToast();
+  const [expanded, setExpanded] = useState({}); // key 'cat|marca|modelo' → bool
+
   const exportarCSV = () => {
     const headers = ['SKU', 'Nombre', 'Categoría', 'Marca', 'Stock', 'En tránsito', 'CPP', 'Precio sugerido', 'Estado'];
     const csvRows = rows.map((s) => [s.id, s.nombre, s.categoria, s.marca, s.stock, s.enTransito, s.cpp, s.precioSugerido, s.estado]);
     const n = downloadCSV(csvName('inventario'), headers, csvRows);
     t.ok('Inventario exportado', `${n} SKU(s) · CSV`);
   };
-  const columns = [
-    {
-      key: 'nombre', label: 'Producto', render: (s) => (
-        <div>
-          <div style={{ fontWeight: 500 }}>{s.nombre}</div>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{s.id}</div>
-        </div>
-      ),
-    },
-    { key: 'categoria', label: 'Categoría', render: (s) => <span className="muted">{s.categoria}</span> },
-    { key: 'stock', label: 'Stock', align: 'right', num: true, render: (s) => <span className={s.stock <= 0 ? 'neg' : ''}>{s.stock}</span> },
-    { key: 'enTransito', label: 'En camino', align: 'right', num: true, render: (s) => (s.enTransito > 0 ? s.enTransito : '—') },
-    { key: 'cpp', label: 'CPP', align: 'right', num: true, render: (s) => money(s.cpp) },
-    { key: 'precioSugerido', label: 'Precio', align: 'right', num: true, render: (s) => (s.precioSugerido > 0 ? money(s.precioSugerido) : '—') },
-    {
-      key: 'estado', label: 'Estado', render: (s) => (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span className={`badge ${estadoCls(s.estado)}`}>{estadoLabel(s.estado)}</span>
-          <button className="icon-btn" title="Editar" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); onEdit(s); }}>✎</button>
-          <button className="icon-btn danger" title="Eliminar" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); onDel(s); }}>×</button>
-        </div>
-      ),
-    },
-  ];
+
+  // Estado "peor" entre las variantes de un modelo (el del SKU más crítico).
+  const estadoPeor = (items) => items.reduce(
+    (peor, s) => ((ESTADO_RANK[s.estado] || 0) > (ESTADO_RANK[peor] || 0) ? s.estado : peor),
+    'ok',
+  );
+
+  // 1) Agrupar por categoría visible. 2) Dentro de cada categoría, agrupar por
+  // marca+modelo. 3) Ordenar todo natural-aware (marca → modelo → color).
+  const cats = useMemo(() => {
+    const byCat = {};
+    rows.forEach((s) => { (byCat[catVisible(s)] ||= []).push(s); });
+
+    const catKeys = Object.keys(byCat).sort((a, b) => {
+      const ia = CAT_ORDER.indexOf(a), ib = CAT_ORDER.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b, 'es');
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+
+    return catKeys.map((cat) => {
+      const items = byCat[cat];
+      const byModel = {};
+      items.forEach((s) => {
+        const modelo = s.modelo || s.nombre || '';
+        const key = `${s.marca || '—'}|${modelo}`;
+        (byModel[key] ||= { marca: s.marca || '—', modelo, items: [] }).items.push(s);
+      });
+      const modelos = Object.values(byModel)
+        .map((g) => ({ ...g, items: [...g.items].sort((a, b) => naturalCmp(a.color, b.color)) }))
+        .sort((a, b) => naturalCmp(a.marca, b.marca) || naturalCmp(a.modelo, b.modelo));
+      return {
+        cat,
+        modelos,
+        nSkus: items.length,
+        totalStock: items.reduce((sum, x) => sum + (x.stock || 0), 0),
+        valorStock: items.reduce((sum, x) => sum + (x.stock || 0) * (x.cpp || 0), 0),
+      };
+    });
+  }, [rows]);
+
+  // Sub-row (variante de color o SKU único): celdas de datos + acciones.
+  const skuCells = (s, { indent = false } = {}) => {
+    const margen = s.precioSugerido > 0 ? Math.round(((s.precioSugerido - s.cpp) / s.precioSugerido) * 100) : 0;
+    return (
+      <>
+        <td className={`num right ${s.stock <= 0 ? 'neg' : ''}`}>{s.stock}</td>
+        <td className="num right" style={{ color: s.enTransito > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enTransito > 0 ? s.enTransito : '—'}</td>
+        <td className="num right">{money(s.cpp)}</td>
+        <td className="num right">{s.precioSugerido > 0 ? money(s.precioSugerido) : '—'}</td>
+        <td className="num right muted">{s.precioSugerido > 0 ? margen + '%' : '—'}</td>
+        <td>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span className={`badge ${estadoCls(s.estado)}`} style={indent ? { fontSize: 9 } : undefined}>{estadoLabel(s.estado)}</span>
+            <button className="icon-btn" title="Editar" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); onEdit(s); }}>✎</button>
+            <button className="icon-btn danger" title="Eliminar" style={{ padding: '2px 6px' }} onClick={(e) => { e.stopPropagation(); onDel(s); }}>×</button>
+          </div>
+        </td>
+      </>
+    );
+  };
+
   return (
     <div className="section">
       <div className="section-head">
@@ -235,7 +296,7 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
           <input className="input" style={{ width: 180 }} type="text" placeholder="Buscar nombre, SKU, marca…"
             value={search} onChange={(e) => setSearch(e.target.value)} />
           {['all', 'critico', 'atencion', 'ok'].map((f) => (
-            <button key={f} className={filter === f ? 'pill' : 'pill'}
+            <button key={f} className="pill"
               style={{ background: filter === f ? 'var(--surface-3)' : 'var(--surface)', color: filter === f ? 'var(--text)' : 'var(--text-2)' }}
               onClick={() => setFilter(f)}>
               {f === 'all' ? 'Todos' : estadoLabel(f)}
@@ -244,8 +305,100 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
           <button className="btn ghost" onClick={exportarCSV} disabled={!rows.length} title="Descargar CSV">⤓ CSV</button>
         </div>
       </div>
-      <DataTable columns={columns} rows={rows} onRowClick={onRow} getRowKey={(s) => s.id}
-        empty="Sin SKUs en este filtro" />
+
+      {!rows.length ? (
+        <div className="empty">Sin SKUs en este filtro</div>
+      ) : (
+        <table className="data">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Marca · Modelo</th>
+              <th className="num right">Stock</th>
+              <th className="num right">En camino</th>
+              <th className="num right">CPP</th>
+              <th className="num right">Precio</th>
+              <th className="num right">Margen</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cats.map(({ cat, modelos, nSkus, totalStock, valorStock }) => (
+              <Fragment key={cat}>
+                {/* ── NIVEL 1: cabecera de categoría con subtotales ── */}
+                <tr style={{ background: 'var(--surface-2)' }}>
+                  <td colSpan="8" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 12, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {cat}
+                    <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--text-3)', fontSize: 11, textTransform: 'none', letterSpacing: 0 }}>
+                      {modelos.length} modelo{modelos.length !== 1 ? 's' : ''} · {nSkus} SKU{nSkus !== 1 ? 's' : ''} · {intNum(totalStock)} ud · {money(valorStock)} en stock
+                    </span>
+                  </td>
+                </tr>
+
+                {modelos.map((g) => {
+                  // ── NIVEL 2: marca+modelo con 1 sola variante → SKU directo ──
+                  if (g.items.length === 1) {
+                    const s = g.items[0];
+                    return (
+                      <tr key={`${cat}|${g.marca}|${g.modelo}`} style={{ cursor: 'pointer' }} onClick={() => onRow(s)}>
+                        <td></td>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{g.marca} {g.modelo}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{s.id}</div>
+                        </td>
+                        {skuCells(s)}
+                      </tr>
+                    );
+                  }
+
+                  // ── NIVEL 2: marca+modelo con >1 variante → fila colapsable ──
+                  const key = `${cat}|${g.marca}|${g.modelo}`;
+                  const isOpen = !!expanded[key];
+                  const totStock = g.items.reduce((s, x) => s + (x.stock || 0), 0);
+                  const totEC = g.items.reduce((s, x) => s + (x.enTransito || 0), 0);
+                  const cppProm = g.items.reduce((s, x) => s + (x.cpp || 0), 0) / g.items.length;
+                  const pvAlguno = g.items.find((x) => x.precioSugerido > 0)?.precioSugerido || 0;
+                  const margen = pvAlguno > 0 ? Math.round(((pvAlguno - cppProm) / pvAlguno) * 100) : 0;
+                  const est = estadoPeor(g.items);
+                  return (
+                    <Fragment key={key}>
+                      <tr style={{ cursor: 'pointer' }} onClick={() => setExpanded((m) => ({ ...m, [key]: !m[key] }))}>
+                        <td style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: 11 }}>{isOpen ? '▼' : '▶'}</td>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{g.marca} {g.modelo}</div>
+                          {!isOpen && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                              {g.items.length} variantes · {g.items.map((s) => s.color).filter(Boolean).join(' · ') || g.items.map((s) => s.id).join(' · ')}
+                            </div>
+                          )}
+                        </td>
+                        <td className={`num right ${totStock === 0 ? 'neg' : ''}`}>{totStock}</td>
+                        <td className="num right" style={{ color: totEC > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{totEC > 0 ? totEC : '—'}</td>
+                        <td className="num right">{money(cppProm)}</td>
+                        <td className="num right">{pvAlguno > 0 ? money(pvAlguno) : '—'}</td>
+                        <td className="num right muted">{pvAlguno > 0 ? margen + '%' : '—'}</td>
+                        <td><span className={`badge ${estadoCls(est)}`}>{estadoLabel(est)}</span></td>
+                      </tr>
+
+                      {/* ── NIVEL 3: variantes de color (al expandir) ── */}
+                      {isOpen && g.items.map((s) => (
+                        <tr key={s.id} style={{ background: 'var(--surface)', cursor: 'pointer' }} onClick={() => onRow(s)}>
+                          <td></td>
+                          <td style={{ paddingLeft: 24 }}>
+                            <div style={{ fontSize: 12 }}>↳ <strong>{s.color || s.id}</strong></div>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>{s.id}</div>
+                          </td>
+                          {skuCells(s, { indent: true })}
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

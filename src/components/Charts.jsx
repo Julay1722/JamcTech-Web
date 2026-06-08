@@ -31,6 +31,18 @@ export function KPI({ label, value, delta, deltaLabel, currency, tone }) {
   );
 }
 
+// Barra de progreso / utilización. pct 0-100. Por defecto colorea por umbral
+// (verde <60, ámbar 60-85, rojo >85) — útil para uso de tarjeta/línea. color override opcional.
+export function Bar({ pct, color }) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  const auto = p > 85 ? 'var(--danger)' : p > 60 ? 'var(--warning)' : 'var(--success)';
+  return (
+    <div className="bar" title={`${p.toFixed(0)}%`}>
+      <span style={{ width: `${p}%`, background: color || auto }} />
+    </div>
+  );
+}
+
 export function MiniBars({ values, w = 80, h = 28, color = 'var(--accent)' }) {
   if (!values || values.length === 0) return null;
   const max = Math.max(...values, 1);
