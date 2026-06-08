@@ -80,6 +80,11 @@ especificación de QUÉ debe hacer la app es el código actual, salvo donde guar
 datos incorrectos: ahí la fuente de verdad es `jamc-reglas`, no el código viejo.
 Antes de escribir una sola línea nueva:
 
+0. **Lee `BUGS_DATOS.md`** — auditoría de integridad de datos (6 áreas,
+   verificada contra la DB). Lista los bugs de guardado/KPI concretos que la
+   reescritura DEBE arreglar, con evidencia y prioridad. Es la lista de "qué está
+   mal hoy". **Ojo:** trae los IDs reales de cuentas/préstamos y nombres de enum
+   (los de `SCHEMA.md`/`CLAUDE.md` están desactualizados — actualízalos primero).
 1. Lee `index.html` completo (es donde vive TODA la UI viva; los
    `src/dashboard/*.jsx` son **código muerto**, NO los uses como referencia —
    están desactualizados).

@@ -135,31 +135,40 @@ documéntalo aquí para que ninguna sesión futura lo repita.
 - **Ganancia en métricas** (RESUELTO): debe ser neta (regla 10), antes mostraba
   bruta en algunos lugares.
 
-Auditoría 2026-06-07 (detalle completo + queries en `BUGS_DATOS.md`). Causa raíz:
-una venta vive en DOS lugares no sincronizados — tabla `ventas` (revenue/ganancia)
-y caja `movimientos` (capital). Por eso los KPIs no cuadran y hay ajustes manuales.
+Auditoría 2026-06-07 — **informe completo en `BUGS_DATOS.md`** (6 áreas,
+verificado contra la DB; cada hallazgo con evidencia SQL o archivo:línea). Causa
+raíz transversal: cada entidad vive en DOS+ lugares que el código no sincroniza
+(venta: `ventas` vs caja; compra: `entradas`/`lotes` vs caja; deuda:
+`saldo_corte` vs `cuotas` vs caja; inversor: columnas vs caja). Los triggers de
+la DB están sanos; los bugs están en la capa de escritura JS y en KPIs que leen
+fuentes desincronizadas. Por eso nada cuadra y se tapa con 19 ajustes manuales.
 
-- **BUG-1 (CRÍTICO, PENDIENTE):** editar venta no re-sincroniza la caja.
-  `updateVentaHeader`/`updateVentaLineas` cambian `ventas` pero no el movimiento
-  de caja ligado → revenue y capital divergen. Fix: editar venta = editar también
-  su movimiento de caja.
-- **BUG-2 (CRÍTICO, PENDIENTE):** el ingreso de caja de `createVenta` ignora el
-  envío (entrada = solo productos) y no registra el envío pagado al courier. Fix:
-  entrada = productos + envío cobrado; salida = envío pagado.
-- **BUG-3 (PENDIENTE):** `removeVenta` borra la caja por `venta_id`, que es null
-  en ventas viejas → deja ingresos huérfanos inflando capital.
-- **BUG-4 (PENDIENTE):** 173/175 movimientos VENTA sin `venta_id` (data vieja).
-  El modelo debe EXIGIR el enlace siempre.
-- **BUG-5 (PENDIENTE):** 285/288 movimientos van a BHD Débito (cuenta_id=1) →
-  saldos por cuenta sin sentido. El form debe exigir elegir la cuenta real.
-- **BUG-6 (PENDIENTE):** `ventas.envio_cobrado` histórico casi vacío ($50 de
-  ~$21k) → KPIs de envío incompletos.
-- **NO son bugs:** stock negativo / SKU sin CPP = placeholder `LEGACY-SALE` +
-  SKUs nuevos; tabla `ventas`/`ventas_items` sana; DRAWDOWN/cuentas íntegros.
+Críticos (ver IDs completos en `BUGS_DATOS.md`):
+- **VEN-1/VEN-2:** editar venta no re-sincroniza la caja; el ingreso de caja
+  ignora el envío.
+- **INV-1:** costo USD se guarda como RD$ crudo en `entradas` → CPP corrupto →
+  ganancia inflada.
+- **INV-2/INV-3:** editar lote no re-sincroniza la caja; `updateLoteHeader`
+  ignora USD y tarjeta (regla 7).
+- **DEU-1/DEU-2/DEU-3:** "usado" se calcula de 2 formas que no cuadran; pagar una
+  cuota no baja el saldo (no toca `cuotas`); no existe el schedule de 48 cuotas.
+- **INVR-1/INVR-2:** pago a inversor no guarda `inversor_id` (la vista nunca baja);
+  el modal pre-llena con el devengado total de por vida (sobrepago).
+- **CTA-1:** todo defaultea a BHD Débito (fallback silencioso `DEFAULT_CUENTA_ID=1`).
+- **KPI-1/KPI-3:** "Stock total" del Overview cuenta LEGACY-SALE (18 vs 106);
+  el "capital" de los charts mete el DRAWDOWN (deuda) como capital propio.
 
-Principio para el fix: crear/editar/borrar una venta debe tratar la venta y su
-movimiento de caja como **una transacción atómica sincronizada** (monto correcto
-= productos + envío, `venta_id` siempre ligado).
+NO son bugs: triggers (CPP, prorrateo, totales, naturaleza), integridad
+referencial, formato SKU, modelo dual cuenta/préstamo. Stock negativo / SKU sin
+CPP = solo placeholder `LEGACY-SALE` + SKUs nuevos.
+
+⚠️ **Docs con IDs viejos:** `SCHEMA.md`/`CLAUDE.md` tienen IDs de cuentas/préstamos
+y nombres de enum desactualizados — usar los reales listados en `BUGS_DATOS.md`.
+
+Principio del fix: cada crear/editar/borrar es una **transacción atómica
+sincronizada** (toca todas las tablas de la entidad, monto y moneda correctos,
+FKs siempre ligadas) y cada KPI/saldo lee **una sola fuente de verdad** (vistas
+`vw_*`). Auditar cada arreglo con [[jamc-paridad]].
 - *(Añadir aquí cada nuevo hallazgo: form/KPI afectado, qué guardaba mal, cuál
   es el guardado correcto y dónde se arregló.)*
 
