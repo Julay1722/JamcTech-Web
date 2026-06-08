@@ -1,21 +1,23 @@
 {
   "name": "jamcs-tech-dashboard",
   "private": true,
-  "version": "2.4.0",
-  "description": "JAMC's Tech terminal dashboard — Bloomberg-themed React/JSX dashboard apuntando a Supabase (sin build step en cliente; Babel-standalone). Para correrlo localmente usar `npm start`.",
+  "version": "3.0.0",
+  "type": "module",
+  "description": "JAMC's Tech terminal dashboard — Vite + React, backend Supabase. Reescritura modular (branch reconstruccion).",
   "scripts": {
-    "start": "npx serve . -p 3000",
-    "dev": "npx netlify dev",
-    "test": "playwright test",
-    "test:usuario": "playwright test tests/persona-usuario.spec.js",
-    "test:qa": "playwright test tests/persona-qa.spec.js",
-    "test:qaui": "playwright test tests/persona-qaui.spec.js",
-    "test:tester": "playwright test tests/persona-tester.spec.js",
-    "test:headed": "playwright test --headed",
-    "test:report": "playwright show-report"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
-    "netlify-cli": "^26.0.2"
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.7"
   }
 }
