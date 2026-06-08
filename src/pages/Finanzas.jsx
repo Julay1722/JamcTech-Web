@@ -32,7 +32,6 @@ import { CuentaSelect, MedioPagoSelect, ContraparteSelect } from '../components/
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
-import LibroPage from './Libro.jsx';
 
 /* ──────────── Metadatos de métodos de compensación (del monolito) ──────────── */
 const TIPO_COMPENSACION_META = {
@@ -74,8 +73,6 @@ export default function FinanzasPage({ onNavigate }) {
   // Tarjetas: TARJETA_CREDITO (revolventes con corte).
   const tarjetas = prestamos.filter((p) => p.tipo === 'TARJETA_CREDITO');
 
-  const enDeudas = ['analisis', 'prestamos', 'tarjetas'].includes(tab);
-  const enBanco = ['cuentas', 'movimientos'].includes(tab);
   const showNuevo = ['prestamos', 'tarjetas', 'inversores', 'cuentas'].includes(tab);
 
   return (
@@ -87,29 +84,15 @@ export default function FinanzasPage({ onNavigate }) {
         </div>
       </div>
 
-      {/* Tabs nivel 1 (4 grupos) */}
+      {/* Sub-tabs planos (un solo nivel, sin anidamiento) */}
       <div className="tabs">
         <button className={tab === 'resumen' ? 'tab active' : 'tab'} onClick={() => setTab('resumen')}>Resumen</button>
-        <button className={enDeudas ? 'tab active' : 'tab'} onClick={() => setTab('analisis')}>Deudas</button>
+        <button className={tab === 'analisis' ? 'tab active' : 'tab'} onClick={() => setTab('analisis')}>Análisis deuda</button>
+        <button className={tab === 'prestamos' ? 'tab active' : 'tab'} onClick={() => setTab('prestamos')}>Préstamos</button>
+        <button className={tab === 'tarjetas' ? 'tab active' : 'tab'} onClick={() => setTab('tarjetas')}>Tarjetas</button>
         <button className={tab === 'inversores' ? 'tab active' : 'tab'} onClick={() => setTab('inversores')}>Inversores</button>
-        <button className={enBanco ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Banco</button>
+        <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Cuentas</button>
       </div>
-
-      {/* Sub-subtabs de Deudas */}
-      {enDeudas && (
-        <div className="tabs" style={{ marginTop: 'calc(-1 * var(--s-2))' }}>
-          <button className={tab === 'analisis' ? 'tab active' : 'tab'} onClick={() => setTab('analisis')}>Análisis</button>
-          <button className={tab === 'prestamos' ? 'tab active' : 'tab'} onClick={() => setTab('prestamos')}>Préstamos</button>
-          <button className={tab === 'tarjetas' ? 'tab active' : 'tab'} onClick={() => setTab('tarjetas')}>Tarjetas</button>
-        </div>
-      )}
-      {/* Sub-subtabs de Banco */}
-      {enBanco && (
-        <div className="tabs" style={{ marginTop: 'calc(-1 * var(--s-2))' }}>
-          <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Cuentas</button>
-          <button className={tab === 'movimientos' ? 'tab active' : 'tab'} onClick={() => setTab('movimientos')}>Movimientos</button>
-        </div>
-      )}
 
       {tab === 'resumen' && <ResumenTab prestamos={prestamos} inversores={inversores} cuentas={cuentas} />}
       {tab === 'analisis' && <AnalisisTab prestamosTab={prestamosTab} tarjetas={tarjetas} inversores={inversores} cuentas={cuentas} />}
@@ -117,7 +100,6 @@ export default function FinanzasPage({ onNavigate }) {
       {tab === 'tarjetas' && <TarjetasTab tarjetas={tarjetas} />}
       {tab === 'inversores' && <InversoresTab inversores={inversores} />}
       {tab === 'cuentas' && <CuentasTab cuentas={cuentas} />}
-      {tab === 'movimientos' && <LibroPage embedded onNavigate={onNavigate} />}
     </div>
   );
 }
