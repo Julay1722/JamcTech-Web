@@ -13,8 +13,7 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 | Componente | Tech | Status |
 |---|---|---|
 | **Database** | Supabase (Postgres) | ✓ Reload total del sheet live 1722 ProV2.1 (2026-05-30): 269 movimientos · 196 ventas · 79 entradas · 19 lotes · 49 SKUs (con stock+precio) · 5 préstamos. KPIs cuadran con el sheet: capital 36,960 · revenue 393,450 · ganancia 157,846 · stock 111 ud. Cuadre vs cierre = 1 fila AJUSTE (drift manual del sheet). Generador: `backup_2026-05-30/build_load.js`. |
-| **Frontend dashboard** | HTML/JS estático local (`npx serve .`) | ✓ Apuntando a Supabase via `src/supabase-client.js` (migrado 2026-05-26) |
-| **Cliente Airtable legacy** | `src/airtable-client.js` | Comentado en index.html como rollback fácil |
+| **Frontend dashboard** | **Vite + React** (branch `reconstruccion`, 2026-06-07) | ✓ Reescritura modular: `src/lib/db/{loaders,writers}.js` + `src/pages/*`. Capa de datos limpia, bugs de `BUGS_DATOS.md` arreglados y verificados contra la DB. `master` conserva el monolito Babel viejo. |
 | **RLS / Auth** | 🔒 Blindado (2026-06-05): solo `authenticated` tiene acceso (login real Supabase Auth). `anon` = 0 policies → la llave pública del bundle NO devuelve nada sin login. Agentes usan rol `jarvis_readonly` (separado). Usuario dueño: jamctech17@gmail.com. Gate en `Root()` (index.html) + boot gateado en supabase-client.js. | ✓ Listo para publicar |
 | **Repo dashboard local** | C:\Users\coco2\OneDrive\Escritorio\V17 | Git inicializado · 5+ commits |
 | **Repo GitHub (legacy)** | github.com/Julay1722/Jamc-s | NO sincronizado con esta versión |
@@ -48,56 +47,48 @@ Para tests locales hay `TEST_USER_*` en `.env` (gitignored).
 > en http://localhost:3000. Conservada como respaldo; el monolito vive en
 > `legacy-monolith.html` dentro del branch `reconstruccion`.
 
-## Arquitectura del cliente
+## Arquitectura del cliente (branch `reconstruccion` · Vite + React)
 
 ```
-index.html
-├── src/data.js                 ← seeds hardcoded (fallback histórico)
-├── @supabase/supabase-js@2     ← UMD desde CDN
-├── src/supabase-client.js      ← cliente Supabase (drop-in replacement)
-│   ├── Expone window.AT_CLIENT.* (loadVentas, createVenta, etc — mismo
-│   │   contrato que era Airtable, panels no se enteran del cambio)
-│   ├── Pobla window.__AIRTABLE_DATA__.{skus,ventas,cashflow,...}
-│   ├── Dispara eventos 'airtable-loaded' para que panels re-rendereen
-│   └── _overrideGlobals(): muta window.CF_ALL/MES/COOP/ANDREA/BHD
-│       in-place con data real (mismo patrón que VENTAS_SKU/EN_CAMINO).
-│       Re-dispara eventos por tabla para forzar re-render.
-└── src/dashboard/*.jsx         ← paneles React (sin tocar lógica core)
-    └── session-ledger.jsx > useAirtableTable(table)
-         ← hook que panels usan para suscribirse a cambios de tabla.
-           Acepta 'globals' como wildcard (cualquier panel re-renderea).
+index.html                      ← solo <div id="root"> + <script src=/src/main.jsx>
+└── src/main.jsx                 ← bootstrap: auth gate (Root) + providers
+    ├── ToastProvider            (src/components/Toast.jsx)
+    ├── DataProvider             (src/hooks/useData.jsx) ← contexto central de datos
+    │   └── loadAll()            (src/lib/db/loaders.js) ← lee vistas vw_* y arma shapes limpios
+    └── App.jsx                  ← shell: sidebar 6 tabs, period filter, logout
+        └── src/pages/*.jsx      ← Overview, Ventas, Inventario, Finanzas, Libro, Alertas
+            ├── usa useData()    para leer (NO window.__AIRTABLE_DATA__)
+            ├── usa src/lib/db/writers.js  para escribir (transacciones atómicas)
+            └── usa src/components/*  (Modal, Form, Table, Pickers, Charts)
 ```
+
+- **Lectura:** `src/lib/db/loaders.js` → `useData()` (contexto). Una fuente de verdad: las vistas `vw_*`.
+- **Escritura:** `src/lib/db/writers.js`. Cada crear/editar/borrar toca todas las tablas de la entidad (negocio + caja) de forma sincronizada, con rollback. Arregla los bugs de `BUGS_DATOS.md`.
+- **Auth:** `src/lib/supabase.js` (cliente singleton + helpers). Sin sesión válida no se monta la app ni se carga data (RLS lo respalda).
 
 ## Estructura del proyecto local
 
 ```
 C:\Users\coco2\OneDrive\Escritorio\V17\
-├── index.html               # Dashboard principal
+├── index.html               # Entry Vite (div#root + módulo)
+├── package.json             # vite, react, @supabase/supabase-js · scripts dev/build/preview
+├── vite.config.js
+├── netlify.toml             # build = npm run build, publish = dist
 ├── src/
-│   ├── data.js              # Seeds hardcoded (fallback histórico)
-│   ├── airtable-client.js   # Legacy, comentado en index.html
-│   ├── supabase-client.js   # ✓ Cliente activo (lectura + escritura)
-│   ├── helpers.jsx
-│   ├── toast-system.jsx
-│   └── dashboard/           # Panels React
-│       ├── shell.jsx        # Header, footer, ticker (todos reactivos)
-│       ├── session-ledger.jsx # useAirtableTable hook
-│       ├── panel-mando.jsx
-│       ├── panel-inventario.jsx
-│       ├── panel-cashflow.jsx
-│       ├── panel-financiero.jsx
-│       ├── panel-fin-productos.jsx
-│       ├── panel-radar-registrar.jsx  # Form de venta + ajuste manual CF
-│       ├── primitives.jsx
-│       ├── tweaks-panel.jsx
-│       └── app.jsx
-├── netlify/functions/airtable.js  # Legacy proxy, ya no usado
+│   ├── main.jsx             # bootstrap + auth gate
+│   ├── App.jsx              # shell (tabs, period, logout)
+│   ├── styles/theme.css     # tema Amber Terminal
+│   ├── lib/
+│   │   ├── supabase.js      # cliente singleton + auth + constantes/IDs
+│   │   ├── format.js        # money/fecha/num
+│   │   └── db/{loaders,writers,helpers}.js
+│   ├── hooks/useData.jsx    # contexto de datos
+│   ├── components/          # Modal, Form, Table, Pickers, Charts, Toast, PeriodFilter, LoginScreen
+│   └── pages/               # Overview, Ventas, Inventario, Finanzas, Libro, Alertas
+├── legacy-monolith.html     # versión vieja monolítica (referencia; borrar cuando Julio confirme)
+├── index-legacy.html        # versión Bloomberg legacy
 ├── tests/                   # Playwright (mayoría obsoletos post-migración)
-├── .env                     # Solo Airtable PAT (no usado ya)
-├── CLAUDE.md (este archivo)
-├── SCHEMA.md                # Schema de Supabase
-├── TODO.md                  # Trabajo pendiente
-└── HANDOFF.md               # Historia detallada de migración
+├── CLAUDE.md · SCHEMA.md · TODO.md · BUGS_DATOS.md · REWRITE_INVENTORY.md · HANDOFF.md
 ```
 
 ## Modelo mental del negocio
