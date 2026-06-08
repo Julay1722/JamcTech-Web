@@ -9,6 +9,7 @@ import AlertasPage from './pages/Alertas.jsx';
 import VentasPage from './pages/Ventas.jsx';
 import InventarioPage from './pages/Inventario.jsx';
 import FinanzasPage from './pages/Finanzas.jsx';
+import LibroPage from './pages/Libro.jsx';
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -30,8 +31,9 @@ export default function App() {
     { id: 'ventas',     label: 'Ventas',     icon: '$', badge: (data.ventas || []).length },
     { id: 'inventario', label: 'Inventario', icon: '▤', badge: (data.skus || []).length },
     { id: 'finanzas',   label: 'Finanzas',   icon: '∮', badge: null },
+    { id: 'libro',      label: 'Libro',      icon: '≣', badge: (data.movimientos || []).length },
   ];
-  const showPeriod = ['overview', 'ventas'].includes(page);
+  const showPeriod = ['overview', 'ventas', 'libro'].includes(page);
   const today = new Date().toISOString().slice(0, 10);
 
   return (
@@ -90,6 +92,7 @@ export default function App() {
           {page === 'ventas'     && <VentasPage period={period} />}
           {page === 'inventario' && <InventarioPage />}
           {page === 'finanzas'   && <FinanzasPage onNavigate={setPage} />}
+          {page === 'libro'      && <LibroPage period={period} onNavigate={setPage} />}
         </>)}
       </main>
     </div>
