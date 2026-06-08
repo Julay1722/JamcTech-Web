@@ -634,6 +634,20 @@ function DetalleInversor({ inversor }) {
 
 /* ──────────── Reglas de compensación (CRUD) + devengo ──────────── */
 // Devengo = ACUMULADO DE POR VIDA (regla 9). Pendiente por regla = devengado − ya pagado.
+
+// Fecha de corte del devengo: día (día_de_pago − 5) más reciente ya pasado.
+// Ej. día de pago 17 → corte el 12. El devengado se "congela" en ese corte y
+// solo avanza cuando pasa el siguiente (decisión de Julio: corte 5 días antes
+// del pago, como una factura mensual). Default día de pago = 17.
+const DIAS_ANTES_CORTE = 5;
+function corteDevengo(diaPago) {
+  const corteDay = Math.max(1, (Number(diaPago) || 17) - DIAS_ANTES_CORTE);
+  const now = new Date();
+  let corte = new Date(now.getFullYear(), now.getMonth(), corteDay, 23, 59, 59);
+  if (now < corte) corte = new Date(now.getFullYear(), now.getMonth() - 1, corteDay, 23, 59, 59);
+  return corte;
+}
+
 function ReglasCompensacionList({ inversor, esDueno }) {
   const data = useData();
   const t = useToast();
@@ -646,22 +660,24 @@ function ReglasCompensacionList({ inversor, esDueno }) {
   // Ventas/ganancia/unidades de por vida desde el inicio de cada regla (regla 9).
   const ventas = data.ventas || [];
 
-  // Devengo acumulado de por vida para una regla. Simplificado pero coherente
-  // con el monolito: usa revenue/ganancia/unidades desde la fecha de inicio
-  // de la regla (o del inversor) hasta hoy. NO reinicia por ciclo.
-  // TODO: el monolito tiene una "fecha de corte" (N días antes del pago) que
-  // congela el monto; aquí calculamos directo a hoy. Si Julio necesita el corte
-  // exacto, reintroducir corteDeRegla. La regla de negocio (acumulado de por
-  // vida) se respeta.
+  // Devengo acumulado de por vida (regla 9), CONGELADO en la fecha de corte:
+  // corte = día (día_de_pago − 5) más reciente ya pasado (Julio: corte 5 días
+  // antes del pago). El monto no sube cada día: se queda fijo hasta que pasa el
+  // siguiente corte (como una factura mensual que cierra ese día). Mide ventas/
+  // meses desde el inicio de la regla HASTA el corte, no hasta hoy.
   const computeDevengado = (regla) => {
     const inicio = regla.fechaInicio || inversor.fechaInicio;
     if (!inicio) return { generado: 0, detalle: 'Sin fecha de inicio' };
     const desde = new Date(inicio + 'T00:00:00');
-    const hoy = new Date();
-    const ms = Math.max(0, hoy - desde);
+    const hasta = corteDevengo(regla.diaPago); // 5 días antes del día de pago
+    const ms = Math.max(0, hasta - desde);
     const meses = ms / (30.4 * 86400000);
     const trimestres = Math.floor(meses / 3);
-    const vs = ventas.filter((v) => v.fecha && new Date(v.fecha + 'T00:00:00') >= desde);
+    const vs = ventas.filter((v) => {
+      if (!v.fecha) return false;
+      const d = new Date(v.fecha + 'T00:00:00');
+      return d >= desde && d <= hasta;
+    });
     const revenue = vs.reduce((s, v) => s + v.facturado, 0);
     const ganancia = vs.reduce((s, v) => s + v.gananciaNeta, 0);
     const unidades = vs.reduce((s, v) => s + v.lineas.reduce((a, l) => a + l.cantidad, 0), 0);
