@@ -87,3 +87,34 @@ test('writer round-trip: crear → verificar en DB → borrar un movimiento', as
   }, id);
   expect(gone).toBe(0);
 });
+
+test('transferencia interna (CTA-2): mueve AMBOS saldos y borra ambas patas', async ({ page }) => {
+  const saldo = async (cid) => page.evaluate(async (id) => {
+    const { data } = await window.SB.from('vw_saldo_cuenta').select('saldo_actual').eq('id', id).single();
+    return Number(data.saldo_actual);
+  }, cid);
+
+  const baseOrigen = await saldo(1); // BHD Débito
+  const baseDestino = await saldo(2); // Efectivo
+
+  // Crear transferencia 100 (BHD → Efectivo) vía el writer real.
+  const token = await page.evaluate(async () => {
+    const w = await import('/src/lib/db/writers.js?v=' + Date.now());
+    const r = await w.createMovimiento({ fecha: '2026-06-08', tipo: 'TRANSFERENCIA_INTERNA', cuentaId: 1, cuentaDestinoId: 2, monto: 100, notas: 'PW-TRF' });
+    return r._token;
+  });
+  expect(token).toContain('#TRF-');
+
+  // Ambos saldos se mueven: origen −100, destino +100.
+  expect(await saldo(1)).toBeCloseTo(baseOrigen - 100, 2);
+  expect(await saldo(2)).toBeCloseTo(baseDestino + 100, 2);
+
+  // Borrar una pata borra ambas y restaura los saldos.
+  await page.evaluate(async (tk) => {
+    const w = await import('/src/lib/db/writers.js?v=' + Date.now());
+    const { data } = await window.SB.from('movimientos').select('id').ilike('notas', '%' + tk + '%').limit(1);
+    await w.removeMovimiento(data[0].id);
+  }, token);
+  expect(await saldo(1)).toBeCloseTo(baseOrigen, 2);
+  expect(await saldo(2)).toBeCloseTo(baseDestino, 2);
+});
