@@ -134,6 +134,32 @@ documéntalo aquí para que ninguna sesión futura lo repita.
   DRAWDOWN con `entrada > 0` + `prestamo_id` (regla 7).
 - **Ganancia en métricas** (RESUELTO): debe ser neta (regla 10), antes mostraba
   bruta en algunos lugares.
+
+Auditoría 2026-06-07 (detalle completo + queries en `BUGS_DATOS.md`). Causa raíz:
+una venta vive en DOS lugares no sincronizados — tabla `ventas` (revenue/ganancia)
+y caja `movimientos` (capital). Por eso los KPIs no cuadran y hay ajustes manuales.
+
+- **BUG-1 (CRÍTICO, PENDIENTE):** editar venta no re-sincroniza la caja.
+  `updateVentaHeader`/`updateVentaLineas` cambian `ventas` pero no el movimiento
+  de caja ligado → revenue y capital divergen. Fix: editar venta = editar también
+  su movimiento de caja.
+- **BUG-2 (CRÍTICO, PENDIENTE):** el ingreso de caja de `createVenta` ignora el
+  envío (entrada = solo productos) y no registra el envío pagado al courier. Fix:
+  entrada = productos + envío cobrado; salida = envío pagado.
+- **BUG-3 (PENDIENTE):** `removeVenta` borra la caja por `venta_id`, que es null
+  en ventas viejas → deja ingresos huérfanos inflando capital.
+- **BUG-4 (PENDIENTE):** 173/175 movimientos VENTA sin `venta_id` (data vieja).
+  El modelo debe EXIGIR el enlace siempre.
+- **BUG-5 (PENDIENTE):** 285/288 movimientos van a BHD Débito (cuenta_id=1) →
+  saldos por cuenta sin sentido. El form debe exigir elegir la cuenta real.
+- **BUG-6 (PENDIENTE):** `ventas.envio_cobrado` histórico casi vacío ($50 de
+  ~$21k) → KPIs de envío incompletos.
+- **NO son bugs:** stock negativo / SKU sin CPP = placeholder `LEGACY-SALE` +
+  SKUs nuevos; tabla `ventas`/`ventas_items` sana; DRAWDOWN/cuentas íntegros.
+
+Principio para el fix: crear/editar/borrar una venta debe tratar la venta y su
+movimiento de caja como **una transacción atómica sincronizada** (monto correcto
+= productos + envío, `venta_id` siempre ligado).
 - *(Añadir aquí cada nuevo hallazgo: form/KPI afectado, qué guardaba mal, cuál
   es el guardado correcto y dónde se arregló.)*
 
