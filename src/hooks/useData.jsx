@@ -1,19 +1,16 @@
 // ════════════════════════════════════════════════════════════════
 // useData — contexto central de datos (reemplaza window.__AIRTABLE_DATA__).
 // Los componentes consumen los datos vía este hook, nunca vía globals.
-//
-// FASE 2: estructura + estado de carga. Los loaders reales se conectan en
-// FASE 3 (src/lib/db/*). Por ahora expone arrays vacíos y loading=false tras
-// el primer ciclo para que el shell se monte y navegue.
+// Carga todo tras login (DataProvider se monta solo con sesión válida).
 // ════════════════════════════════════════════════════════════════
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { loadAll } from '../lib/db/loaders.js';
 
 const DataCtx = createContext(null);
 
 const EMPTY = {
-  skus: [], ventas: [], lotes: [], entradas: [], movimientos: [],
-  cuentas: [], prestamos: [], inversores: [], cuotas: [], compensaciones: [],
-  saldoCuentas: [], saldoPrestamos: [], saldoInversores: [], stock: [],
+  skus: [], ventas: [], lotes: [], movimientos: [],
+  cuentas: [], prestamos: [], inversores: [], cuotas: [],
 };
 
 export function DataProvider({ children }) {
@@ -22,11 +19,11 @@ export function DataProvider({ children }) {
   const refreshAll = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
-      // FASE 3: aquí se llaman los loaders reales y se arma el estado.
-      // Placeholder por ahora.
-      setState((s) => ({ ...s, loading: false }));
+      const data = await loadAll();
+      setState({ ...data, loading: false, error: null });
     } catch (e) {
-      setState((s) => ({ ...s, loading: false, error: e.message }));
+      console.error('[useData] carga falló:', e);
+      setState((s) => ({ ...s, loading: false, error: e.message || String(e) }));
     }
   }, []);
 
