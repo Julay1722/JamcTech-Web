@@ -36,18 +36,7 @@ import { useToast } from '../components/Toast.jsx';
 import { MOVFIN_TIPOS } from '../lib/supabase.js';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
 import { downloadCSV, csvName } from '../lib/csv.js';
-
-/* ──────────── Período ──────────── */
-function inPeriod(fecha, period) {
-  if (period === 'todo' || !fecha) return true;
-  const d = new Date(fecha + 'T00:00:00');
-  const now = new Date();
-  if (period === 'mes') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  if (period === 'ano') return d.getFullYear() === now.getFullYear();
-  const months = period === '3m' ? 3 : period === '6m' ? 6 : 12;
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
-  return d >= cutoff;
-}
+import { inPeriod } from '../lib/period.js';
 
 const PERIOD_OPTS = [
   { value: 'todo', label: 'Todo' }, { value: 'ano', label: 'Este año' },
@@ -84,14 +73,16 @@ const natBadge = (nat) => (
   }}>{nat === 'FINANCIERO' ? 'FIN' : 'OP'}</span>
 );
 
-export default function LibroPage({ embedded, period: periodProp, onNavigate }) {
+export default function LibroPage({ embedded, period: periodProp, customRange, onNavigate }) {
   const data = useData();
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
   const [tab, setTab] = useState('lista');
-  // Embebido en Finanzas no hay barra de período del padre → selector interno.
+  // Embebido en Finanzas no hay barra de período del padre → selector interno
+  // (presets simples, sin rango custom). Top-level usa el período + rango del padre.
   const [periodLocal, setPeriodLocal] = useState('todo');
   const period = embedded ? periodLocal : (periodProp || 'todo');
+  const range = embedded ? null : customRange;
   const [naturaleza, setNaturaleza] = useState('todas'); // todas | op | fin
   const [search, setSearch] = useState('');
   const [limit, setLimit] = useState(500);
@@ -101,7 +92,7 @@ export default function LibroPage({ embedded, period: periodProp, onNavigate }) 
   const filteredAll = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (data.movimientos || []).filter((m) => {
-      if (!inPeriod(m.fecha, period)) return false;
+      if (!inPeriod(m.fecha, period, range)) return false;
       if (naturaleza === 'op' && m.naturaleza === 'FINANCIERO') return false;
       if (naturaleza === 'fin' && m.naturaleza !== 'FINANCIERO') return false;
       if (q) {
@@ -110,7 +101,7 @@ export default function LibroPage({ embedded, period: periodProp, onNavigate }) 
       }
       return true;
     });
-  }, [data.movimientos, period, naturaleza, search]);
+  }, [data.movimientos, period, range, naturaleza, search]);
 
   if (data.loading) {
     return (

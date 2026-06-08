@@ -5,28 +5,18 @@ import { useMemo } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import { KPI, LineChart, BarChart, DonutChart } from '../components/Charts.jsx';
 import { money, intNum, ymLabel } from '../lib/format.js';
+import { inPeriod } from '../lib/period.js';
 
 const CAT_COLORS = {
   Mouse: '#f2b53e', Teclado: '#6fd08a', Headset: '#5fd0ff',
   'Mouse Pad': '#ef9a3d', Stand: '#c08af2', Otro: '#847b64',
 };
 
-function inPeriod(fecha, period) {
-  if (period === 'todo' || !fecha) return true;
-  const d = new Date(fecha + 'T00:00:00');
-  const now = new Date();
-  if (period === 'mes') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  if (period === 'ano') return d.getFullYear() === now.getFullYear();
-  const months = period === '3m' ? 3 : period === '6m' ? 6 : 12;
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
-  return d >= cutoff;
-}
-
-export default function OverviewPage({ period }) {
+export default function OverviewPage({ period, customRange }) {
   const { skus, ventas, cuentas, prestamos } = useData();
 
   const m = useMemo(() => {
-    const ventasP = ventas.filter((v) => inPeriod(v.fecha, period));
+    const ventasP = ventas.filter((v) => inPeriod(v.fecha, period, customRange));
     const capitalLiquido = cuentas.filter((c) => c.esLiquida).reduce((s, c) => s + c.saldo, 0);
     const revenue = ventasP.reduce((s, v) => s + v.facturado, 0);
     const ganancia = ventasP.reduce((s, v) => s + v.gananciaNeta, 0);
@@ -59,7 +49,7 @@ export default function OverviewPage({ period }) {
       .map((k) => ({ label: k.nombre, value: Math.round(k.ganancia) }));
 
     return { capitalLiquido, revenue, ganancia, stock, deuda, revSerie, ganSerie, labels, donut, topSkus, nVentas: ventasP.length };
-  }, [skus, ventas, cuentas, prestamos, period]);
+  }, [skus, ventas, cuentas, prestamos, period, customRange]);
 
   const margenPct = m.revenue > 0 ? (m.ganancia / m.revenue) * 100 : 0;
 

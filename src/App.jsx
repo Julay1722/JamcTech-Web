@@ -21,6 +21,7 @@ export default function App() {
   const data = useData();
   const [page, setPage] = useState('overview');
   const [period, setPeriod] = useState('todo');
+  const [customRange, setCustomRange] = useState({ from: '', to: '' });
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem('nav-collapsed') === '1');
   useEffect(() => { localStorage.setItem('nav-collapsed', navCollapsed ? '1' : '0'); }, [navCollapsed]);
 
@@ -79,7 +80,7 @@ export default function App() {
       <main className="main">
         {showPeriod ? (
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', position: 'sticky', top: 0, zIndex: 50, background: 'var(--bg)', padding: '10px 0', marginLeft: 'calc(-1 * var(--s-6))', marginRight: 'calc(-1 * var(--s-6))', paddingLeft: 'var(--s-6)', paddingRight: 'var(--s-6)', marginBottom: 'var(--s-4)', borderBottom: '1px solid var(--border)' }}>
-            <PeriodFilter value={period} onChange={setPeriod} />
+            <PeriodFilter value={period} onChange={setPeriod} custom={customRange} onCustom={setCustomRange} />
           </div>
         ) : <div style={{ paddingTop: 'var(--s-5)' }} />}
 
@@ -87,12 +88,12 @@ export default function App() {
         {data.error && <div className="empty" style={{ color: 'var(--danger)' }}>Error cargando: {data.error}</div>}
 
         {!data.loading && (<>
-          {page === 'overview'   && <OverviewPage period={period} />}
+          {page === 'overview'   && <OverviewPage period={period} customRange={customRange} />}
           {page === 'alertas'    && <AlertasPage />}
-          {page === 'ventas'     && <VentasPage period={period} />}
+          {page === 'ventas'     && <VentasPage period={period} customRange={customRange} />}
           {page === 'inventario' && <InventarioPage />}
           {page === 'finanzas'   && <FinanzasPage onNavigate={setPage} />}
-          {page === 'libro'      && <LibroPage period={period} onNavigate={setPage} />}
+          {page === 'libro'      && <LibroPage period={period} customRange={customRange} onNavigate={setPage} />}
         </>)}
       </main>
     </div>

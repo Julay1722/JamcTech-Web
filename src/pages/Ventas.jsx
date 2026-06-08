@@ -23,25 +23,15 @@ import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
 import { downloadCSV, csvName } from '../lib/csv.js';
+import { inPeriod } from '../lib/period.js';
 
 const FACEBOOK_ID = 9; // canal default (CANAL_VENTA)
-
-function inPeriod(fecha, period) {
-  if (period === 'todo' || !fecha) return true;
-  const d = new Date(fecha + 'T00:00:00');
-  const now = new Date();
-  if (period === 'mes') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  if (period === 'ano') return d.getFullYear() === now.getFullYear();
-  const months = period === '3m' ? 3 : period === '6m' ? 6 : 12;
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
-  return d >= cutoff;
-}
 
 // id incremental local para líneas en el form (no es el id de DB).
 let _lid = 1;
 const newLinea = () => ({ key: _lid++, skuId: '', cantidad: 1, precio: '' });
 
-export default function VentasPage({ period }) {
+export default function VentasPage({ period, customRange }) {
   const data = useData();
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
@@ -58,7 +48,7 @@ export default function VentasPage({ period }) {
     );
   }
 
-  const ventasPeriodo = data.ventas.filter((v) => inPeriod(v.fecha, period));
+  const ventasPeriodo = data.ventas.filter((v) => inPeriod(v.fecha, period, customRange));
   const filtered = ventasPeriodo.filter((v) => {
     if (!search) return true;
     const q = search.toLowerCase();
