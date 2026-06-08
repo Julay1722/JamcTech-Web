@@ -14,7 +14,9 @@ JULIO_INSTRUCCIONES_AIRTABLE.md
 SESSION_STATE.md
 
 # ── Claude Code (config local del asistente) ────────────────────
-.claude/
+.claude/*
+# ...pero SÍ versionar las skills del proyecto (conocimiento del negocio)
+!.claude/skills/
 
 # ── Reportes internos de testing (§7.7, scratch local) ──────────
 _internal-report-cycle-*.md
