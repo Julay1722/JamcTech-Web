@@ -2508,17 +2508,34 @@ function FormCuenta({ onDone }) {
     setBusy(true);
     try {
       await window.AT_CLIENT.createCuenta({ nombre, tipo, moneda, limite, notas });
+      const esCredito = tipo === 'CREDITO';
+      // Una tarjeta de crédito debe existir también como PRÉSTAMO homónimo
+      // (tipo TARJETA_CREDITO) para aparecer en "Usos de la tarjeta" y trackear
+      // el `usado`. Creamos el gemelo y ligamos el saldo inicial a su prestamo_id.
+      let prestamoIdTarjeta = null;
+      if (esCredito) {
+        try {
+          const p = await window.AT_CLIENT.createPrestamo({
+            nombre, tipo: 'TARJETA_CREDITO', moneda,
+            limiteCredito: Number(limite) || null, notas,
+          });
+          prestamoIdTarjeta = p?.id != null ? Number(p.id) : null;
+        } catch (e) {
+          window.toastWarn?.('Tarjeta gemela no creada', e.message?.slice(0, 100));
+        }
+      }
       // Si hay saldo inicial > 0, sembrarlo con un movimiento automatico.
-      // DEBITO/EFECTIVO → APORTE_DUENO (entrada). CREDITO → DRAWDOWN (deuda preexistente).
+      // DEBITO/EFECTIVO → APORTE_DUENO (entrada de caja).
+      // CREDITO → DRAWDOWN (deuda preexistente: entrada>0 ligada al préstamo,
+      // para que sume al `usado` de la tarjeta).
       if (saldoNum > 0) {
-        const esCredito = tipo === 'CREDITO';
         await window.AT_CLIENT.create('cashflow', {
           fecha: fechaApertura,
           cuenta: nombre,
           concepto: esCredito ? 'Saldo inicial (deuda)' : 'Saldo inicial',
-          tipo: esCredito ? 'DRAWDOWN' : 'APORTE_DUENO',
-          entrada: esCredito ? 0 : saldoNum,
-          salida:  esCredito ? saldoNum : 0,
+          ...(esCredito
+            ? { tipo: 'DRAWDOWN', entrada: saldoNum, salida: 0, prestamo_id: prestamoIdTarjeta }
+            : { tipo: 'APORTE_DUENO', entrada: saldoNum, salida: 0 }),
           notas: `Saldo inicial al crear cuenta ${nombre}`,
         });
       }
@@ -6260,16 +6277,28 @@ function FormVenta() {
       if (Number(gastoEnvio) > 0) {
         try {
           const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
+          const cuentaG = gastoCuenta || 'BHD Débito';
+          // Si la cuenta origen es una tarjeta de crédito (cuenta tipo CREDITO
+          // con préstamo homónimo), el cargo es un DRAWDOWN ligado al
+          // prestamo_id (suma al usado de la tarjeta), no una salida de caja.
+          const prestamoIdTarjeta = (() => {
+            const cta = (cuentas || []).find(c => c.nombre === cuentaG);
+            if (!cta || cta.tipo !== 'CREDITO') return null;
+            const p = (data.financiero || []).find(f => f.nombre === cuentaG && String(f._airtableId || '').startsWith('p-'));
+            return p ? Number(String(p._airtableId).slice(2)) : null;
+          })();
+          const esCredito = prestamoIdTarjeta != null;
           await window.AT_CLIENT.create('cashflow', {
-            fecha, cuenta: gastoCuenta || 'BHD Débito',
+            fecha, cuenta: cuentaG,
             auxiliar: canal,
             concepto: gastoConcepto,
-            tipo: TIPO_MAP[gastoConcepto] || 'OTROS',
-            entrada: 0,
-            salida: Number(gastoEnvio),
-            notas: `Asociado a venta ${res.idVenta}`,
+            ...(esCredito
+              ? { tipo: 'DRAWDOWN', entrada: Number(gastoEnvio), salida: 0, prestamo_id: prestamoIdTarjeta,
+                  notas: `Asociado a venta ${res.idVenta} · ${gastoConcepto}` }
+              : { tipo: TIPO_MAP[gastoConcepto] || 'OTROS', entrada: 0, salida: Number(gastoEnvio),
+                  notas: `Asociado a venta ${res.idVenta}` }),
           });
-          window.toastOk('Gasto asociado registrado', `${gastoConcepto} · ${fmtCurrency(gastoEnvio)}`);
+          window.toastOk('Gasto asociado registrado', `${gastoConcepto} · ${fmtCurrency(gastoEnvio)}${esCredito ? ` → ${cuentaG} (tarjeta)` : ''}`);
         } catch (e) {
           window.toastWarn?.('Gasto asociado falló', e.message?.slice(0, 100));
         }
@@ -6505,17 +6534,32 @@ function FormLote() {
       // que el usuario tipea se interpreta como USD y se convierte a RD$ al
       // guardar (multiplicando por la tasa de cambio). Se anota el USD
       // original en el campo notas para trazabilidad.
+      // ¿La cuenta origen de un costo es una TARJETA DE CRÉDITO? En la DB las
+      // tarjetas existen como cuenta (tipo CREDITO) Y como préstamo homónimo
+      // (tipo TARJETA_CREDITO). Un costo pagado con tarjeta NO es salida de
+      // caja: es un cargo a la tarjeta → DRAWDOWN (entrada>0) ligado al
+      // prestamo_id, para que sume al `usado` y aparezca en "Usos de la tarjeta".
+      const resolvePrestamoTarjeta = (cuentaNombre) => {
+        const cta = cuentas.find(c => c.nombre === cuentaNombre);
+        if (!cta || cta.tipo !== 'CREDITO') return null;
+        const p = (data.financiero || []).find(f => f.nombre === cuentaNombre && String(f._airtableId || '').startsWith('p-'));
+        return p ? Number(String(p._airtableId).slice(2)) : null;
+      };
       const buildCfArgs = (cuenta, montoTipeado, concepto, tipo, auxiliar, notaSufijo) => {
         const usd = isUSDCuenta(cuenta);
         const tasa = Number(tasaCambio) || 60;
-        const salidaRD = usd ? (Number(montoTipeado) || 0) * tasa : (Number(montoTipeado) || 0);
+        const montoRD = usd ? (Number(montoTipeado) || 0) * tasa : (Number(montoTipeado) || 0);
+        const prestamoIdTarjeta = resolvePrestamoTarjeta(cuenta);
+        const esCredito = prestamoIdTarjeta != null;
         return {
           fecha, cuenta, auxiliar,
-          concepto, tipo,
-          entrada: 0, salida: salidaRD,
+          concepto,
+          ...(esCredito
+            ? { tipo: 'DRAWDOWN', entrada: montoRD, salida: 0, prestamo_id: prestamoIdTarjeta }
+            : { tipo, entrada: 0, salida: montoRD }),
           montoUsd: usd ? Number(montoTipeado) : undefined,
           tasaCambio: usd ? tasa : undefined,
-          notas: `Lote ${res.loteId} · ${notaSufijo}`,
+          notas: `Lote ${res.loteId} · ${notaSufijo}${esCredito ? ` · ${concepto} (tarjeta de crédito)` : ''}`,
         };
       };
       const cfPromises = [];
@@ -7357,12 +7401,14 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   const [envio, setEnvio] = useState(0);
   const [notas, setNotas] = useState('');
   const [lineas, setLineas] = useState([]);
+  const [removedIds, setRemovedIds] = useState([]);  // _airtableId de líneas existentes a borrar
   const [busy, setBusy] = useState(false);
   // Gasto asociado: registrar un courier/comisión de ESTA venta como movimiento
   // separado (útil cuando se olvidó al crear la venta). Solo crea si monto > 0.
   const [gastoConcepto, setGastoConcepto] = useState('Pago Envio');
   const [gastoMonto, setGastoMonto] = useState(0);
   const [gastoCuenta, setGastoCuenta] = useState('BHD Débito');
+  const [gastoExistenteId, setGastoExistenteId] = useState(null);  // si ya hay gasto asociado → editarlo, no crear otro
 
   useEffect(() => {
     if (open && venta) {
@@ -7370,7 +7416,33 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
       setCanal(venta.canal || '');
       setEnvio(venta.envio || 0);
       setNotas(venta.notas || '');
-      setGastoMonto(0);  // el gasto arranca vacío; solo se crea si se llena
+      // Precargar el gasto asociado ya registrado (si existe) para poder EDITARLO.
+      // Antes el form arrancaba en 0 y solo permitía AGREGAR un gasto nuevo.
+      // El gasto a débito es una salida (s>0); el gasto a tarjeta de crédito es
+      // un DRAWDOWN con entrada (e>0). Aceptamos ambos.
+      const asociados = (data.cashflow || []).filter(cf => {
+        const m = (cf.notas || '').match(/Asociado a venta (\S+)/);
+        return m && m[1] === venta.idVenta && (Number(cf.s) > 0 || Number(cf.e) > 0);
+      });
+      const g0 = asociados[0];
+      if (g0) {
+        setGastoExistenteId(g0._airtableId);
+        setGastoMonto(Number(g0.s) || Number(g0.e) || 0);
+        // Concepto: en débito viene del tipo (g0.c = Courier/Pago Comision). En
+        // crédito el tipo es DRAWDOWN ('Otro'), así que lo recuperamos del
+        // sufijo de notas que escribimos al guardar ("... · Pago Envio").
+        if (Number(g0.e) > 0) {
+          const mc = (g0.notas || '').match(/· (Pago Envio|Pago Comision|Otro)\b/);
+          setGastoConcepto(mc ? mc[1] : 'Otro');
+        } else {
+          setGastoConcepto(g0.c === 'Courier' ? 'Pago Envio' : g0.c === 'Pago Comision' ? 'Pago Comision' : 'Otro');
+        }
+        setGastoCuenta(g0._origen || 'BHD Débito');
+      } else {
+        setGastoExistenteId(null);
+        setGastoMonto(0);  // el gasto arranca vacío; solo se crea si se llena
+      }
+      setRemovedIds([]);
       setLineas((venta.lineas || []).map(l => {
         const sku = l.skuLinked || l.skuRef || '';
         return {
@@ -7384,6 +7456,15 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   if (!open || !venta) return null;
 
   const updateLinea = (idx, patch) => setLineas(arr => arr.map((l, i) => i === idx ? { ...l, ...patch } : l));
+  // Agregar una línea nueva (sin _airtableId → se INSERTA al guardar).
+  const addLinea = () => setLineas(arr => [...arr, { sku: '', qty: 1, precio: 0, costoUd: 0, cat: '', _origSku: '__nuevo__' }]);
+  // Quitar una línea: si ya existía en la DB (_airtableId) se marca para borrar;
+  // si era nueva solo se quita del estado.
+  const removeLinea = (idx) => setLineas(arr => {
+    const l = arr[idx];
+    if (l && l._airtableId) setRemovedIds(ids => [...ids, l._airtableId]);
+    return arr.filter((_, i) => i !== idx);
+  });
 
   const subtotalItems = lineas.reduce((s, l) => s + (Number(l.precio) || 0) * (Number(l.qty) || 0), 0);
   // La DB calcula total_facturado = subtotal_items + envío − descuento (descuento=0 aquí).
@@ -7398,12 +7479,18 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
   const margen = subtotalItems > 0 ? (ganancia / subtotalItems) * 100 : 0;
   const markup = costoTotal > 0 ? (ganancia / costoTotal) * 100 : 0;  // ganancia sobre el costo
   const CATS = [...new Set(skus.filter(s => s.id !== 'LEGACY-SALE' && s.cat).map(s => s.cat))].sort();
-  // Gastos asociados ya registrados (courier/comisión) + el que se esté agregando ahora.
-  const gastosExistentes = (data.cashflow || []).reduce((sum, cf) => {
+  // Otros gastos asociados ya registrados (excluye el que estamos editando, que
+  // ya está representado por `gastoMonto` — si no, se contaría doble).
+  const gastosOtros = (data.cashflow || []).reduce((sum, cf) => {
     const m = (cf.notas || '').match(/Asociado a venta (\S+)/);
-    return (m && venta && m[1] === venta.idVenta && Number(cf.s) > 0) ? sum + Number(cf.s) : sum;
+    const monto = Number(cf.s) || Number(cf.e) || 0;  // salida (débito) o entrada (cargo a tarjeta)
+    return (m && venta && m[1] === venta.idVenta && monto > 0 && cf._airtableId !== gastoExistenteId) ? sum + monto : sum;
   }, 0);
-  const gananciaNeta = ganancia - gastosExistentes - (Number(gastoMonto) || 0);
+  const gastosTotal = gastosOtros + (Number(gastoMonto) || 0);
+  const gananciaNeta = ganancia - gastosTotal;
+  // ¿La cuenta origen del gasto es una tarjeta de crédito? (afecta el hint y,
+  // al guardar, registra el cargo como DRAWDOWN ligado al préstamo homónimo.)
+  const gastoEsCredito = (cuentas || []).find(c => c.nombre === gastoCuenta)?.tipo === 'CREDITO';
 
   const doSave = async () => {
     setBusy(true);
@@ -7411,8 +7498,9 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
       await window.AT_CLIENT.updateVentaHeader(venta.idVenta, {
         fecha, canal, envio: Number(envio) || 0, notas,
       });
+      // Líneas EXISTENTES modificadas (tienen _airtableId).
       const changed = lineas
-        .filter(l => l.sku !== l._origSku || Number(l.qty) !== Number(l._origQty) || Number(l.precio) !== Number(l._origPrecio))
+        .filter(l => l._airtableId && (l.sku !== l._origSku || Number(l.qty) !== Number(l._origQty) || Number(l.precio) !== Number(l._origPrecio)))
         .map(l => {
           const row = { _airtableId: l._airtableId, qty: Number(l.qty), precioUnitario: Number(l.precio) };
           if (l.sku !== l._origSku) {
@@ -7423,24 +7511,60 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           return row;
         });
       if (changed.length > 0) await window.AT_CLIENT.updateVentaLineas(venta.idVenta, changed);
+      // Líneas NUEVAS (sin _airtableId) con SKU y cantidad → INSERT.
+      const nuevas = lineas
+        .filter(l => !l._airtableId && l.sku && Number(l.qty) > 0)
+        .map(l => ({ sku: l.sku, qty: Number(l.qty), precioUnitario: Number(l.precio) }));
+      if (nuevas.length > 0) await window.AT_CLIENT.addVentaLineas(venta.idVenta, nuevas);
+      // Líneas BORRADAS (existían en la DB y se quitaron).
+      if (removedIds.length > 0) await window.AT_CLIENT.removeVentaLineas(venta.idVenta, removedIds);
       window.toastOk('Venta actualizada', `${venta.idVenta} · ${fmtCurrency(totalFacturado)}`);
-      // Gasto asociado (courier/comisión) → movimiento SEPARADO desde la cuenta indicada
-      if (Number(gastoMonto) > 0) {
-        try {
-          const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
+      // Gasto asociado (courier/comisión) → movimiento SEPARADO desde la cuenta indicada.
+      // Si ya existía un gasto asociado, lo EDITAMOS (o lo borramos si lo pusieron en 0);
+      // si no existía y hay monto, lo creamos.
+      const TIPO_MAP = { 'Pago Envio': 'PAGO_TRANSPORTE', 'Pago Comision': 'PAGO_COMISION', 'Otro': 'OTROS' };
+      const montoG = Number(gastoMonto) || 0;
+      const cuentaG = gastoCuenta || 'BHD Débito';
+      // ¿La cuenta origen es una TARJETA DE CRÉDITO? En la DB las tarjetas
+      // existen como cuenta (tipo CREDITO) Y como préstamo (tipo
+      // TARJETA_CREDITO) homónimo. Un cargo a la tarjeta NO es una salida de
+      // caja: es un DRAWDOWN (entrada>0) ligado al prestamo_id, para que sume
+      // al `usado` de la tarjeta y aparezca en "Usos de la tarjeta".
+      const prestamoIdTarjeta = (() => {
+        const cta = (cuentas || []).find(c => c.nombre === cuentaG);
+        if (!cta || cta.tipo !== 'CREDITO') return null;
+        const p = (data.financiero || []).find(f => f.nombre === cuentaG && String(f._airtableId || '').startsWith('p-'));
+        return p ? Number(String(p._airtableId).slice(2)) : null;
+      })();
+      const esCredito = prestamoIdTarjeta != null;
+      // Campos del movimiento según el tipo de cuenta. Para crédito guardamos el
+      // concepto como sufijo en notas (el tipo DRAWDOWN no lo distingue) para
+      // poder recuperarlo al re-editar la venta.
+      const gastoArgs = esCredito
+        ? { tipo: 'DRAWDOWN', entrada: montoG, salida: 0, prestamo_id: prestamoIdTarjeta,
+            notas: `Asociado a venta ${venta.idVenta} · ${gastoConcepto}` }
+        : { tipo: TIPO_MAP[gastoConcepto] || 'OTROS', entrada: 0, salida: montoG, prestamo_id: null,
+            notas: `Asociado a venta ${venta.idVenta}` };
+      const destinoLbl = esCredito ? `→ ${cuentaG} (tarjeta)` : `← ${cuentaG}`;
+      try {
+        if (gastoExistenteId) {
+          if (montoG > 0) {
+            await window.AT_CLIENT.update('cashflow', gastoExistenteId, {
+              fecha, cuentaBanco: cuentaG, auxiliar: canal, ...gastoArgs,
+            });
+            window.toastOk('Gasto actualizado', `${gastoConcepto} · ${fmtCurrency(montoG)} ${destinoLbl}`);
+          } else {
+            await window.AT_CLIENT.remove('cashflow', gastoExistenteId);
+            window.toastOk('Gasto eliminado', 'Se quitó el gasto asociado de esta venta');
+          }
+        } else if (montoG > 0) {
           await window.AT_CLIENT.create('cashflow', {
-            fecha, cuenta: gastoCuenta || 'BHD Débito',
-            auxiliar: canal,
-            concepto: gastoConcepto,
-            tipo: TIPO_MAP[gastoConcepto] || 'OTROS',
-            entrada: 0,
-            salida: Number(gastoMonto),
-            notas: `Asociado a venta ${venta.idVenta}`,
+            fecha, cuenta: cuentaG, auxiliar: canal, concepto: gastoConcepto, ...gastoArgs,
           });
-          window.toastOk('Gasto registrado', `${gastoConcepto} · ${fmtCurrency(gastoMonto)} ← ${gastoCuenta}`);
-        } catch (e) {
-          window.toastWarn?.('Gasto asociado falló', e.message?.slice(0, 100));
+          window.toastOk('Gasto registrado', `${gastoConcepto} · ${fmtCurrency(montoG)} ${destinoLbl}`);
         }
+      } catch (e) {
+        window.toastWarn?.('Gasto asociado falló', e.message?.slice(0, 100));
       }
       onSaved && onSaved();
     } catch (e) {
@@ -7470,6 +7594,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
             <th className="right">Cant.</th>
             <th className="right">Precio ud. (RD$)</th>
             <th className="right">Subtotal</th>
+            <th></th>
           </tr></thead>
           <tbody>
             {lineas.map((l, idx) => {
@@ -7496,12 +7621,19 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
                 <td className="right"><input className="input num" type="number" style={{ width: 64 }} value={l.qty} onChange={e => updateLinea(idx, { qty: e.target.value })} /></td>
                 <td className="right"><input className="input num" type="number" style={{ width: 100 }} value={l.precio} onChange={e => updateLinea(idx, { precio: e.target.value })} /></td>
                 <td className="num right">{fmtCurrency((Number(l.precio) || 0) * (Number(l.qty) || 0))}</td>
+                <td className="right">
+                  <button className="btn ghost" title="Quitar producto" style={{ padding: '2px 8px', lineHeight: 1 }}
+                    onClick={() => removeLinea(idx)}>×</button>
+                </td>
               </tr>
               );
             })}
-            {lineas.length === 0 && <tr><td colSpan={4} className="muted">Esta venta no tiene líneas registradas.</td></tr>}
+            {lineas.length === 0 && <tr><td colSpan={5} className="muted">Esta venta no tiene líneas registradas.</td></tr>}
           </tbody>
         </table>
+        <div style={{ marginBottom: 10 }}>
+          <button className="btn ghost" onClick={addLinea}>+ producto</button>
+        </div>
 
         <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', fontSize: 13, marginBottom: 12, flexWrap: 'wrap' }}>
           <span className="muted">Productos: {fmtCurrency(subtotalItems)}</span>
@@ -7509,8 +7641,8 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           <span>Total facturado: <b>{fmtCurrency(totalFacturado)}</b></span>
           <span className="pos" style={{ color: gananciaNeta >= 0 ? 'var(--success)' : 'var(--danger)' }}>
             Ganancia: {fmtCurrency(gananciaNeta)}
-            {(gastosExistentes + (Number(gastoMonto) || 0)) > 0 && (
-              <span style={{ fontSize: 10, color: 'var(--text-3)', marginLeft: 4 }}>(real, −{fmtCurrency(gastosExistentes + (Number(gastoMonto) || 0))} gastos)</span>
+            {gastosTotal > 0 && (
+              <span style={{ fontSize: 10, color: 'var(--text-3)', marginLeft: 4 }}>(real, −{fmtCurrency(gastosTotal)} gastos)</span>
             )}
           </span>
           <span className="muted" title="Ganancia real sobre el precio de venta">Margen: {(subtotalItems > 0 ? (gananciaNeta / subtotalItems) * 100 : 0).toFixed(1)}%</span>
@@ -7523,7 +7655,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
         {/* Agregar un gasto (courier/comisión) a esta venta como movimiento separado */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 'var(--s-4)', paddingTop: 10, borderTop: '1px solid var(--border)' }}>
           <div className="field">
-            <div className="field-label">Agregar gasto · concepto</div>
+            <div className="field-label">{gastoExistenteId ? 'Editar gasto · concepto' : 'Agregar gasto · concepto'}</div>
             <select className="select" value={gastoConcepto} onChange={e => setGastoConcepto(e.target.value)}>
               <option value="Pago Envio">Pago Envío (courier)</option>
               <option value="Pago Comision">Pago Comisión</option>
@@ -7533,7 +7665,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
           <div className="field">
             <div className="field-label">Gasto · monto (RD$)</div>
             <input className="input num" type="number" value={gastoMonto} onChange={e => setGastoMonto(e.target.value)} placeholder="0" />
-            <div className="field-hint">Movimiento SEPARADO (no se resta de la venta)</div>
+            <div className="field-hint">{gastoExistenteId ? 'Edita el monto · ponlo en 0 para eliminar el gasto' : 'Movimiento separado · resta de la ganancia neta'}</div>
           </div>
           <div className="field">
             <div className="field-label">Gasto · cuenta origen</div>
@@ -7542,7 +7674,7 @@ function EditVentaModal({ open, venta, onCancel, onSaved }) {
                 ? cuentas.map(c => <option key={c.nombre} value={c.nombre}>{c.nombre} ({c.tipo})</option>)
                 : <option value="BHD Débito">BHD Débito</option>}
             </select>
-            <div className="field-hint">{Number(gastoMonto) > 0 ? `Sale RD$${fmtNum(gastoMonto)} de aquí` : 'Déjalo en 0 si no aplica'}</div>
+            <div className="field-hint">{Number(gastoMonto) > 0 ? (gastoEsCredito ? `Carga RD$${fmtNum(gastoMonto)} a la tarjeta (suma al usado)` : `Sale RD$${fmtNum(gastoMonto)} de aquí`) : (gastoExistenteId ? 'En 0 = se elimina' : 'Déjalo en 0 si no aplica')}</div>
           </div>
         </div>
 

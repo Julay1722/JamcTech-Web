@@ -237,15 +237,18 @@ async function loadVentas() {
     // {código}"). El dashboard muestra la ganancia real, no el margen bruto.
     // gananciaTotal pasa a ser NETA → Resumen, gráficos y listas la usan directo.
     try {
+      // Gastos asociados a una venta: pagados con débito/efectivo (salida>0) O
+      // cargados a una tarjeta de crédito (entrada>0, DRAWDOWN). Ambos son costo
+      // de la venta y se restan de la ganancia neta. El ingreso de la venta usa
+      // nota "Ingreso venta" (no "Asociado a venta"), así que no se cuela aquí.
       const { data: gastosAsoc } = await sb
         .from('movimientos')
-        .select('salida, notas')
-        .ilike('notas', '%Asociado a venta %')
-        .gt('salida', 0);
+        .select('entrada, salida, notas')
+        .ilike('notas', '%Asociado a venta %');
       const gastoMap = {};
       (gastosAsoc || []).forEach((g) => {
         const m = (g.notas || '').match(/Asociado a venta (\S+)/);
-        if (m) gastoMap[m[1]] = (gastoMap[m[1]] || 0) + (parseFloat(g.salida) || 0);
+        if (m) gastoMap[m[1]] = (gastoMap[m[1]] || 0) + (parseFloat(g.salida) || 0) + (parseFloat(g.entrada) || 0);
       });
       ventas.forEach((v) => {
         const gasto = gastoMap[v.idVenta] || 0;
@@ -1229,6 +1232,40 @@ async function updateVentaLineas(idVenta, lineas) {
   return { idVenta, updatedCount: (lineas || []).length };
 }
 
+// Inserta NUEVAS líneas (ventas_items) en una venta existente.
+// nuevas = [{ sku, qty, precioUnitario }]. El trigger snapshot_cpp captura
+// cpp_historico en el INSERT (desde skus.cpp_actual). Refetch al final para que
+// los totales recalculados por trigger lleguen al cache.
+async function addVentaLineas(idVenta, nuevas) {
+  const venta = (window.__AIRTABLE_DATA__?.ventas || []).find((v) => v.idVenta === idVenta);
+  if (!venta) throw new Error(`venta no encontrada: ${idVenta}`);
+  const vid = _stripPrefix(venta._airtableId);
+  const rows = (nuevas || [])
+    .filter((l) => l.sku && Number(l.qty) > 0)
+    .map((l) => ({
+      venta_id:        vid,
+      sku_id:          l.sku,
+      cantidad:        Number(l.qty) || 0,
+      precio_unitario: Number(l.precioUnitario) || 0,
+    }));
+  if (rows.length === 0) return { idVenta, addedCount: 0 };
+  const { error } = await sb.from('ventas_items').insert(rows);
+  if (error) throw new Error(`addVentaLineas: ${error.message}`);
+  await loadVentas();
+  return { idVenta, addedCount: rows.length };
+}
+
+// Borra líneas (ventas_items) de una venta por sus _airtableId ('vi-N').
+// Los triggers recalculan totales. Refetch al final.
+async function removeVentaLineas(idVenta, airtableIds) {
+  const ids = (airtableIds || []).map((a) => _stripPrefix(a)).filter((x) => x != null);
+  if (ids.length === 0) return { idVenta, removedCount: 0 };
+  const { error } = await sb.from('ventas_items').delete().in('id', ids);
+  if (error) throw new Error(`removeVentaLineas: ${error.message}`);
+  await loadVentas();
+  return { idVenta, removedCount: ids.length };
+}
+
 /* ════════════════════════ WRITERS — Lotes/Entradas ════════════════════════ */
 
 // lote = { fecha, status ('En Camino'/'Recibido'/'Perdido'), lineas:[{skuId, qty, costoUd}],
@@ -1838,6 +1875,13 @@ async function create(tableKey, fields) {
       row.inversor_id = Number(fields.inversor_id);
     }
 
+    // ── Cargo a tarjeta/línea de crédito: el caller pasa prestamo_id para
+    // ligar el movimiento al producto financiero (típicamente DRAWDOWN con
+    // entrada>0). Así suma al `usado` de la tarjeta, que se computa por FK
+    // prestamo_id (ver loadProductos ~L832). Sin esto el cargo quedaría como
+    // salida suelta y nunca aparecería en "Usos de la tarjeta".
+    if (fields.prestamo_id != null) row.prestamo_id = Number(fields.prestamo_id);
+
     // ── Auto-link: si hubo un createLote reciente, este CF es un satélite
     // (envío, courier, otros, compra) del lote — linkear via lote_id para
     // que removeLote pueda cascadear el cleanup.
@@ -1871,6 +1915,9 @@ async function update(tableKey, airtableId, fields) {
     if (fields.entrada  !== undefined) row.entrada  = Number(fields.entrada) || 0;
     if (fields.salida   !== undefined) row.salida   = Number(fields.salida)  || 0;
     if (fields.notas    !== undefined) row.notas    = fields.notas;
+    // prestamo_id: liga/desliga el movimiento a una tarjeta/línea (cargo a
+    // crédito). Pasar null lo desliga (ej. mover el gasto de tarjeta a débito).
+    if (fields.prestamo_id !== undefined) row.prestamo_id = fields.prestamo_id == null ? null : Number(fields.prestamo_id);
     const { error } = await sb.from('movimientos').update(row).eq('id', mid);
     if (error) throw new Error(`update cashflow: ${error.message}`);
     return { id: airtableId };
@@ -2216,7 +2263,7 @@ Object.assign(window.AT_CLIENT, {
   loadFinanciero, loadCuotas, loadResumen, loadMovFin, refreshAll,
   // Writers específicos
   createSKU, updateSKU, removeSKU, countSKURefs,
-  createVenta, removeVenta, updateVentaHeader, updateVentaLineas,
+  createVenta, removeVenta, updateVentaHeader, updateVentaLineas, addVentaLineas, removeVentaLineas,
   createLote, removeLote, updateLoteHeader,
   addEntradaToLote, updateEntrada, removeEntrada,
   createMovFin, removeMovFin,
