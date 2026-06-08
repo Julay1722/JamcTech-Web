@@ -27,6 +27,28 @@ Decisiones ya tomadas por Julio (el dueño):
 3. **Backend:** **no tocar el schema** de Supabase. Pero **sí reescribir limpio
    el cliente** (`src/supabase-client.js`) — mismo contrato de datos, código
    ordenado.
+4. **Arreglar datos, no copiar bugs:** Julio reporta que varios forms, KPIs y
+   métricas **no guardan / escriben / registran los datos correctamente** (ej.
+   los que se arreglaron hace poco en Ventas). La reescritura reproduce la
+   *intención* de cada función, **pero corrige el guardado donde esté mal**. NO
+   se copian los bugs.
+5. **Trabajar en un branch:** toda la reconstrucción se hace en un branch
+   dedicado (ej. `reconstruccion`), **nunca directo en `master`**. `master`
+   queda como respaldo funcional hasta que la nueva versión esté verificada.
+
+## Skills del proyecto (úsalas)
+
+Este repo trae skills en `.claude/skills/` que encierran el conocimiento del
+negocio. Apóyate en ellas en vez de re-deducir todo:
+
+- **`jamc-reglas`** — reglas de negocio, contrato de datos, enums, IDs y el
+  registro de bugs de guardado conocidos. Consúltala siempre que toques dinero,
+  ventas, CPP, movimientos, préstamos, KPIs o cualquier escritura.
+- **`jamc-paridad`** — cómo verificar que cada página/form/KPI funciona Y guarda
+  los datos correctos en Supabase (auditando la DB, no solo la UI).
+- **`jamc-deploy`** — pasos de deploy en Netlify para la versión Vite + chequeo
+  de que no se publique data del negocio.
+- **`jamc-sku`** — generar/validar códigos de SKU en formato largo.
 
 ---
 
@@ -52,8 +74,11 @@ Decisiones ya tomadas por Julio (el dueño):
 
 ## 2. Fuente de verdad de la funcionalidad
 
-**No inventes funcionalidad ni la quites.** La especificación de QUÉ debe hacer
-la app es el código actual. Antes de escribir una sola línea nueva:
+**No inventes funcionalidad ni la quites** — pero **sí corrige el guardado de
+datos donde esté mal** (ver decisión 4 y la skill `jamc-reglas`). La
+especificación de QUÉ debe hacer la app es el código actual, salvo donde guarda
+datos incorrectos: ahí la fuente de verdad es `jamc-reglas`, no el código viejo.
+Antes de escribir una sola línea nueva:
 
 1. Lee `index.html` completo (es donde vive TODA la UI viva; los
    `src/dashboard/*.jsx` son **código muerto**, NO los uses como referencia —
@@ -263,13 +288,16 @@ La reescritura está lista cuando:
 3. Se puede **crear, editar y borrar**: SKU, venta (multi-SKU + envío + gasto
    asociado), lote + entradas, movimiento financiero, cuenta, préstamo, tarjeta,
    inversor, compensación, ajuste CF.
-4. Los **KPIs y charts del Mando cuadran** con los de la app actual para el mismo
-   período (capital, revenue, ganancia, stock).
-5. Las reglas de negocio del §5 se respetan (verifica especialmente: gasto
+4. **Cada escritura se verifica contra la DB** (skill `jamc-paridad`): al crear/
+   editar/borrar, la fila en Supabase queda con las columnas y valores correctos
+   — no basta con que el toast diga "éxito" ni con que la UI se vea bien.
+5. Los **KPIs y métricas cuadran contra la DB** (calculados con SQL, no contra la
+   app vieja que puede estar mal): capital, revenue, ganancia neta, stock.
+6. Las reglas de negocio del §5 se respetan (verifica especialmente: gasto
    asociado a tarjeta = DRAWDOWN; Scotia dual; devengo de por vida).
-6. `npm run build` produce un `dist/` que despliega bien y **no incluye docs ni
+7. `npm run build` produce un `dist/` que despliega bien y **no incluye docs ni
    data sensible**.
-7. No hay errores en consola al navegar todas las páginas.
+8. No hay errores en consola al navegar todas las páginas.
 
 **Verificación:** usa las herramientas de preview para arrancar la app, navegar
 cada página, probar los formularios principales y comparar contra el
@@ -280,8 +308,15 @@ comportamiento actual. No declares nada "listo" sin verificarlo en el browser.
 ## 10. Plan de ejecución sugerido (por fases)
 
 Trabaja de forma autónoma, sin pedir permiso en cada paso (Julio lo prefiere
-así). Commits chicos por fase. Sugerencia de orden:
+así). Commits chicos por fase. **Todo en un branch dedicado, NO en `master`:**
 
+```powershell
+git checkout -b reconstruccion
+```
+
+Sugerencia de orden:
+
+0. **Branch:** crear `reconstruccion` antes de tocar nada.
 1. **Inventario:** leer todo, escribir `REWRITE_INVENTORY.md` (checklist).
 2. **Andamiaje:** Vite + React + estructura de carpetas + `index.html` mínimo +
    estilos base + shell (header/footer/tabs) + auth gate. App vacía que loguea.
