@@ -34,7 +34,11 @@ function Root() {
   );
 }
 
-createRoot(document.getElementById('root')).render(
+// Guard contra HMR: reusar el root si ya existe (evita el warning de
+// createRoot duplicado al recargar el módulo en dev).
+const container = document.getElementById('root');
+const root = (container._root ||= createRoot(container));
+root.render(
   <StrictMode>
     <ToastProvider>
       <Root />
