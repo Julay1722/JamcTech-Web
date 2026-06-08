@@ -374,13 +374,23 @@ export async function createMovimiento(d) {
   if (!d.cuentaId) throw new Error('Selecciona la cuenta'); // 🐛 CTA-1
   if (d.tipo === 'TRANSFERENCIA_INTERNA') {
     if (!d.cuentaDestinoId) throw new Error('Selecciona la cuenta destino de la transferencia');
+    if (d.cuentaDestinoId === d.cuentaId) throw new Error('Origen y destino no pueden ser la misma cuenta');
     const monto = num(d.monto);
-    const { data, error } = await supabase.from('movimientos').insert({
-      fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId,
-      cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, notas: d.notas || 'Transferencia interna',
-    }).select().single();
+    // 🐛 CTA-2: transferencia = DOS patas. vw_saldo_cuenta solo suma por cuenta_id
+    // (NO lee cuenta_destino_id), así que una sola fila debitaría el origen pero
+    // NUNCA acreditaría el destino. Creamos: (salida del origen) + (entrada al
+    // destino), ambas con un token compartido en notas para borrarlas juntas
+    // (resuelve el riesgo de "pata huérfana" del código viejo). cuenta_destino_id
+    // queda en ambas para trazar el par.
+    const token = `#TRF-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const nota = d.notas || 'Transferencia interna';
+    const legs = [
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId, cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, notas: `${nota} ${token}` },
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaDestinoId, cuenta_destino_id: d.cuentaId, entrada: monto, salida: 0, notas: `${nota} ${token}` },
+    ];
+    const { data, error } = await supabase.from('movimientos').insert(legs).select();
     if (error) throw new Error(`createMovimiento (transfer): ${error.message}`);
-    return data;
+    return { ...data[0], _token: token, _legs: data };
   }
   const esTarjeta = d.prestamoId != null;
   const monto = num(d.monto);
@@ -418,6 +428,20 @@ export async function updateMovimiento(id, patch) {
 }
 
 export async function removeMovimiento(id) {
+  // Leer el movimiento para detectar casos especiales (transferencia de 2 patas).
+  const { data: mov } = await supabase.from('movimientos').select('tipo, notas').eq('id', id).single();
+
+  // 🐛 CTA-2: si es una pata de transferencia, borrar AMBAS patas (mismo token)
+  // para no descuadrar las cuentas dejando una pata huérfana.
+  if (mov && mov.tipo === 'TRANSFERENCIA_INTERNA') {
+    const tk = (mov.notas || '').match(/#TRF-\d+-\d+/);
+    if (tk) {
+      const { error } = await supabase.from('movimientos').delete().ilike('notas', `%${tk[0]}%`);
+      if (error) throw new Error(`removeMovimiento (transfer): ${error.message}`);
+      return { deleted: true, transfer: true };
+    }
+  }
+
   // Si este movimiento pagaba una cuota, desligar y revertir la cuota a pendiente
   // antes de borrar (FK circular cuotas↔movimientos; además borrar el pago debe
   // dejar la cuota como NO pagada para que el saldo vuelva a subir). Inverso de DEU-2.
