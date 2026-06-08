@@ -6,7 +6,8 @@ import react from '@vitejs/plugin-react';
 // backup_*/*.json con data del negocio se publica (ver skill jamc-deploy).
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5173, open: false },
+  server: { port: 1722, open: false },
+  preview: { port: 1722 },
   build: {
     outDir: 'dist',
     sourcemap: false,
