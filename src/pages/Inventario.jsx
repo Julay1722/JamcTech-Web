@@ -25,7 +25,7 @@ import { Modal, useConfirm } from '../components/Modal.jsx';
 import { Field, TextInput, NumberInput, MoneyInput, DateInput, TextArea, Select } from '../components/Form.jsx';
 import { DataTable } from '../components/Table.jsx';
 import { SkuSelect, MedioPagoSelect, ContraparteSelect } from '../components/Pickers.jsx';
-import { KPI } from '../components/Charts.jsx';
+import { KPI, Sparkline } from '../components/Charts.jsx';
 import {
   createSKU, updateSKU, removeSKU, countSKURefs,
   createLote, updateLoteHeader, updateEntrada, addEntradaToLote, removeEntrada, removeLote,
@@ -255,8 +255,29 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
 // alcanzar un objetivo de unidades (sin velocidad de venta del loader, se usa
 // un objetivo manual). El restock real se hace creando un lote.
 function RestockTab({ skus }) {
+  const { ventas } = useData();
   const [objetivo, setObjetivo] = useState(() => Number(localStorage.getItem('restock-objetivo')) || 10);
   useEffect(() => { if (Number(objetivo) > 0) localStorage.setItem('restock-objetivo', String(objetivo)); }, [objetivo]);
+
+  // Ventas por SKU en los últimos 6 meses (para el sparkline de tendencia).
+  const ventas6m = useMemo(() => {
+    const now = new Date();
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const map = {};
+    (ventas || []).forEach((v) => {
+      const ym = (v.fecha || '').slice(0, 7);
+      if (!months.includes(ym)) return;
+      (v.lineas || []).forEach((l) => {
+        (map[l.skuId] ||= {})[ym] = ((map[l.skuId] || {})[ym] || 0) + l.cantidad;
+      });
+    });
+    return { months, map };
+  }, [ventas]);
+  const sparkFor = (skuId) => ventas6m.months.map((ym) => ventas6m.map[skuId]?.[ym] || 0);
 
   const items = useMemo(() => {
     const obj = Number(objetivo) || 0;
@@ -289,6 +310,10 @@ function RestockTab({ skus }) {
     { key: 'estado', label: 'Estado', render: (s) => <span className={`badge ${estadoCls(s.estado)}`}>{estadoLabel(s.estado)}</span> },
     { key: 'stock', label: 'Stock', align: 'right', num: true, render: (s) => <span className={s.stock <= 0 ? 'neg' : ''}>{s.stock}</span> },
     { key: 'enTransito', label: 'En camino', align: 'right', num: true, render: (s) => (s.enTransito > 0 ? s.enTransito : '—') },
+    {
+      key: 'spark', label: 'Ventas 6m',
+      render: (s) => { const vals = sparkFor(s.id); return vals.some((v) => v > 0) ? <Sparkline values={vals} w={90} h={24} /> : <span className="muted">—</span>; },
+    },
     { key: 'aPedir', label: 'A pedir', align: 'right', num: true, render: (s) => <span className="pos" style={{ fontWeight: 600 }}>{s.aPedir}</span> },
     { key: 'cpp', label: 'CPP', align: 'right', num: true, render: (s) => money(s.cpp) },
     { key: 'costoEst', label: 'Costo est.', align: 'right', num: true, render: (s) => (s.costoEst > 0 ? money(s.costoEst) : '—') },
