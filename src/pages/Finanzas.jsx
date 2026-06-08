@@ -20,7 +20,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import {
-  createCuenta, createPrestamo, createInversor,
+  createCuenta, createPrestamo, createInversor, updateInversor,
   createCompensacion, updateCompensacion, removeCompensacion,
   createPagoFinanciero,
   removeCuenta, removePrestamo, removeInversor,
@@ -860,7 +860,7 @@ function PagoMensualModal({ inversor, esDueno, reglas, computeDevengado, compute
       for (const r of reglas) {
         const monto = num(montos[r.id]);
         if (monto <= 0) continue;
-        if (r.tipoCompensacion === 'REINVERSION') continue; // equity (no cash); ver TODO abajo
+        if (r.tipoCompensacion === 'REINVERSION') continue; // equity → capital, abajo
         const meta = TIPO_COMPENSACION_META[r.tipoCompensacion] || {};
         await createPagoFinanciero({
           fecha,
@@ -872,11 +872,19 @@ function PagoMensualModal({ inversor, esDueno, reglas, computeDevengado, compute
           notas: `${meta.label || r.tipoCompensacion} · regla #${r.id}`,
         });
       }
-      // TODO: la reinversión (equity) debería incrementar capital_invertido del
-      // dueño. Aquí no se escribe para no inflar el capital sin un movimiento de
-      // caja real; queda pendiente definir con Julio si suma al capital o no.
+      // Reinversión (decisión de Julio: "que suba"): el devengado NO sale en
+      // efectivo, se queda en el negocio como más capital del inversor →
+      // incrementa capital_invertido. No toca ninguna cuenta (no hay cash real).
+      if (totalEquity > 0) {
+        await updateInversor(inversor.id, {
+          capitalInvertido: (inversor.capitalInvertido || 0) + totalEquity,
+        });
+      }
       await data.refreshAll();
-      t.ok('Pago registrado', `${inversor.nombre} · ${money(totalCash)}`);
+      const partes = [];
+      if (totalCash > 0) partes.push(`${money(totalCash)} en efectivo`);
+      if (totalEquity > 0) partes.push(`${money(totalEquity)} reinvertido al capital`);
+      t.ok('Pago registrado', `${inversor.nombre} · ${partes.join(' + ')}`);
       onClose?.();
     } catch (e) { t.err('Error al pagar', e.message); }
     setBusy(false);
