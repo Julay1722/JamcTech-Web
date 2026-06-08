@@ -1,6 +1,6 @@
 // Tabla de datos genérica. columns = [{key, label, align?, render?, className?}].
 // render(row) opcional para celdas custom. onRowClick opcional.
-export function DataTable({ columns, rows, onRowClick, empty = 'Sin datos', getRowKey }) {
+export function DataTable({ columns, rows, onRowClick, empty = 'Sin datos', getRowKey, isActive }) {
   if (!rows || rows.length === 0) return <div className="empty">{empty}</div>;
   return (
     <table className="data">
@@ -14,6 +14,7 @@ export function DataTable({ columns, rows, onRowClick, empty = 'Sin datos', getR
       <tbody>
         {rows.map((row, i) => (
           <tr key={getRowKey ? getRowKey(row) : (row.id ?? i)}
+              className={isActive && isActive(row) ? 'row-active' : ''}
               style={onRowClick ? { cursor: 'pointer' } : undefined}
               onClick={onRowClick ? () => onRowClick(row) : undefined}>
             {columns.map((c) => {

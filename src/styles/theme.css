@@ -357,6 +357,10 @@ textarea:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible 
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
+/* Fila activa/seleccionada en una tabla (ej. cuenta elegida en Banco) */
+table.data tr.row-active td { background: var(--accent-soft); }
+table.data tr.row-active td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
 /* Barra de progreso / utilización */
 .bar { height: 7px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .bar > span { display: block; height: 100%; border-radius: 999px; transition: width 450ms cubic-bezier(0.22,1,0.36,1); }

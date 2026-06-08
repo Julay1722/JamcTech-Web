@@ -73,7 +73,7 @@ const natBadge = (nat) => (
   }}>{nat === 'FINANCIERO' ? 'FIN' : 'OP'}</span>
 );
 
-export default function LibroPage({ embedded, period: periodProp, customRange, onNavigate }) {
+export default function LibroPage({ embedded, period: periodProp, customRange, onNavigate, cuentaFilter = null, cuentaNombre, onClearCuenta }) {
   const data = useData();
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
@@ -91,7 +91,11 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
   // useMemo SIEMPRE se llama antes de cualquier return (regla de hooks).
   const filteredAll = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (data.movimientos || []).filter((m) => {
+    const list = (data.movimientos || []).filter((m) => {
+      // Filtro por cuenta: solo por cuentaId (cada pata de transferencia ya está
+      // atribuida a su cuenta con su entrada/salida; NO usar cuentaDestinoId o se
+      // contaría la otra pata como fila fantasma).
+      if (cuentaFilter != null && m.cuentaId !== cuentaFilter) return false;
       if (!inPeriod(m.fecha, period, range)) return false;
       if (naturaleza === 'op' && m.naturaleza === 'FINANCIERO') return false;
       if (naturaleza === 'fin' && m.naturaleza !== 'FINANCIERO') return false;
@@ -101,7 +105,14 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
       }
       return true;
     });
-  }, [data.movimientos, period, range, naturaleza, search]);
+    // Si está filtrado por cuenta, calcular saldo corrido (asc) y devolver desc.
+    if (cuentaFilter != null) {
+      const asc = list.slice().sort((a, b) => (a.fecha || '').localeCompare(b.fecha || '') || a.id - b.id);
+      let run = 0;
+      asc.forEach((m) => { m._saldo = (run += m.entrada - m.salida); });
+    }
+    return list;
+  }, [data.movimientos, period, range, naturaleza, search, cuentaFilter]);
 
   if (data.loading) {
     return (
@@ -140,6 +151,7 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
     { key: 'contraparte', label: 'Contraparte', render: (m) => m.contraparte || <span className="muted">—</span> },
     { key: 'entrada', label: 'Debe', align: 'right', num: true, render: (m) => (m.entrada > 0 ? <span style={{ color: 'var(--success)' }}>{money(m.entrada)}</span> : '') },
     { key: 'salida', label: 'Haber', align: 'right', num: true, render: (m) => (m.salida > 0 ? <span style={{ color: 'var(--danger)' }}>{money(m.salida)}</span> : '') },
+    ...(cuentaFilter != null ? [{ key: 'saldo', label: 'Saldo', align: 'right', num: true, render: (m) => <span style={{ fontWeight: 600 }}>{money(m._saldo)}</span> }] : []),
     { key: 'naturaleza', label: 'Nat.', render: (m) => natBadge(m.naturaleza) },
     { key: 'notas', label: 'Notas', render: (m) => <span style={{ fontSize: 12, color: 'var(--text-3)' }} title={m.notas}>{(m.notas || '').slice(0, 40) || '—'}</span> },
     {
@@ -175,8 +187,18 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
         </div>
       )}
 
+      {cuentaFilter != null && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 'var(--s-3)' }}>
+          <span className="section-title" style={{ fontSize: 15 }}>Libro · {cuentaNombre || 'cuenta'}</span>
+          <span className="chip active" style={{ cursor: 'pointer' }} onClick={() => onClearCuenta?.()}>
+            {cuentaNombre} ✕
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>(click para ver todas las cuentas)</span>
+        </div>
+      )}
+
       <div className="tabs">
-        <button className={tab === 'lista' ? 'tab active' : 'tab'} onClick={() => setTab('lista')}>Libro contable</button>
+        <button className={tab === 'lista' ? 'tab active' : 'tab'} onClick={() => setTab('lista')}>{cuentaFilter != null ? 'Movimientos' : 'Libro contable'}</button>
         <button className={tab === 'movfin' ? 'tab active' : 'tab'} onClick={() => setTab('movfin')}>+ Pago a préstamo/línea/inversor</button>
         <button className={tab === 'ajuste' ? 'tab active' : 'tab'} onClick={() => setTab('ajuste')}>+ Gasto / ajuste / transferencia</button>
       </div>

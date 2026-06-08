@@ -32,6 +32,8 @@ import { CuentaSelect, MedioPagoSelect, ContraparteSelect } from '../components/
 import { KPI, Bar } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
+import LibroPage from './Libro.jsx';
+import MovForm from '../components/forms/MovForm.jsx';
 
 /* ──────────── Metadatos de métodos de compensación (del monolito) ──────────── */
 const TIPO_COMPENSACION_META = {
@@ -926,10 +928,12 @@ function CuentasTab({ cuentas }) {
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
   const [showNuevo, setShowNuevo] = useState(false);
-  const [sel, setSel] = useState(null);
+  const [showMov, setShowMov] = useState(false);
+  const [sel, setSel] = useState(null); // cuenta seleccionada → filtra el libro de abajo
 
-  // El tab Cuentas muestra débito + efectivo (las CREDITO viven en Tarjetas).
+  // Banco: débito + efectivo (las CREDITO/tarjetas viven en Deudas).
   const cuentasBanco = cuentas.filter((c) => c.tipo !== 'CREDITO');
+  const liquido = cuentasBanco.filter((c) => c.esLiquida).reduce((s, c) => s + c.saldo, 0);
 
   const doDelete = async (c) => {
     const ok = await confirm({ title: `¿Eliminar ${c.nombre}?`, body: 'Se desactiva la cuenta (soft-delete). Los movimientos quedan en el historial.', confirmLabel: 'Eliminar' });
@@ -940,34 +944,51 @@ function CuentasTab({ cuentas }) {
 
   return (
     <>
+      <div className="kpi-row">
+        <KPI label="Capital líquido" currency value={intNum(liquido)} deltaLabel="débito + efectivo" />
+        {cuentasBanco.slice(0, 3).map((c) => (
+          <KPI key={c.id} label={c.nombre} currency={c.moneda !== 'USD'} value={intNum(c.saldo)} deltaLabel={c.moneda === 'USD' ? 'USD$' : c.tipo.toLowerCase()} />
+        ))}
+      </div>
+
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Cuentas de banco</div>
-            <div className="section-desc">Click en una fila para ver el estado de cuenta (ledger)</div>
+            <div className="section-title">Cuentas</div>
+            <div className="section-desc">Click en una cuenta para ver SOLO su libro abajo · todas juntas para cuadrar caja</div>
           </div>
-          <button className="btn" onClick={() => setShowNuevo(true)}>+ Nueva cuenta</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn ghost" onClick={() => setShowMov(true)}>+ Registrar movimiento</button>
+            <button className="btn" onClick={() => setShowNuevo(true)}>+ Nueva cuenta</button>
+          </div>
         </div>
         <DataTable
           getRowKey={(c) => c.id}
+          isActive={(c) => sel?.id === c.id}
           onRowClick={(c) => setSel(sel?.id === c.id ? null : c)}
           columns={[
             { key: 'nombre', label: 'Nombre' },
-            { key: 'tipo', label: 'Tipo', render: (c) => <span className={`badge ${c.tipo === 'DEBITO' ? 'success' : 'neutral'}`}>{c.tipo}</span> },
+            { key: 'tipo', label: 'Tipo', render: (c) => <span className={`badge ${c.tipo === 'DEBITO' ? 'success' : c.tipo === 'EFECTIVO' ? 'warning' : 'neutral'}`}>{c.tipo}</span> },
             { key: 'moneda', label: 'Moneda', render: (c) => <span className="muted">{c.moneda}</span> },
             { key: 'saldo', label: 'Saldo actual', align: 'right', num: true, render: (c) => <span style={{ color: c.saldo >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{money(c.saldo, c.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
             { key: 'acciones', label: '', align: 'right', render: (c) => <button className="icon-btn danger" title="Eliminar" onClick={(e) => { e.stopPropagation(); doDelete(c); }}>×</button> },
           ]}
           rows={cuentasBanco}
-          empty="Sin cuentas · click + Nueva cuenta"
+          empty="Sin cuentas · + Nueva cuenta"
         />
       </div>
 
-      {sel && <DetalleCuentaLedger cuenta={sel} />}
+      {/* Libro contable debajo: todas las cuentas, o filtrado a la cuenta seleccionada. */}
+      <LibroPage embedded cuentaFilter={sel?.id ?? null} cuentaNombre={sel?.nombre} onClearCuenta={() => setSel(null)} />
 
       {showNuevo && (
         <Modal title="Nueva cuenta de banco" width={560} onClose={() => setShowNuevo(false)}>
           <FormCuenta onDone={() => setShowNuevo(false)} />
+        </Modal>
+      )}
+      {showMov && (
+        <Modal title="Registrar movimiento" width={560} onClose={() => setShowMov(false)}>
+          <MovForm onDone={() => setShowMov(false)} />
         </Modal>
       )}
       {confirmNode}
