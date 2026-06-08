@@ -32,6 +32,7 @@ import { CuentaSelect, MedioPagoSelect, ContraparteSelect } from '../components/
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
+import LibroPage from './Libro.jsx';
 
 /* ──────────── Metadatos de métodos de compensación (del monolito) ──────────── */
 const TIPO_COMPENSACION_META = {
@@ -116,7 +117,7 @@ export default function FinanzasPage({ onNavigate }) {
       {tab === 'tarjetas' && <TarjetasTab tarjetas={tarjetas} />}
       {tab === 'inversores' && <InversoresTab inversores={inversores} />}
       {tab === 'cuentas' && <CuentasTab cuentas={cuentas} />}
-      {tab === 'movimientos' && <MovimientosTab cuentas={cuentas} />}
+      {tab === 'movimientos' && <LibroPage embedded onNavigate={onNavigate} />}
     </div>
   );
 }
@@ -722,10 +723,19 @@ function ReglasCompensacionList({ inversor, esDueno }) {
     return { generado: Math.max(0, generado), detalle, esInfoOnly: regla.tipoCompensacion === 'REINVERSION' };
   };
 
-  // Pagado por regla: movimientos del inversor cuyas notas mencionan "regla #ID".
+  // Pagado por regla (INVR-2: no sobre-estimar lo pendiente → evita sobrepago).
+  // - Inversor con UNA sola regla: sin ambigüedad de atribución → cuenta TODO pago
+  //   del inversor (tagueado "regla #ID" o no, ej. pagos hechos desde el Libro).
+  // - Multi-regla: solo lo tagueado a ESTA regla (evita doble conteo entre reglas).
+  //   ⚠️ Para Julio: con varias reglas, registra los pagos desde "Registrar pago del
+  //   mes" (que los taguea) para que se atribuyan bien. Pagos sueltos por el Libro no
+  //   se restan de una regla específica si el inversor tiene >1 regla.
   const computePagado = (regla) => {
-    const movs = (data.movimientos || []).filter((m) => m.inversorId === inversor.id && typeof m.notas === 'string' && m.notas.includes(`regla #${regla.id}`));
-    return movs.reduce((s, m) => s + m.salida + m.entrada, 0);
+    const delInversor = (data.movimientos || []).filter((m) => m.inversorId === inversor.id);
+    const base = reglas.length <= 1
+      ? delInversor
+      : delInversor.filter((m) => typeof m.notas === 'string' && m.notas.includes(`regla #${regla.id}`));
+    return base.reduce((s, m) => s + m.salida + m.entrada, 0);
   };
 
   const handleRemove = async (regla) => {
@@ -1033,62 +1043,8 @@ function DetalleCuentaLedger({ cuenta }) {
   );
 }
 
-/* ════════════════════════ MOVIMIENTOS (libro financiero) ════════════════════════ */
-// Sub-tab "Movimientos": libro de movimientos FINANCIERO (pagos de deuda,
-// intereses, fees, pagos a inversores). El monolito importa LibroPage; aquí se
-// muestra el libro financiero inline (no existe aún una Libro.jsx en la app Vite).
-// TODO: cuando exista src/pages/Libro.jsx, reemplazar por <LibroPage embedded />.
-function MovimientosTab({ cuentas }) {
-  const data = useData();
-  const [search, setSearch] = useState('');
-  const [nat, setNat] = useState('FINANCIERO'); // FINANCIERO | CASHFLOW | todos
-
-  const rows = useMemo(() => {
-    let movs = data.movimientos || [];
-    if (nat !== 'todos') movs = movs.filter((m) => m.naturaleza === nat);
-    if (search) {
-      const q = search.toLowerCase();
-      movs = movs.filter((m) => (m.notas || '').toLowerCase().includes(q) || (m.tipo || '').toLowerCase().includes(q) || (m.cuenta || '').toLowerCase().includes(q) || (m.contraparte || '').toLowerCase().includes(q));
-    }
-    return movs;
-  }, [data.movimientos, nat, search]);
-
-  const totalEnt = rows.reduce((s, m) => s + m.entrada, 0);
-  const totalSal = rows.reduce((s, m) => s + m.salida, 0);
-
-  return (
-    <div className="section">
-      <div className="section-head">
-        <div>
-          <div className="section-title">Movimientos {nat === 'todos' ? '' : nat.toLowerCase()}</div>
-          <div className="section-desc">{rows.length} movimiento(s) · entradas {money(totalEnt)} · salidas {money(totalSal)}</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input className="input" style={{ width: 200 }} placeholder="Buscar…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div style={{ width: 160 }}>
-            <Select value={nat} onChange={setNat} options={[{ value: 'FINANCIERO', label: 'Financiero' }, { value: 'CASHFLOW', label: 'Cashflow' }, { value: 'todos', label: 'Todos' }]} />
-          </div>
-        </div>
-      </div>
-      <div style={{ maxHeight: 560, overflowY: 'auto' }}>
-        <DataTable
-          getRowKey={(m) => m.id}
-          columns={[
-            { key: 'fecha', label: 'Fecha', render: (m) => fmtDate(m.fecha) },
-            { key: 'tipo', label: 'Tipo', render: (m) => <span className="muted" style={{ fontSize: 11 }}>{m.tipo}</span> },
-            { key: 'cuenta', label: 'Cuenta', render: (m) => m.cuenta || <span className="muted">—</span> },
-            { key: 'contraparte', label: 'Contraparte', render: (m) => m.contraparte || <span className="muted">—</span> },
-            { key: 'notas', label: 'Concepto', render: (m) => m.notas || <span className="muted">—</span> },
-            { key: 'entrada', label: 'Entrada', align: 'right', num: true, render: (m) => (m.entrada > 0 ? <span style={{ color: 'var(--success)' }}>{money(m.entrada)}</span> : '—') },
-            { key: 'salida', label: 'Salida', align: 'right', num: true, render: (m) => (m.salida > 0 ? <span style={{ color: 'var(--danger)' }}>{money(m.salida)}</span> : '—') },
-          ]}
-          rows={rows}
-          empty="Sin movimientos"
-        />
-      </div>
-    </div>
-  );
-}
+/* El sub-tab "Movimientos" reusa <LibroPage embedded /> (ver import arriba) —
+   libro contable completo con sus forms de pago/gasto/transferencia. */
 
 /* ════════════════════════ FORMS ════════════════════════ */
 

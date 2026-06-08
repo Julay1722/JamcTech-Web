@@ -405,21 +405,27 @@ function EditVentaModal({ venta, onClose, onSaved }) {
       const context = ctx();
       // 1. Header (re-sincroniza la caja con el nuevo total/canal/fecha/cuenta) — VEN-1
       await updateVentaHeader(venta.id, { fecha, canalId, envioCobrado: envio, notas }, context);
-      // 2. Líneas: upsert (existentes modificadas + nuevas) y removeIds.
-      const upsert = lineas
-        .filter((l) => l.skuId && num(l.cantidad) > 0)
-        .map((l) => {
-          const orig = (venta.lineas || []).find((o) => o.id === l.id);
-          if (l.id) {
-            // solo enviar si cambió algo
-            const changed = !orig || orig.skuId !== l.skuId || orig.cantidad !== num(l.cantidad) || orig.precio !== num(l.precio);
-            return changed ? { id: l.id, skuId: l.skuId, cantidad: num(l.cantidad), precio: num(l.precio) } : null;
+      // 2. Líneas: upsert + removeIds. Si una línea EXISTENTE cambia de SKU, se
+      // trata como remove+insert: el trigger de snapshot de cpp_historico solo
+      // corre en INSERT, no en UPDATE de sku_id, así que un UPDATE in-place dejaría
+      // el costo del SKU viejo → ganancia histórica incorrecta.
+      const upsert = [];
+      const removeIds = [...removedIds];
+      lineas.filter((l) => l.skuId && num(l.cantidad) > 0).forEach((l) => {
+        const orig = (venta.lineas || []).find((o) => o.id === l.id);
+        if (l.id && orig) {
+          if (orig.skuId !== l.skuId) {
+            removeIds.push(l.id);
+            upsert.push({ skuId: l.skuId, cantidad: num(l.cantidad), precio: num(l.precio) });
+          } else if (orig.cantidad !== num(l.cantidad) || orig.precio !== num(l.precio)) {
+            upsert.push({ id: l.id, cantidad: num(l.cantidad), precio: num(l.precio) });
           }
-          return { skuId: l.skuId, cantidad: num(l.cantidad), precio: num(l.precio) };
-        })
-        .filter(Boolean);
-      if (upsert.length || removedIds.length) {
-        await updateVentaLineas(venta.id, { upsert, removeIds: removedIds }, context);
+        } else {
+          upsert.push({ skuId: l.skuId, cantidad: num(l.cantidad), precio: num(l.precio) });
+        }
+      });
+      if (upsert.length || removeIds.length) {
+        await updateVentaLineas(venta.id, { upsert, removeIds }, context);
       }
       await data.refreshAll();
       t.ok('Venta actualizada', `${venta.codigo} · ${money(facturado)}`);

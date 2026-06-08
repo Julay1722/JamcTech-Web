@@ -56,11 +56,15 @@ const PERIOD_OPTS = [
 
 // Conceptos editables a mano (tipos enum movimiento_tipo). Solo se ofrecen para
 // movimientos sueltos (no ligados a venta/lote/cuota/inversor).
+// Tipos a los que se PUEDE cambiar un movimiento suelto desde el editor. Solo
+// conceptos que NO requieren una FK (venta/lote/préstamo/inversor/cuenta_destino):
+// cambiar a DRAWDOWN/PAGO_PRESTAMO/PAGO_INVERSOR/TRANSFERENCIA_INTERNA dejaría el
+// movimiento con naturaleza FINANCIERO pero sin su FK → saldo descuadrado. Para
+// esos, el usuario usa los forms "+ Pago…" / "+ Gasto/ajuste/transferencia".
 const TIPOS_EDIT = [
   'COMPRA_OPERATIVA', 'PAGO_ADS', 'PAGO_COMISION', 'PAGO_TRANSPORTE',
   'APORTE_DUENO', 'FEE_BANCARIO', 'REFUND_PROVEEDOR', 'REFUND_CLIENTE',
-  'AJUSTE', 'OTROS', 'VENTA', 'COMPRA_MERCANCIA', 'ENVIO_LOTE',
-  'PAGO_PRESTAMO', 'PAGO_LINEA_CREDITO', 'PAGO_INVERSOR', 'DRAWDOWN', 'TRANSFERENCIA_INTERNA',
+  'AJUSTE', 'OTROS',
 ];
 
 // Un movimiento "viene de una fuente" si está ligado a venta/lote/cuota/inversor.

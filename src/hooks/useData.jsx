@@ -10,7 +10,7 @@ const DataCtx = createContext(null);
 
 const EMPTY = {
   skus: [], ventas: [], lotes: [], movimientos: [],
-  cuentas: [], prestamos: [], inversores: [], cuotas: [],
+  cuentas: [], prestamos: [], inversores: [], cuotas: [], contrapartes: [],
 };
 
 export function DataProvider({ children }) {

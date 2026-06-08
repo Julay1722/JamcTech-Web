@@ -41,15 +41,24 @@ export function SkuSelect({ value, onChange, placeholder = '— elegí SKU —',
   return <Select value={value} onChange={(v) => onChange(v || null)} options={options} placeholder={placeholder} invalid={invalid} />;
 }
 
-export function ContraparteSelect({ value, onChange, tipo, placeholder = '— elegí —', invalid }) {
-  // contrapartes no vienen en useData; usa el set conocido vía prop options si hace falta.
-  // Aquí ofrecemos los canales/proveedores comunes por id (ver SCHEMA.md).
-  const COMUNES = {
-    CANAL_VENTA: [{ value: 9, label: 'Facebook' }, { value: 17, label: 'Cliente Generico' }],
-    PROVEEDOR: [{ value: 5, label: 'Alibaba' }, { value: 6, label: 'Temu' }, { value: 7, label: 'Amazon' }],
-    INVERSOR: [{ value: 8, label: 'Andrea Correa' }],
+export function ContraparteSelect({ value, onChange, tipo, placeholder = '— elegí —', invalid, incluirTodas = false }) {
+  const { contrapartes } = useData();
+  // Lee las contrapartes reales de la DB. Filtra por `tipo` (ej. PROVEEDOR,
+  // CANAL_VENTA, INVERSOR) salvo que incluirTodas=true. Fallback a IDs conocidos
+  // si aún no cargaron (evita un select vacío en el primer render).
+  const FALLBACK = {
+    CANAL_VENTA: [{ id: 9, nombre: 'Facebook' }, { id: 17, nombre: 'Cliente Generico' }],
+    PROVEEDOR: [{ id: 5, nombre: 'Alibaba' }, { id: 6, nombre: 'Temu' }, { id: 7, nombre: 'Amazon' }],
+    INVERSOR: [{ id: 8, nombre: 'Andrea Correa' }],
   };
-  const options = COMUNES[tipo] || [];
+  let list = contrapartes && contrapartes.length
+    ? (incluirTodas || !tipo ? contrapartes : contrapartes.filter((c) => c.tipo === tipo))
+    : (FALLBACK[tipo] || []);
+  // Canal de venta: ofrecer también clientes (familiares/genéricos) como destino.
+  if (tipo === 'CANAL_VENTA' && contrapartes?.length) {
+    list = contrapartes.filter((c) => c.tipo === 'CANAL_VENTA' || c.tipo === 'CLIENTE_FAMILIAR' || c.tipo === 'OTRO');
+  }
+  const options = list.map((c) => ({ value: c.id, label: c.nombre }));
   return <Select value={value} onChange={(v) => onChange(v === '' ? null : Number(v))} options={options} placeholder={placeholder} invalid={invalid} />;
 }
 

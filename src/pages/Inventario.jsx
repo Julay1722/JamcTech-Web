@@ -7,8 +7,9 @@
 // dispara data.refreshAll() + toast. Cada borrado pasa por useConfirm.
 //
 // Bugs arreglados respecto al monolito (ver BUGS_DATOS.md / jamc-reglas):
-//  - INV-1: FormLote/EditLote manejan moneda RD|USD con tasaCambio; el writer
-//    convierte costos a RD$ (exige tasa si USD).
+//  - INV-1: FormLote maneja moneda RD|USD con tasaCambio; el writer convierte
+//    costos a RD$ (exige tasa si USD). EditLote edita SIEMPRE en RD$ (los valores
+//    existentes ya vienen convertidos del loader; re-convertir corrompería el CPP).
 //  - INV-7: status de lote con los 5 valores reales (STATUS_LOTE).
 //  - CTA-1 / regla 7: medio de pago real vía MedioPagoSelect (si tarjeta →
 //    DRAWDOWN ligado al prestamo_id gemelo). Nunca defaultea a BHD.
@@ -747,8 +748,11 @@ function EditLoteModal({ lote, onClose }) {
   const [status, setStatus] = useState(lote.status || 'PENDIENTE');
   const [proveedorId, setProveedorId] = useState(lote.proveedorId || null);
   const [fechaRecibido, setFechaRecibido] = useState(lote.fechaRecibido || '');
-  const [moneda, setMoneda] = useState(lote.moneda || 'RD');
-  const [tasaCambio, setTasaCambio] = useState(() => Number(localStorage.getItem('tasa-cambio-usd')) || 60);
+  // EditLote SIEMPRE en RD$: los valores existentes (entradas/costos) ya vienen
+  // convertidos a RD$ del loader; re-convertir a USD corrompería el CPP. Para
+  // capturar una compra NUEVA en USD, usar "+ Nuevo lote" (FormLote sí maneja USD→RD).
+  const moneda = 'RD';
+  const tasa = 1;
   const [envio, setEnvio] = useState(lote.envio || '');
   const [courier, setCourier] = useState(lote.courier || '');
   const [otros, setOtros] = useState(lote.otros || '');
@@ -759,9 +763,7 @@ function EditLoteModal({ lote, onClose }) {
   })));
   const [busy, setBusy] = useState(false);
 
-  const esUSD = moneda === 'USD';
-  const monLbl = esUSD ? 'USD$' : 'RD$';
-  const tasa = num(tasaCambio);
+  const monLbl = 'RD$';
 
   const addLinea = () => setLineas((arr) => [...arr, { key: 'n' + Date.now() + Math.random(), entradaId: null, skuId: null, cantidad: 1, costoUd: '', isNew: true }]);
   const updateLinea = (key, patch) => setLineas((arr) => arr.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -781,7 +783,6 @@ function EditLoteModal({ lote, onClose }) {
   }
 
   async function save() {
-    if (esUSD && !(tasa > 0)) { t.err('Falta la tasa', 'En USD necesitás la tasa de cambio'); return; }
     setBusy(true);
     try {
       // 1) Header
@@ -803,7 +804,6 @@ function EditLoteModal({ lote, onClose }) {
           }
         }
       }
-      if (tasa > 0) localStorage.setItem('tasa-cambio-usd', String(tasa));
       await data.refreshAll();
       t.ok('Lote actualizado', `${lote.codigo} · ${lineas.length} línea(s)`);
       onClose();
@@ -817,7 +817,7 @@ function EditLoteModal({ lote, onClose }) {
         <Field label="Estado"><Select value={status} onChange={setStatus} options={STATUS_LOTE.map((s) => ({ value: s, label: statusLote(s) }))} /></Field>
         <Field label="Proveedor"><ContraparteSelect tipo="PROVEEDOR" value={proveedorId} onChange={setProveedorId} placeholder="— proveedor —" /></Field>
         <Field label="Fecha recibido" hint="Solo si ya llegó"><DateInput value={fechaRecibido} onChange={setFechaRecibido} /></Field>
-        <Field label="Moneda costos"><Select value={moneda} onChange={setMoneda} options={[{ value: 'RD', label: 'RD$' }, { value: 'USD', label: 'USD$' }]} /></Field>
+        <Field label="Moneda" hint="Edición en RD$"><div className="input" style={{ background: 'var(--surface-3)', color: 'var(--text-3)' }}>RD$</div></Field>
       </div>
 
       <div style={{ marginTop: 'var(--s-4)' }}>
@@ -847,15 +847,6 @@ function EditLoteModal({ lote, onClose }) {
         })}
         <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
       </div>
-
-      {esUSD && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginTop: 16 }}>
-          <div style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Tasa de cambio</div>
-          <div style={{ flex: 1, fontSize: 12, color: 'var(--text-3)' }}>RD$ por 1 USD$. Aplica a costos/unidad y compartidos cuando la moneda es USD.</div>
-          <NumberInput value={tasaCambio} onChange={setTasaCambio} step="0.01" />
-          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>RD$/USD</span>
-        </div>
-      )}
 
       <div className="row-4" style={{ marginTop: 'var(--s-4)' }}>
         <Field label={`Envío (${monLbl})`}><MoneyInput value={envio} onChange={setEnvio} placeholder="0" /></Field>

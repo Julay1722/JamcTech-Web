@@ -1,16 +1,11 @@
-# Netlify config — JAMC's Tech Terminal v2.5
-# Deploy futuro: el sitio es 100% estático (Babel-standalone procesa
-# los .jsx en el browser, sin build step). Apunta a Supabase
-# directamente (sin Netlify Functions post-migración 2026-05-26).
+# Netlify config — JAMC's Tech Terminal v3 (Vite + React)
+# Build real con Vite: genera dist/ con el JS ya compilado y cache-busting
+# por hash. Solo dist/ se publica → ningún .md ni backup_*/*.json con data
+# del negocio termina en el sitio (ver skill jamc-deploy).
 
 [build]
-  # SEGURIDAD: publica SOLO los archivos del app (allowlist), nunca docs,
-  # backups (.json con data), tests, ni index-legacy.html. dist/ contiene
-  # únicamente index.html + los 2 scripts que carga. Cualquier otra ruta
-  # (p.ej. /CLAUDE.md o /backup_*/*.json) no existe en dist → cae al SPA
-  # fallback (sirve la app), nunca el archivo real.
+  command = "npm run build"
   publish = "dist"
-  command = "rm -rf dist && mkdir -p dist/src && cp index.html dist/ && cp src/data.js src/supabase-client.js dist/src/"
 
 [build.environment]
   NODE_VERSION = "20"
@@ -24,26 +19,15 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
 
-# JS/JSX: forzar revalidación en cada request (no hay cache busting
-# por URL todavía). Overhead mínimo: respuestas 304 con If-Modified-Since.
+# Assets con hash de Vite: cache largo e inmutable.
 [[headers]]
-  for = "/*.js"
+  for = "/assets/*"
   [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
+    Cache-Control = "public, max-age=31536000, immutable"
 
+# index.html siempre revalida (apunta a los assets con hash actuales).
 [[headers]]
-  for = "/*.jsx"
-  [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
-    Content-Type = "text/babel; charset=utf-8"
-
-[[headers]]
-  for = "/*.html"
-  [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
-
-[[headers]]
-  for = "/"
+  for = "/index.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
 

@@ -339,12 +339,19 @@ export async function loadCuotas() {
   }));
 }
 
+/* ──────────── Contrapartes (para los pickers: canal, proveedor, etc.) ──────────── */
+export async function loadContrapartes() {
+  const { data, error } = await supabase.from('contrapartes').select('id, nombre, tipo').order('id');
+  if (error) throw error;
+  return (data || []).map((c) => ({ id: c.id, nombre: c.nombre, tipo: c.tipo }));
+}
+
 /* ──────────── refreshAll: carga todo en paralelo ──────────── */
 export async function loadAll() {
-  const [skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas] =
+  const [skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes] =
     await Promise.all([
       loadSKUs(), loadVentas(), loadLotes(), loadMovimientos(),
-      loadCuentas(), loadPrestamos(), loadInversores(), loadCuotas(),
+      loadCuentas(), loadPrestamos(), loadInversores(), loadCuotas(), loadContrapartes(),
     ]);
-  return { skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas };
+  return { skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes };
 }
