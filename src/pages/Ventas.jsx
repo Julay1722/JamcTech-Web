@@ -22,6 +22,7 @@ import { CuentaSelect, MedioPagoSelect, SkuSelect, ContraparteSelect } from '../
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
+import { downloadCSV, csvName } from '../lib/csv.js';
 
 const FACEBOOK_ID = 9; // canal default (CANAL_VENTA)
 
@@ -70,6 +71,13 @@ export default function VentasPage({ period }) {
   const uds = ventasPeriodo.reduce((s, v) => s + v.lineas.reduce((a, l) => a + l.cantidad, 0), 0);
   const margenPct = revenue > 0 ? (ganancia / revenue) * 100 : 0;
   const ticket = ventasPeriodo.length > 0 ? revenue / ventasPeriodo.length : 0;
+
+  function exportarCSV() {
+    const headers = ['Código', 'Fecha', 'Canal', 'Cliente', 'Líneas', 'Facturado', 'Ganancia neta', 'Gasto asociado'];
+    const rows = filtered.map((v) => [v.codigo, v.fecha, v.canal, v.clienteNombre, v.lineas.length, v.facturado, v.gananciaNeta, v.gastoAsociado]);
+    const n = downloadCSV(csvName('ventas'), headers, rows);
+    t.ok('Ventas exportadas', `${n} fila(s) · CSV`);
+  }
 
   async function doDelete(v) {
     const ok = await confirm({
@@ -124,6 +132,7 @@ export default function VentasPage({ period }) {
           <div className="topbar-actions">
             <input className="input" style={{ width: 200 }} type="text" placeholder="Buscar código o canal…"
               value={search} onChange={(e) => setSearch(e.target.value)} />
+            <button className="btn ghost" onClick={exportarCSV} disabled={!filtered.length} title="Descargar CSV">⤓ CSV</button>
             <span className="pill">{filtered.length} mostrando</span>
           </div>
         )}

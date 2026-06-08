@@ -32,6 +32,7 @@ import {
 } from '../lib/db/writers.js';
 import { SKU_CATEGORIAS, STATUS_LOTE } from '../lib/supabase.js';
 import { money, intNum, num, fmtDate, todayISO } from '../lib/format.js';
+import { downloadCSV, csvName } from '../lib/csv.js';
 
 /* ──────────── helpers de presentación ──────────── */
 const CAT_CODE = { Mouse: 'MOU', Teclado: 'TEC', Headset: 'HEA', Stand: 'STA', 'Mouse Pad': 'PAD', Otro: 'OTR' };
@@ -195,6 +196,13 @@ export default function InventarioPage() {
 
 /* ════════════════════════ Sub-tab: SKUs ════════════════════════ */
 function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, onDel }) {
+  const t = useToast();
+  const exportarCSV = () => {
+    const headers = ['SKU', 'Nombre', 'Categoría', 'Marca', 'Stock', 'En tránsito', 'CPP', 'Precio sugerido', 'Estado'];
+    const csvRows = rows.map((s) => [s.id, s.nombre, s.categoria, s.marca, s.stock, s.enTransito, s.cpp, s.precioSugerido, s.estado]);
+    const n = downloadCSV(csvName('inventario'), headers, csvRows);
+    t.ok('Inventario exportado', `${n} SKU(s) · CSV`);
+  };
   const columns = [
     {
       key: 'nombre', label: 'Producto', render: (s) => (
@@ -233,6 +241,7 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
               {f === 'all' ? 'Todos' : estadoLabel(f)}
             </button>
           ))}
+          <button className="btn ghost" onClick={exportarCSV} disabled={!rows.length} title="Descargar CSV">⤓ CSV</button>
         </div>
       </div>
       <DataTable columns={columns} rows={rows} onRowClick={onRow} getRowKey={(s) => s.id}

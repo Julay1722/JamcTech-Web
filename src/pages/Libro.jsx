@@ -35,6 +35,7 @@ import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { MOVFIN_TIPOS } from '../lib/supabase.js';
 import { money, intNum, fmtDate, todayISO, num } from '../lib/format.js';
+import { downloadCSV, csvName } from '../lib/csv.js';
 
 /* ──────────── Período ──────────── */
 function inPeriod(fecha, period) {
@@ -243,11 +244,20 @@ export default function LibroPage({ embedded, period: periodProp, onNavigate }) 
                 <div className="section-title">Libro contable</div>
                 <div className="section-desc">{rows.length} de {filteredAll.length} · ordenado desc por fecha</div>
               </div>
-              {filteredAll.length > limit && (
-                <button className="btn ghost" onClick={() => setLimit((l) => l + 500)}>
-                  Cargar más ({filteredAll.length - limit} restantes)
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn ghost" disabled={!filteredAll.length} title="Descargar CSV"
+                  onClick={() => {
+                    const headers = ['Fecha', 'Tipo', 'Cuenta', 'Contraparte', 'Entrada', 'Salida', 'Naturaleza', 'Notas'];
+                    const rowsCsv = filteredAll.map((m) => [m.fecha, m.tipo, m.cuenta, m.contraparte, m.entrada, m.salida, m.naturaleza, m.notas]);
+                    const n = downloadCSV(csvName('movimientos'), headers, rowsCsv);
+                    t.ok('Movimientos exportados', `${n} fila(s) · CSV`);
+                  }}>⤓ CSV</button>
+                {filteredAll.length > limit && (
+                  <button className="btn ghost" onClick={() => setLimit((l) => l + 500)}>
+                    Cargar más ({filteredAll.length - limit} restantes)
+                  </button>
+                )}
+              </div>
             </div>
             <DataTable
               columns={columns}
