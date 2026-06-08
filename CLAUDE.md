@@ -32,14 +32,21 @@ Service role key: [NO usar en frontend. Solo para scripts admin.]
 
 ## Cómo correrlo
 
+> **Branch `reconstruccion` (Vite + React, versión nueva):**
 ```powershell
 cd C:\Users\coco2\OneDrive\Escritorio\V17
-npx serve .
-# Abrir http://localhost:3000 — el dashboard carga directo desde Supabase.
+npm install
+npm run dev      # Vite → http://localhost:5173 (pide login Supabase Auth)
+npm run build    # genera dist/ (solo eso se publica en Netlify)
+npm run preview  # sirve dist/ como en producción
 ```
 
-(También funciona con `netlify dev` en puerto 8888, pero las Netlify Functions
-no se usan ya que vamos directo a Supabase.)
+La app NO carga datos sin sesión válida (RLS). Usuario dueño: jamctech17@gmail.com.
+Para tests locales hay `TEST_USER_*` en `.env` (gitignored).
+
+> **Versión vieja (branch `master`, monolito Babel-en-browser):** `npx serve .`
+> en http://localhost:3000. Conservada como respaldo; el monolito vive en
+> `legacy-monolith.html` dentro del branch `reconstruccion`.
 
 ## Arquitectura del cliente
 

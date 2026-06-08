@@ -8,7 +8,40 @@
 >
 > Estado: ⬜ pendiente · 🔨 en progreso · ✅ reproducido + verificado en DB
 >
-> Última actualización: 2026-06-07 (Fase 1).
+> Última actualización: 2026-06-07 (Fase 4 — páginas construidas y verificadas).
+
+## Estado de avance (2026-06-07)
+
+**Capa de datos (Fase 3) ✅** — `src/lib/db/loaders.js` (lectura desde vistas vw_*)
++ `src/lib/db/writers.js` (escrituras atómicas). KPIs verificados vs SQL. Escrituras
+verificadas end-to-end contra la DB: `createVenta` (triggers+caja+venta_id),
+`createMovimiento` (RLS), `createLote` USD→RD (INV-1/4/5), `removeLote` (cascada).
+
+**Páginas (Fase 4) ✅ construidas y verificadas en runtime (0 errores de consola):**
+- ✅ **Resumen** — KPIs (capital líquido, revenue, ganancia neta, stock) cuadran vs SQL + charts.
+- ✅ **Ventas** — lista (201) + nueva venta (multi-SKU+envío+gasto) + EditVentaModal.
+- ✅ **Inventario** — SKUs/Re-Stock/Lotes/Descontinuados + Nuevo SKU/lote + EditLote.
+- ✅ **Finanzas** — Resumen/Deudas/Inversores/Banco; Movimientos embebe el Libro.
+- ✅ **Libro contable** — movimientos + pago financiero + gasto/ajuste/transferencia.
+- ✅ **Alertas** — críticos/atención + cuotas reales (KPI-8).
+- ✅ Shell, auth gate, login, period filter, toasts, modales, componentes compartidos.
+
+**Bugs arreglados y confirmados:** VEN-1/2/3/4, INV-1/2/4/5/7, DEU-2/6, INVR-1/2/3/4,
+CTA-1/2, KPI-1/5/8, regla 7/8/9. (Detalle en los commits del branch `reconstruccion`.)
+
+**Pendiente (menor, para pulir con Julio):**
+- Auditar por la UI cada form restante con datos de prueba (la lógica está verificada;
+  falta el recorrido manual de Julio en su flujo real).
+- Devengo de compensaciones: cálculo simplificado de por vida con TODO (regla 9 respetada);
+  confirmar con Julio el corte exacto. Reinversión (REINVERSION) no persiste aún.
+- Pago a inversor con varias reglas: registrar desde "Pago del mes" para atribución correcta.
+- Cosméticos: KPI delta=-1 en Alertas (truco de color), exponer descuento en EditVenta.
+
+**Fase 5 (deploy):** `netlify.toml` migrado a Vite; `npm run build` → `dist/` limpio
+(sin docs/data). Falta: conectar Netlify + borrar código muerto al cierre.
+
+---
+
 
 ## Leyenda de columnas de bug
 
