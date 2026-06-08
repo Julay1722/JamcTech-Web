@@ -418,6 +418,14 @@ export async function updateMovimiento(id, patch) {
 }
 
 export async function removeMovimiento(id) {
+  // Si este movimiento pagaba una cuota, desligar y revertir la cuota a pendiente
+  // antes de borrar (FK circular cuotas↔movimientos; además borrar el pago debe
+  // dejar la cuota como NO pagada para que el saldo vuelva a subir). Inverso de DEU-2.
+  const { data: cuotasLigadas } = await supabase.from('cuotas').select('id').eq('movimiento_id', id);
+  if (cuotasLigadas && cuotasLigadas.length) {
+    await supabase.from('cuotas').update({ pagada: false, fecha_pagada: null, movimiento_id: null })
+      .eq('movimiento_id', id);
+  }
   const { error } = await supabase.from('movimientos').delete().eq('id', id);
   if (error) throw new Error(`removeMovimiento: ${error.message}`);
   return { deleted: true };

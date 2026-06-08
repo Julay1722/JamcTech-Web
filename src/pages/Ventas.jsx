@@ -282,7 +282,6 @@ function FormVenta({ onCreated }) {
         <div className="field-label" style={{ marginBottom: 8 }}>SKUs vendidos · {lineasValidas.length} línea(s)</div>
         {lineas.map((l) => {
           const cpp = cppOf(l.skuId);
-          const sub = num(l.precio) * num(l.cantidad);
           return (
             <div key={l.key} className="line-row" style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px 110px 90px 36px', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <SkuSelect value={l.skuId} onChange={(v) => updateLinea(l.key, { skuId: v })} />

@@ -7,14 +7,18 @@ export function fmtPct(n) {
   return s;
 }
 
-export function KPI({ label, value, delta, deltaLabel, currency }) {
+// tone: 'danger' | 'warning' | 'success' → colorea el valor sin inventar un %
+// (para KPIs de conteo donde un delta porcentual no aplica). delta sigue
+// disponible para KPIs con variación real.
+const TONE_COLOR = { danger: 'var(--danger)', warning: 'var(--warning)', success: 'var(--success)' };
+export function KPI({ label, value, delta, deltaLabel, currency, tone }) {
   const cls = delta == null ? 'neutral' : delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'neutral';
   const arrow = delta == null ? '' : delta > 0 ? '↗' : delta < 0 ? '↘' : '→';
   const hasContent = delta != null || (deltaLabel && deltaLabel.length > 0);
   return (
     <div className="kpi">
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">
+      <div className="kpi-value" style={tone ? { color: TONE_COLOR[tone] } : undefined}>
         {currency && <span className="currency">RD$</span>}
         {value}
       </div>

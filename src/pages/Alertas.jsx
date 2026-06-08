@@ -76,7 +76,8 @@ export default function AlertasPage() {
   const onPagar = async (cuentaId) => {
     const cuota = pagando;
     const prestamo = prestamos.find((p) => p.id === cuota.prestamoId);
-    const tipoPago = prestamo?.tipo === 'LINEA_CREDITO' ? 'PAGO_LINEA_CREDITO' : 'PAGO_PRESTAMO';
+    const tipoPago = prestamo?.tipo === 'LINEA_CREDITO' ? 'PAGO_LINEA_CREDITO'
+      : prestamo?.tipo === 'TARJETA_CREDITO' ? 'PAGO_TARJETA_CREDITO' : 'PAGO_PRESTAMO';
     try {
       await createPagoFinanciero({
         fecha: todayISO(),
@@ -161,11 +162,11 @@ export default function AlertasPage() {
 
       <div className="kpi-row">
         <KPI label="SKUs críticos" value={intNum(m.criticos.length)}
-             delta={m.criticos.length > 0 ? -1 : null} deltaLabel="stock ≤ 2 · pedir ya" />
+             tone={m.criticos.length > 0 ? 'danger' : undefined} deltaLabel="stock ≤ 2 · pedir ya" />
         <KPI label="SKUs en atención" value={intNum(m.atencion.length)}
-             delta={m.atencion.length > 0 ? -1 : null} deltaLabel="stock ≤ 5 · vigilar" />
+             tone={m.atencion.length > 0 ? 'warning' : undefined} deltaLabel="stock ≤ 5 · vigilar" />
         <KPI label="Cuotas próximas" value={intNum(m.proximas.length)}
-             delta={m.proximas.length > 0 ? -1 : null} deltaLabel="sin pagar (schedule real)" />
+             tone={m.proximas.length > 0 ? 'warning' : undefined} deltaLabel="sin pagar (schedule real)" />
         <KPI label="Por pagar" currency value={intNum(m.totalPorPagar)}
              deltaLabel="suma de cuotas pendientes" />
       </div>

@@ -10,7 +10,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    // Solo index.html es entry. Los .html legacy del root no se incluyen.
-    rollupOptions: { input: 'index.html' },
+    rollupOptions: {
+      // Solo index.html es entry. Los .html legacy del root no se incluyen.
+      input: 'index.html',
+      output: {
+        // Separa las dependencias (react, supabase) del código de la app para
+        // mejor cache: el vendor casi no cambia entre deploys.
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          supabase: ['@supabase/supabase-js'],
+        },
+      },
+    },
   },
 });
