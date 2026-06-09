@@ -248,6 +248,18 @@ table.data th.num { font-family: var(--font-mono); }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--accent); }
 .input.num, .select.num { font-family: var(--font-mono); }
 .input.invalid, .select.invalid { border-color: var(--danger); }
+
+/* Chips / píldoras de filtro (estilo 1701) */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  font-size: 12px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-2); cursor: pointer; font-family: inherit; line-height: 1.4;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+.chip:hover { border-color: var(--accent); color: var(--text); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
 .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--s-3); }
 .row-4 { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: var(--s-3); }

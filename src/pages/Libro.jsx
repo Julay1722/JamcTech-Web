@@ -221,24 +221,17 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
           </div>
 
           <div className="section">
-            <div className="section-head" style={{ flexWrap: 'wrap', gap: 'var(--s-2)' }}>
+            <div className="section-head">
               <div>
                 <div className="section-title">{cuentaFilter != null ? 'Movimientos' : 'Libro contable'}</div>
                 <div className="section-desc">{rows.length} de {filteredAll.length} · orden desc por fecha</div>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {embedded && (
-                  <select className="select" style={{ width: 'auto', minWidth: 120 }} value={period} onChange={(e) => setPeriodLocal(e.target.value)}>
-                    {PERIOD_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                )}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <div className="chips">
                   {[['todas', 'Todas'], ['op', 'Operacional'], ['fin', 'Financiero']].map(([k, l]) => (
                     <button key={k} className={`chip ${naturaleza === k ? 'active' : ''}`} onClick={() => setNaturaleza(k)}>{l}</button>
                   ))}
                 </div>
-                <input className="input" style={{ width: 200 }} placeholder="Buscar tipo, cuenta, contraparte, notas…"
-                  value={search} onChange={(e) => setSearch(e.target.value)} />
                 <button className="btn ghost" disabled={!filteredAll.length} title="Descargar CSV"
                   onClick={() => {
                     const headers = ['Fecha', 'Tipo', 'Cuenta', 'Contraparte', 'Entrada', 'Salida', 'Naturaleza', 'Notas'];
@@ -246,13 +239,25 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
                     const n = downloadCSV(csvName('movimientos'), headers, rowsCsv);
                     t.ok('Movimientos exportados', `${n} fila(s) · CSV`);
                   }}>⤓ CSV</button>
-                {filteredAll.length > limit && (
-                  <button className="btn ghost" onClick={() => setLimit((l) => l + 500)}>
-                    Cargar más ({filteredAll.length - limit})
-                  </button>
-                )}
               </div>
             </div>
+
+            {/* Fila de búsqueda (y período si está embebido), debajo del header */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 'var(--s-3)', flexWrap: 'wrap' }}>
+              {embedded && (
+                <select className="select" style={{ width: 'auto', minWidth: 130 }} value={period} onChange={(e) => setPeriodLocal(e.target.value)}>
+                  {PERIOD_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              )}
+              <input className="input" style={{ maxWidth: 300 }} placeholder="Buscar tipo, cuenta, contraparte, notas…"
+                value={search} onChange={(e) => setSearch(e.target.value)} />
+              {filteredAll.length > limit && (
+                <button className="btn ghost" onClick={() => setLimit((l) => l + 500)}>
+                  Cargar más ({filteredAll.length - limit})
+                </button>
+              )}
+            </div>
+
             <DataTable
               columns={columns}
               rows={rows}
