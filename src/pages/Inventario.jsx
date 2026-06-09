@@ -404,13 +404,20 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
 }
 
 /* ════════════════════════ Sub-tab: Re-Stock ════════════════════════ */
-// SKUs en estado crítico / atención. Cálculo simple de "a pedir" para
-// alcanzar un objetivo de unidades (sin velocidad de venta del loader, se usa
-// un objetivo manual). El restock real se hace creando un lote.
+// El sistema calcula CUÁNTO pedir según la VELOCIDAD DE VENTAS de cada SKU
+// (igual que la web anterior): velocidad = unidades vendidas ÷ días desde la
+// primera venta del SKU. Para cubrir (lead time + buffer) días al ritmo actual:
+//   necesidad = round(velocidad × (leadTime + buffer))
+//   a pedir   = max(0, necesidad − (stock + en camino))
+// Un SKU que no se vende (velocidad 0) NO se sugiere pedir aunque tenga poco
+// stock; uno que se vende rápido se sugiere aunque parezca "ok". El pedido real
+// se hace creando un lote.
 function RestockTab({ skus }) {
   const { ventas } = useData();
-  const [objetivo, setObjetivo] = useState(() => Number(localStorage.getItem('restock-objetivo')) || 10);
-  useEffect(() => { if (Number(objetivo) > 0) localStorage.setItem('restock-objetivo', String(objetivo)); }, [objetivo]);
+  const [leadTime, setLeadTime] = useState(() => Number(localStorage.getItem('restock-lead')) || 52);
+  const [buffer, setBuffer] = useState(() => { const v = localStorage.getItem('restock-buffer'); return v != null ? Number(v) : 30; });
+  useEffect(() => { if (Number(leadTime) > 0) localStorage.setItem('restock-lead', String(leadTime)); }, [leadTime]);
+  useEffect(() => { localStorage.setItem('restock-buffer', String(buffer)); }, [buffer]);
 
   // Ventas por SKU en los últimos 6 meses (para el sparkline de tendencia).
   const ventas6m = useMemo(() => {
@@ -432,24 +439,47 @@ function RestockTab({ skus }) {
   }, [ventas]);
   const sparkFor = (skuId) => ventas6m.months.map((ym) => ventas6m.map[skuId]?.[ym] || 0);
 
+  // Primera venta por SKU + global (para días activos → velocidad).
+  const primeras = useMemo(() => {
+    let globalMin = null;
+    const bySku = {};
+    (ventas || []).forEach((v) => {
+      const f = v.fecha; if (!f) return;
+      if (!globalMin || f < globalMin) globalMin = f;
+      (v.lineas || []).forEach((l) => { if (!bySku[l.skuId] || f < bySku[l.skuId]) bySku[l.skuId] = f; });
+    });
+    return { globalMin, bySku };
+  }, [ventas]);
+
   const items = useMemo(() => {
-    const obj = Number(objetivo) || 0;
+    const hoy = new Date();
+    const diasObjetivo = (Number(leadTime) || 0) + (Number(buffer) || 0);
+    const diasDesde = (fStr) => { if (!fStr) return 1; const d = new Date(fStr + 'T00:00:00'); return Math.max(1, Math.round((hoy - d) / 86400000)); };
     return skus
-      .filter((s) => s.estado === 'critico' || s.estado === 'atencion')
+      .filter((s) => s.id !== 'LEGACY-SALE' && s.activa !== false && s.estado !== 'descontinuado')
       .map((s) => {
+        const primera = primeras.bySku[s.id] || primeras.globalMin;
+        const diasActivo = diasDesde(primera);
+        const velocidad = s.vendidas > 0 ? s.vendidas / diasActivo : 0;       // uds/día
+        const vtasMes = velocidad > 0 ? +(velocidad * 30).toFixed(1) : 0;
+        const diasStock = velocidad > 0 && s.stock > 0 ? Math.round(s.stock / velocidad) : null;
+        const necesidad = Math.round(velocidad * diasObjetivo);
         const cubierto = s.stock + s.enTransito;
-        const aPedir = Math.max(0, obj - cubierto);
-        return { ...s, aPedir, costoEst: aPedir * s.cpp };
+        const aPedir = Math.max(0, necesidad - cubierto);
+        return { ...s, velocidad, vtasMes, diasStock, necesidad, aPedir, costoEst: aPedir * s.cpp };
       })
+      .filter((s) => s.aPedir > 0)   // solo lo que de verdad hay que pedir (velocidad-driven)
       .sort((a, b) => {
-        const rank = { critico: 0, atencion: 1 };
-        return (rank[a.estado] - rank[b.estado]) || (a.stock - b.stock);
+        // más urgente primero: menos días de stock; los sin velocidad al final.
+        const da = a.diasStock == null ? Infinity : a.diasStock;
+        const db = b.diasStock == null ? Infinity : b.diasStock;
+        return da - db || b.aPedir - a.aPedir;
       });
-  }, [skus, objetivo]);
+  }, [skus, primeras, leadTime, buffer]);
 
   const criticos = items.filter((s) => s.estado === 'critico').length;
-  const aPedirItems = items.filter((s) => s.aPedir > 0);
-  const costoTotal = aPedirItems.reduce((s, x) => s + x.costoEst, 0);
+  const costoTotal = items.reduce((s, x) => s + x.costoEst, 0);
+  const udsTotal = items.reduce((s, x) => s + x.aPedir, 0);
 
   const columns = [
     {
@@ -463,6 +493,8 @@ function RestockTab({ skus }) {
     { key: 'estado', label: 'Estado', render: (s) => <span className={`badge ${estadoCls(s.estado)}`}>{estadoLabel(s.estado)}</span> },
     { key: 'stock', label: 'Stock', align: 'right', num: true, render: (s) => <span className={s.stock <= 0 ? 'neg' : ''}>{s.stock}</span> },
     { key: 'enTransito', label: 'En camino', align: 'right', num: true, render: (s) => (s.enTransito > 0 ? s.enTransito : '—') },
+    { key: 'vtasMes', label: 'Ventas/mes', align: 'right', num: true, render: (s) => (s.vtasMes > 0 ? s.vtasMes.toFixed(1) : '—') },
+    { key: 'diasStock', label: 'Días stock', align: 'right', num: true, render: (s) => (s.diasStock != null ? <span className={s.diasStock < leadTime ? 'neg' : ''}>{s.diasStock}d</span> : <span className="muted">—</span>) },
     {
       key: 'spark', label: 'Ventas 6m',
       render: (s) => { const vals = sparkFor(s.id); return vals.some((v) => v > 0) ? <Sparkline values={vals} w={90} h={24} /> : <span className="muted">—</span>; },
@@ -475,30 +507,34 @@ function RestockTab({ skus }) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'end', gap: 16, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-4)' }}>
-        <Field label="Stock objetivo por SKU" hint="Unidades que querés tener de cada SKU bajo" style={{ width: 220 }}>
-          <NumberInput value={objetivo} onChange={setObjetivo} min="0" />
+        <Field label="Lead time (días)" hint="Cuánto tarda en llegar un pedido" style={{ width: 160 }}>
+          <NumberInput value={leadTime} onChange={setLeadTime} min="1" />
         </Field>
-        <div style={{ fontSize: 12, color: 'var(--text-3)', paddingBottom: 6 }}>
-          "A pedir" = objetivo − (stock + en camino). El pedido real se hace creando un lote.
+        <Field label="Buffer seguridad (días)" hint="Stock extra para imprevistos" style={{ width: 180 }}>
+          <NumberInput value={buffer} onChange={setBuffer} min="0" />
+        </Field>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', paddingBottom: 6, flex: 1 }}>
+          "A pedir" = velocidad de venta × {(Number(leadTime) || 0) + (Number(buffer) || 0)} días − (stock + en camino).
+          El sistema usa el ritmo de ventas de cada SKU; el pedido real se hace creando un lote.
         </div>
       </div>
 
       <div className="kpi-row">
-        <KPI label="SKUs a reponer" value={intNum(aPedirItems.length)} deltaLabel={`de ${items.length} bajos`} />
-        <KPI label="Críticos" value={intNum(criticos)} deltaLabel="stock <= 2" />
+        <KPI label="SKUs a pedir" value={intNum(items.length)} deltaLabel={`para cubrir ${leadTime}+${buffer}d`} />
+        <KPI label="Críticos a pedir" value={intNum(criticos)} deltaLabel="stock crítico" />
         <KPI label="Costo estimado" currency value={intNum(costoTotal)} deltaLabel="a CPP actual" />
-        <KPI label="Unidades a pedir" value={intNum(aPedirItems.reduce((s, x) => s + x.aPedir, 0))} deltaLabel="total sugerido" />
+        <KPI label="Unidades a pedir" value={intNum(udsTotal)} deltaLabel="total sugerido" />
       </div>
 
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">SKUs que necesitan reposición</div>
-            <div className="section-desc">{items.length} en estado crítico/atención · ordenados por urgencia</div>
+            <div className="section-title">SKUs que necesitan reorden</div>
+            <div className="section-desc">{items.length} con pedido sugerido por velocidad · ordenados por urgencia (menos días de stock primero)</div>
           </div>
         </div>
         <DataTable columns={columns} rows={items} getRowKey={(s) => s.id}
-          empty="Sin SKUs críticos ni en atención · stock sano" />
+          empty="Ningún SKU necesita reorden al ritmo de ventas actual." />
       </div>
     </>
   );
