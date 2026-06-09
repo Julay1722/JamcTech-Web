@@ -220,44 +220,25 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
             <KPI label="Saldo neto del período" currency value={intNum(neto)} delta={neto >= 0 ? 1 : -1} deltaLabel={neto >= 0 ? 'superávit' : 'déficit'} />
           </div>
 
-          <div className="section" style={{ marginBottom: 'var(--s-3)' }}>
-            <div className="section-head">
-              <div>
-                <div className="section-title">Filtros</div>
-                <div className="section-desc">Combina período + naturaleza + búsqueda libre</div>
-              </div>
-              {(period !== 'todo' || naturaleza !== 'todas' || search) && (
-                <button className="btn ghost" onClick={() => { if (embedded) setPeriodLocal('todo'); setNaturaleza('todas'); setSearch(''); }}>
-                  Limpiar filtros
-                </button>
-              )}
-            </div>
-            <div className="grid-3">
-              {embedded && (
-                <Field label="Período">
-                  <Select value={period} onChange={setPeriodLocal} options={PERIOD_OPTS} />
-                </Field>
-              )}
-              <Field label="Naturaleza">
-                <Select value={naturaleza} onChange={setNaturaleza} options={[
-                  { value: 'todas', label: 'Todas' },
-                  { value: 'op', label: 'Solo operacional (CASHFLOW)' },
-                  { value: 'fin', label: 'Solo financiero' },
-                ]} />
-              </Field>
-              <Field label="Búsqueda libre" hint="tipo, cuenta, contraparte, notas">
-                <TextInput value={search} onChange={setSearch} placeholder="buscar…" />
-              </Field>
-            </div>
-          </div>
-
           <div className="section">
-            <div className="section-head">
+            <div className="section-head" style={{ flexWrap: 'wrap', gap: 'var(--s-2)' }}>
               <div>
-                <div className="section-title">Libro contable</div>
-                <div className="section-desc">{rows.length} de {filteredAll.length} · ordenado desc por fecha</div>
+                <div className="section-title">{cuentaFilter != null ? 'Movimientos' : 'Libro contable'}</div>
+                <div className="section-desc">{rows.length} de {filteredAll.length} · orden desc por fecha</div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                {embedded && (
+                  <select className="select" style={{ width: 'auto', minWidth: 120 }} value={period} onChange={(e) => setPeriodLocal(e.target.value)}>
+                    {PERIOD_OPTS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                )}
+                <div className="chips">
+                  {[['todas', 'Todas'], ['op', 'Operacional'], ['fin', 'Financiero']].map(([k, l]) => (
+                    <button key={k} className={`chip ${naturaleza === k ? 'active' : ''}`} onClick={() => setNaturaleza(k)}>{l}</button>
+                  ))}
+                </div>
+                <input className="input" style={{ width: 200 }} placeholder="Buscar tipo, cuenta, contraparte, notas…"
+                  value={search} onChange={(e) => setSearch(e.target.value)} />
                 <button className="btn ghost" disabled={!filteredAll.length} title="Descargar CSV"
                   onClick={() => {
                     const headers = ['Fecha', 'Tipo', 'Cuenta', 'Contraparte', 'Entrada', 'Salida', 'Naturaleza', 'Notas'];
@@ -267,7 +248,7 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
                   }}>⤓ CSV</button>
                 {filteredAll.length > limit && (
                   <button className="btn ghost" onClick={() => setLimit((l) => l + 500)}>
-                    Cargar más ({filteredAll.length - limit} restantes)
+                    Cargar más ({filteredAll.length - limit})
                   </button>
                 )}
               </div>
