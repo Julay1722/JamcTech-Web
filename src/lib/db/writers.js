@@ -375,7 +375,13 @@ export async function createMovimiento(d) {
   if (d.tipo === 'TRANSFERENCIA_INTERNA') {
     if (!d.cuentaDestinoId) throw new Error('Selecciona la cuenta destino de la transferencia');
     if (d.cuentaDestinoId === d.cuentaId) throw new Error('Origen y destino no pueden ser la misma cuenta');
-    const monto = num(d.monto);
+    const monto = num(d.monto);                          // sale del origen (moneda del origen)
+    // Cross-currency: si las cuentas tienen monedas distintas, la pata destino
+    // recibe el monto EN SU MONEDA (montoLlega), no el mismo número que sale.
+    // Ej. BHD(RD) → Scotia(USD): salida 5,900 RD en origen, entrada 100 USD en
+    // destino, tasa 59. Cada saldo queda correcto en la moneda de su cuenta.
+    const montoLlega = d.montoLlega != null && num(d.montoLlega) > 0 ? num(d.montoLlega) : monto;
+    const tasa = d.tasaCambio != null && num(d.tasaCambio) ? num(d.tasaCambio) : null;
     // 🐛 CTA-2: transferencia = DOS patas. vw_saldo_cuenta solo suma por cuenta_id
     // (NO lee cuenta_destino_id), así que una sola fila debitaría el origen pero
     // NUNCA acreditaría el destino. Creamos: (salida del origen) + (entrada al
@@ -385,8 +391,8 @@ export async function createMovimiento(d) {
     const token = `#TRF-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const nota = d.notas || 'Transferencia interna';
     const legs = [
-      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId, cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, notas: `${nota} ${token}` },
-      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaDestinoId, cuenta_destino_id: d.cuentaId, entrada: monto, salida: 0, notas: `${nota} ${token}` },
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId, cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, tasa_cambio: tasa, notas: `${nota} ${token}` },
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaDestinoId, cuenta_destino_id: d.cuentaId, entrada: montoLlega, salida: 0, tasa_cambio: tasa, notas: `${nota} ${token}` },
     ];
     const { data, error } = await supabase.from('movimientos').insert(legs).select();
     if (error) throw new Error(`createMovimiento (transfer): ${error.message}`);

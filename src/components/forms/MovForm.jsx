@@ -58,7 +58,7 @@ function tipoPagoDeuda(prestamo) {
 }
 
 export default function MovForm({ onDone }) {
-  const { prestamos, inversores, refreshAll } = useData();
+  const { cuentas, prestamos, inversores, refreshAll } = useData();
   const toast = useToast();
 
   const [modo, setModo] = useState('gasto');
@@ -67,6 +67,7 @@ export default function MovForm({ onDone }) {
   // Estado del form. Cada modo usa el subconjunto que le aplica.
   const [fecha, setFecha] = useState(todayISO());
   const [monto, setMonto] = useState('');
+  const [montoLlega, setMontoLlega] = useState(''); // transferencia entre monedas distintas
   const [notas, setNotas] = useState('');
 
   // Gasto / Ingreso
@@ -88,8 +89,21 @@ export default function MovForm({ onDone }) {
   const montoNum = num(monto);
   const montoOk = montoNum > 0;
 
+  // Transferencia entre cuentas de distinta moneda → hay que indicar cuánto LLEGA
+  // (en la moneda del destino) y de ahí se calcula la tasa implícita (RD por USD).
+  const origen = (cuentas || []).find((c) => c.id === origenId);
+  const destino = (cuentas || []).find((c) => c.id === destinoId);
+  const crossCurrency = modo === 'transferencia' && origen && destino && origen.moneda !== destino.moneda;
+  const llegaNum = num(montoLlega);
+  const curSym = (m) => (m === 'USD' ? 'USD$' : 'RD$');
+  const tasaTransfer = crossCurrency && montoNum > 0 && llegaNum > 0
+    ? (origen.moneda === 'RD' ? montoNum / llegaNum : llegaNum / montoNum) // RD por 1 USD
+    : null;
+  const transferOk = !crossCurrency || llegaNum > 0;
+
   function reset() {
     setMonto('');
+    setMontoLlega('');
     setNotas('');
     setContraparteId(null);
   }
@@ -132,11 +146,14 @@ export default function MovForm({ onDone }) {
         if (!origenId) throw new Error('Selecciona la cuenta origen.');
         if (!destinoId) throw new Error('Selecciona la cuenta destino.');
         if (origenId === destinoId) throw new Error('Origen y destino deben ser distintos.');
+        if (crossCurrency && !(llegaNum > 0)) throw new Error('Indica cuánto llega al destino (las cuentas tienen monedas distintas).');
         await createMovimiento({
           fecha, tipo: 'TRANSFERENCIA_INTERNA',
           cuentaId: origenId,
           cuentaDestinoId: destinoId,
           monto: montoNum,
+          montoLlega: crossCurrency ? llegaNum : montoNum,
+          tasaCambio: tasaTransfer,
           notas,
         });
         toast.ok('Transferencia registrada');
@@ -240,9 +257,21 @@ export default function MovForm({ onDone }) {
           <Field label="Cuenta destino" required>
             <CuentaSelect value={destinoId} onChange={setDestinoId} filter="liquidas" invalid={!destinoId || destinoId === origenId} />
           </Field>
-          <Field label="Monto (RD$)" required>
+          <Field label={`Monto que sale${origen ? ` (${curSym(origen.moneda)})` : ' (RD$)'}`} required>
             <MoneyInput value={monto} onChange={setMonto} min="0" invalid={!montoOk} placeholder="0.00" />
           </Field>
+          {crossCurrency && (
+            <>
+              <Field label={`Llega al destino (${curSym(destino.moneda)})`} hint="Las cuentas tienen monedas distintas: indica el monto que entra al destino." required>
+                <MoneyInput value={montoLlega} onChange={setMontoLlega} min="0" invalid={!(llegaNum > 0)} placeholder="0.00" />
+              </Field>
+              <div className="field-hint" style={{ marginTop: -6, marginBottom: 12 }}>
+                {tasaTransfer
+                  ? <>Tasa implícita: <strong>1 USD = {tasaTransfer.toFixed(2)} RD$</strong></>
+                  : 'Tasa implícita: completa ambos montos.'}
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -280,7 +309,7 @@ export default function MovForm({ onDone }) {
 
       <div className="modal-actions">
         <button type="button" className="btn ghost" onClick={() => onDone?.()} disabled={busy}>Cancelar</button>
-        <button type="submit" className="btn" disabled={busy || !montoOk}>
+        <button type="submit" className="btn" disabled={busy || !montoOk || !transferOk}>
           {busy ? 'Guardando…' : 'Registrar'}
         </button>
       </div>
