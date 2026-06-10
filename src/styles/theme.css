@@ -164,7 +164,7 @@ body {
   font-family: var(--font-mono); font-size: 23px; font-weight: 600;
   letter-spacing: -0.02em; line-height: 1.1; margin-top: 6px; color: var(--text);
 }
-.kpi-value .currency { font-size: 0.55em; opacity: 0.5; vertical-align: 0.3em; margin-right: 2px; }
+.kpi-value .currency { font-size: 0.55em; opacity: 0.5; vertical-align: 0.3em; margin-right: 6px; }
 .kpi-delta { font-size: 12px; margin-top: var(--s-2); display: flex; align-items: center; gap: 4px; font-weight: 500; }
 .kpi-delta.pos { color: var(--success); }
 .kpi-delta.neg { color: var(--danger); }
@@ -202,8 +202,8 @@ table.data td { padding: 8px 12px; border-bottom: 1px solid var(--border); color
 table.data tbody tr { transition: background 130ms ease; }
 table.data tr:hover td { background: var(--surface-2); }
 table.data tr[style*="cursor: pointer"]:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
-table.data td.num { font-family: var(--font-mono); color: var(--text); }
-table.data td.right, table.data th.right { text-align: right; }
+table.data td.num { font-family: var(--font-mono); color: var(--text); white-space: nowrap; }
+table.data td.right, table.data th.right { text-align: right; white-space: nowrap; }
 table.data td.pos { color: var(--success); }
 table.data td.neg { color: var(--danger); }
 table.data td.muted { color: var(--text-3); }

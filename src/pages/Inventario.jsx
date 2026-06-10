@@ -506,15 +506,17 @@ function RestockTab({ skus }) {
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'end', gap: 16, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-4)' }}>
-        <Field label="Lead time (días)" hint="Cuánto tarda en llegar un pedido" style={{ width: 160 }}>
-          <NumberInput value={leadTime} onChange={setLeadTime} min="1" />
-        </Field>
-        <Field label="Buffer seguridad (días)" hint="Stock extra para imprevistos" style={{ width: 180 }}>
-          <NumberInput value={buffer} onChange={setBuffer} min="0" />
-        </Field>
-        <div style={{ fontSize: 12, color: 'var(--text-3)', paddingBottom: 6, flex: 1 }}>
-          "A pedir" = velocidad de venta × {(Number(leadTime) || 0) + (Number(buffer) || 0)} días − (stock + en camino).
+      <div style={{ padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4, marginBottom: 'var(--s-4)' }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <Field label="Lead time (días)" hint="Cuánto tarda en llegar un pedido" style={{ width: 180 }}>
+            <NumberInput value={leadTime} onChange={setLeadTime} min="1" />
+          </Field>
+          <Field label="Buffer seguridad (días)" hint="Stock extra para imprevistos" style={{ width: 180 }}>
+            <NumberInput value={buffer} onChange={setBuffer} min="0" />
+          </Field>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 'var(--s-2)', lineHeight: 1.5 }}>
+          <strong>"A pedir"</strong> = velocidad de venta × {(Number(leadTime) || 0) + (Number(buffer) || 0)} días − (stock + en camino).
           El sistema usa el ritmo de ventas de cada SKU; el pedido real se hace creando un lote.
         </div>
       </div>
