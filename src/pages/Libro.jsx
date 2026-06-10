@@ -31,6 +31,7 @@ import { Modal, useConfirm } from '../components/Modal.jsx';
 import { Field, TextInput, NumberInput, MoneyInput, DateInput, TextArea, Select } from '../components/Form.jsx';
 import { DataTable } from '../components/Table.jsx';
 import { CuentaSelect, MedioPagoSelect, PrestamoSelect, InversorSelect } from '../components/Pickers.jsx';
+import MovForm from '../components/forms/MovForm.jsx';
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { MOVFIN_TIPOS } from '../lib/supabase.js';
@@ -77,7 +78,7 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
   const data = useData();
   const t = useToast();
   const [confirm, confirmNode] = useConfirm();
-  const [tab, setTab] = useState('lista');
+  const [showMov, setShowMov] = useState(false);
   // Embebido en Finanzas no hay barra de período del padre → selector interno
   // (presets simples, sin rango custom). Top-level usa el período + rango del padre.
   const [periodLocal, setPeriodLocal] = useState('todo');
@@ -184,6 +185,9 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
               <strong style={{ color: neto >= 0 ? 'var(--success)' : 'var(--danger)' }}>{money(neto)}</strong>
             </div>
           </div>
+          <div className="topbar-actions">
+            <button className="btn" onClick={() => setShowMov(true)}>+ Registrar movimiento</button>
+          </div>
         </div>
       )}
 
@@ -197,23 +201,7 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
         </div>
       )}
 
-      <div className="tabs">
-        <button className={tab === 'lista' ? 'tab active' : 'tab'} onClick={() => setTab('lista')}>{cuentaFilter != null ? 'Movimientos' : 'Libro contable'}</button>
-        <button className={tab === 'movfin' ? 'tab active' : 'tab'} onClick={() => setTab('movfin')}>+ Pago a préstamo/línea/inversor</button>
-        <button className={tab === 'ajuste' ? 'tab active' : 'tab'} onClick={() => setTab('ajuste')}>+ Gasto / ajuste / transferencia</button>
-      </div>
-
-      {tab === 'movfin' && (
-        <div className="section"><FormPagoFinanciero onDone={() => setTab('lista')} /></div>
-      )}
-
-      {tab === 'ajuste' && (
-        <div className="section"><FormGastoAjuste onDone={() => setTab('lista')} /></div>
-      )}
-
-      {tab === 'lista' && (
-        <>
-          <div className="kpi-row">
+      <div className="kpi-row">
             <KPI label="Movimientos" value={intNum(filteredAll.length)} deltaLabel={`de ${intNum(data.movimientos.length)} totales`} />
             <KPI label="Total Debe (entradas)" currency value={intNum(totalDebe)} deltaLabel="cobros / aportes / ingresos" />
             <KPI label="Total Haber (salidas)" currency value={intNum(totalHaber)} deltaLabel="pagos / compras / gastos" />
@@ -265,8 +253,6 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
               empty="Sin movimientos en estos filtros"
             />
           </div>
-        </>
-      )}
 
       {editing && (
         <EditMovimientoModal
@@ -276,376 +262,17 @@ export default function LibroPage({ embedded, period: periodProp, customRange, o
         />
       )}
 
+      {showMov && (
+        <Modal title="Registrar movimiento" width={560} onClose={() => setShowMov(false)}>
+          <MovForm onDone={() => setShowMov(false)} />
+        </Modal>
+      )}
+
       {confirmNode}
     </div>
   );
 }
 
-// ════════════════════════════════════════════════════════════════
-// FormPagoFinanciero — pago/abono a préstamo, disposición/pago/cargo de línea,
-// depósito/retorno de inversor. Mapea el label amigable (MOVFIN_TIPOS) al enum
-// movimiento_tipo + side correctos, y liga prestamoId / inversorId / cuotaId.
-// ════════════════════════════════════════════════════════════════
-
-// Cada label → { enum, side, target('prestamo'|'inversor'), filtro? }.
-const MOVFIN_MAP = {
-  'Cuota Préstamo':    { tipo: 'PAGO_PRESTAMO',       side: 'salida',  target: 'prestamo', soloPrestamo: true, desgloseCuota: true },
-  'Abono Préstamo':    { tipo: 'PAGO_PRESTAMO',       side: 'salida',  target: 'prestamo', soloPrestamo: true },
-  'Disposición Línea': { tipo: 'DRAWDOWN',            side: 'entrada', target: 'prestamo' }, // DEU-5: sube el usado
-  'Pago Línea':        { tipo: 'PAGO_LINEA_CREDITO',  side: 'salida',  target: 'prestamo' },
-  'Cargo Línea':       { tipo: 'DRAWDOWN',            side: 'entrada', target: 'prestamo' }, // DEU-5: cargo suma al usado
-  'Depósito Inversor': { tipo: 'APORTE_INVERSOR',     side: 'entrada', target: 'inversor' }, // INVR-1
-  'Retorno Inversor':  { tipo: 'PAGO_INVERSOR',       side: 'salida',  target: 'inversor' }, // INVR-1
-  'Otro':              { tipo: 'OTROS',               side: 'salida',  target: null },
-};
-
-function FormPagoFinanciero({ onDone }) {
-  const data = useData();
-  const t = useToast();
-  const [label, setLabel] = useState('Cuota Préstamo');
-  const [fecha, setFecha] = useState(todayISO());
-  const [prestamoId, setPrestamoId] = useState(null);
-  const [inversorId, setInversorId] = useState(null);
-  const [cuotaId, setCuotaId] = useState(null);
-  const [cuentaId, setCuentaId] = useState(null);
-  const [monto, setMonto] = useState('');
-  const [capital, setCapital] = useState('');
-  const [interes, setInteres] = useState('');
-  const [seguro, setSeguro] = useState('');
-  const [notas, setNotas] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [tries, setTries] = useState(false);
-
-  const meta = MOVFIN_MAP[label] || MOVFIN_MAP['Otro'];
-  const esPrestamo = meta.target === 'prestamo';
-  const esInversor = meta.target === 'inversor';
-  const prestamo = data.prestamos.find((p) => p.id === prestamoId) || null;
-  // Solo el Coop (tipo PRESTAMO) tiene schedule de cuotas; permitimos elegir cuota
-  // pendiente para pagarla (DEU-2: el writer marca cuotas.pagada).
-  const esCoop = meta.desgloseCuota && prestamo && prestamo.tipo === 'PRESTAMO';
-  const cuotasPendientes = useMemo(
-    () => (esCoop ? data.cuotas.filter((c) => c.prestamoId === prestamoId && !c.pagada).sort((a, b) => a.numero - b.numero) : []),
-    [esCoop, data.cuotas, prestamoId],
-  );
-
-  // Al cambiar de concepto, resetea el destino que no aplica.
-  useEffect(() => {
-    if (!esPrestamo) { setPrestamoId(null); setCuotaId(null); }
-    if (!esInversor) setInversorId(null);
-    if (!meta.desgloseCuota) { setCapital(''); setInteres(''); setSeguro(''); }
-  }, [label]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Al elegir una cuota del Coop, pre-llena su desglose (capital/interés/seguro).
-  useEffect(() => {
-    if (!cuotaId) return;
-    const c = cuotasPendientes.find((x) => x.id === cuotaId);
-    if (c) {
-      setCapital(String(c.capital + c.abonoCapital || c.capital || ''));
-      setInteres(String(c.interes || ''));
-      setSeguro(String(c.seguro || ''));
-      if (c.fechaPago) setFecha((f) => f || c.fechaPago);
-    }
-  }, [cuotaId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Para Cuota Préstamo el monto se calcula del desglose.
-  const montoCalc = meta.desgloseCuota ? num(capital) + num(interes) + num(seguro) : num(monto);
-
-  const targetOk = (!esPrestamo || !!prestamoId) && (!esInversor || !!inversorId);
-  const cuentaInvalida = tries && !cuentaId;
-  const valid = montoCalc > 0 && !!cuentaId && targetOk;
-
-  const reset = () => {
-    setMonto(''); setCapital(''); setInteres(''); setSeguro(''); setNotas('');
-    setCuotaId(null); setTries(false);
-  };
-
-  const onSubmit = async () => {
-    setTries(true);
-    if (!valid) {
-      if (!cuentaId) t.warn('Falta la cuenta', 'Elegí de qué cuenta sale/entra el dinero');
-      else if (esPrestamo && !prestamoId) t.warn('Falta el préstamo/línea', 'Elegí el producto financiero');
-      else if (esInversor && !inversorId) t.warn('Falta el inversor', 'Elegí el inversor');
-      else t.warn('Monto inválido', 'El monto debe ser mayor a 0');
-      return;
-    }
-    setBusy(true);
-    try {
-      await createPagoFinanciero({
-        fecha,
-        monto: montoCalc,
-        cuentaId,
-        tipo: meta.tipo,
-        side: meta.side,
-        prestamoId: esPrestamo ? prestamoId : null,
-        inversorId: esInversor ? inversorId : null,
-        cuotaId: esCoop ? cuotaId : null, // DEU-2
-        notas: notas || label,
-      });
-      await data.refreshAll();
-      const destino = esPrestamo ? (prestamo?.nombre || '') : esInversor ? (data.inversores.find((i) => i.id === inversorId)?.nombre || '') : '';
-      t.ok('Movimiento registrado', `${label} · ${money(montoCalc)}${destino ? ' · ' + destino : ''}`);
-      reset();
-      onDone && onDone();
-    } catch (e) {
-      t.err('No se pudo registrar', e.message);
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
-      <div className="info-box" style={{ fontSize: 12, color: 'var(--text-2)', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 'var(--r-sm)', padding: 'var(--s-3) var(--s-4)' }}>
-        Pagos a deuda e inversores. La cuota del Coop marca la cuota pagada en el schedule (DEU-2); el pago a inversor liga el inversor (INVR-1); disposiciones/cargos de línea suben el usado (DRAWDOWN, DEU-5).
-      </div>
-
-      <div className="grid-3">
-        <Field label="Tipo" required>
-          <Select value={label} onChange={setLabel} options={MOVFIN_TIPOS} />
-        </Field>
-        <Field label="Fecha" required>
-          <DateInput value={fecha} onChange={setFecha} />
-        </Field>
-        <Field label="Cuenta" required hint="De dónde sale / a dónde entra el dinero">
-          <CuentaSelect filter="todas" value={cuentaId} onChange={setCuentaId} invalid={cuentaInvalida} />
-        </Field>
-      </div>
-
-      {esPrestamo && (
-        <div className="grid-2">
-          <Field label="Préstamo / línea" required hint={meta.soloPrestamo ? 'Solo el Coop tiene schedule de cuotas' : undefined}>
-            <PrestamoSelect
-              value={prestamoId}
-              onChange={(v) => { setPrestamoId(v); setCuotaId(null); }}
-            />
-          </Field>
-          {esCoop && (
-            <Field label="Cuota a pagar" hint="Elegí la cuota pendiente del schedule (DEU-2)">
-              <Select
-                value={cuotaId ?? ''}
-                onChange={(v) => setCuotaId(v === '' ? null : Number(v))}
-                placeholder="— sin ligar a cuota —"
-                options={cuotasPendientes.map((c) => ({ value: c.id, label: `#${c.numero} · ${fmtDate(c.fechaPago)} · ${money(c.montoTotal)}` }))}
-              />
-            </Field>
-          )}
-        </div>
-      )}
-
-      {esInversor && (
-        <Field label="Inversor" required>
-          <InversorSelect value={inversorId} onChange={setInversorId} />
-        </Field>
-      )}
-
-      {meta.desgloseCuota ? (
-        <>
-          <div className="grid-3">
-            <Field label="Capital (RD$)"><MoneyInput value={capital} onChange={setCapital} placeholder="0" /></Field>
-            <Field label="Interés (RD$)"><MoneyInput value={interes} onChange={setInteres} placeholder="0" /></Field>
-            <Field label="Seguro (RD$)"><MoneyInput value={seguro} onChange={setSeguro} placeholder="0" /></Field>
-          </div>
-          <Field label="Monto total (RD$)" hint="Calculado de capital + interés + seguro">
-            <MoneyInput value={montoCalc || ''} onChange={() => {}} readOnly />
-          </Field>
-        </>
-      ) : (
-        <div className="grid-2">
-          <Field label="Monto (RD$)" required>
-            <MoneyInput value={monto} onChange={setMonto} placeholder="0" />
-          </Field>
-          <Field label="Notas" hint="opcional">
-            <TextInput value={notas} onChange={setNotas} placeholder="descripción" />
-          </Field>
-        </div>
-      )}
-
-      {meta.desgloseCuota && (
-        <Field label="Notas" hint="opcional">
-          <TextInput value={notas} onChange={setNotas} placeholder="descripción" />
-        </Field>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Registrando…' : 'Registrar movimiento'}</button>
-        <button className="btn ghost" disabled={busy} onClick={reset}>Limpiar</button>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════
-// FormGastoAjuste — gasto operativo / ajuste / aporte / transferencia interna.
-// Exige cuenta (CTA-1). Si es gasto se elige el medio de pago (regla 7: tarjeta
-// → DRAWDOWN). Transferencia interna = TRANSFERENCIA_INTERNA + cuentaDestinoId
-// en una sola fila (CTA-2).
-// ════════════════════════════════════════════════════════════════
-
-// Conceptos de gasto/ajuste. dir: dirección sugerida; transfer marca el flujo
-// especial; tarjeta indica que puede pagarse con tarjeta (regla 7).
-const CONCEPTOS_GASTO = [
-  { label: 'Compra operativa', tipo: 'COMPRA_OPERATIVA', dir: 'salida', tarjeta: true },
-  { label: 'Pago ADS', tipo: 'PAGO_ADS', dir: 'salida', tarjeta: true },
-  { label: 'Pago Comisión', tipo: 'PAGO_COMISION', dir: 'salida', tarjeta: true },
-  { label: 'Pago Transporte / Courier', tipo: 'PAGO_TRANSPORTE', dir: 'salida', tarjeta: true },
-  { label: 'Fee bancario', tipo: 'FEE_BANCARIO', dir: 'salida' },
-  { label: 'Aporte del dueño', tipo: 'APORTE_DUENO', dir: 'entrada' },
-  { label: 'Refund de proveedor', tipo: 'REFUND_PROVEEDOR', dir: 'entrada' },
-  { label: 'Refund a cliente', tipo: 'REFUND_CLIENTE', dir: 'salida' },
-  { label: 'Ajuste', tipo: 'AJUSTE', dir: 'salida' },
-  { label: 'Otro', tipo: 'OTROS', dir: 'salida' },
-  { label: 'Transferencia interna', tipo: 'TRANSFERENCIA_INTERNA', dir: 'transfer' },
-];
-
-function FormGastoAjuste({ onDone }) {
-  const data = useData();
-  const t = useToast();
-  const [conceptoLabel, setConceptoLabel] = useState('Compra operativa');
-  const [fecha, setFecha] = useState(todayISO());
-  const [dir, setDir] = useState('salida'); // entrada | salida (no aplica a transfer)
-  // Para gastos/aportes: medio de pago (regla 7: tarjeta → DRAWDOWN + prestamoId).
-  const [medio, setMedio] = useState({ cuentaId: null, prestamoId: null });
-  // Para transferencias: cuenta origen + destino reales (CTA-2).
-  const [origenId, setOrigenId] = useState(null);
-  const [destinoId, setDestinoId] = useState(null);
-  const [monto, setMonto] = useState('');
-  const [notas, setNotas] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [tries, setTries] = useState(false);
-
-  const concepto = CONCEPTOS_GASTO.find((c) => c.label === conceptoLabel) || CONCEPTOS_GASTO[0];
-  const esTransfer = concepto.dir === 'transfer';
-  const esTarjeta = medio.prestamoId != null;
-
-  // Al cambiar de concepto, sugiere la dirección (editable salvo transfer).
-  useEffect(() => { if (concepto.dir !== 'transfer') setDir(concepto.dir); }, [conceptoLabel]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const m = num(monto);
-  const cuentaInvalida = tries && !esTransfer && !medio.cuentaId;
-  const origenInvalido = tries && esTransfer && !origenId;
-  const destinoInvalido = tries && esTransfer && (!destinoId || destinoId === origenId);
-  const valid = m > 0 && (esTransfer
-    ? (!!origenId && !!destinoId && origenId !== destinoId)
-    : !!medio.cuentaId);
-
-  const reset = () => { setMonto(''); setNotas(''); setTries(false); };
-
-  const onSubmit = async () => {
-    setTries(true);
-    if (!valid) {
-      if (m <= 0) t.warn('Monto inválido', 'El monto debe ser mayor a 0');
-      else if (esTransfer && !origenId) t.warn('Falta cuenta origen', 'Elegí de dónde sale');
-      else if (esTransfer && (!destinoId || destinoId === origenId)) t.warn('Cuenta destino inválida', 'Elegí una cuenta distinta de destino');
-      else if (!esTransfer && !medio.cuentaId) t.warn('Falta la cuenta', 'Elegí el medio de pago');
-      return;
-    }
-    setBusy(true);
-    try {
-      if (esTransfer) {
-        // CTA-2: una sola fila TRANSFERENCIA_INTERNA con cuentaDestinoId.
-        await createMovimiento({
-          fecha,
-          tipo: 'TRANSFERENCIA_INTERNA',
-          cuentaId: origenId,
-          cuentaDestinoId: destinoId,
-          monto: m,
-          notas: notas || 'Transferencia interna',
-        });
-        const nO = data.cuentas.find((c) => c.id === origenId)?.nombre || '';
-        const nD = data.cuentas.find((c) => c.id === destinoId)?.nombre || '';
-        t.ok('Transferencia registrada', `${nO} → ${nD} · ${money(m)}`);
-      } else {
-        // Gasto/aporte/ajuste. regla 7: si paga con tarjeta → DRAWDOWN + prestamoId
-        // (el writer lo resuelve cuando recibe prestamoId).
-        await createMovimiento({
-          fecha,
-          tipo: concepto.tipo,
-          cuentaId: medio.cuentaId,
-          prestamoId: medio.prestamoId, // si es tarjeta → DRAWDOWN (regla 7)
-          monto: m,
-          side: dir, // entrada | salida
-          notas,
-        });
-        t.ok('Movimiento registrado', `${concepto.label} · ${dir === 'entrada' ? '+' : '−'}${money(m)}`);
-      }
-      await data.refreshAll();
-      reset();
-      onDone && onDone();
-    } catch (e) {
-      t.err('No se pudo registrar', e.message);
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-4)' }}>
-      <div className="info-box" style={{ fontSize: 12, color: 'var(--text-2)', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 'var(--r-sm)', padding: 'var(--s-3) var(--s-4)' }}>
-        Gastos operativos, aportes, ajustes y transferencias. Elegí la cuenta real de donde sale/entra el dinero (CTA-1). Si pagás con tarjeta se registra como cargo a la tarjeta (DRAWDOWN, regla 7). Ventas, lotes y pagos de deuda usan sus propios apartados.
-      </div>
-
-      <div className="grid-3">
-        <Field label="Concepto" required>
-          <Select value={conceptoLabel} onChange={setConceptoLabel} options={CONCEPTOS_GASTO.map((c) => c.label)} />
-        </Field>
-        <Field label="Fecha" required>
-          <DateInput value={fecha} onChange={setFecha} />
-        </Field>
-        {!esTransfer && (
-          <Field label="Dirección">
-            <Select value={dir} onChange={setDir} options={[
-              { value: 'salida', label: 'Salida (dinero que sale)' },
-              { value: 'entrada', label: 'Entrada (dinero que entra)' },
-            ]} />
-          </Field>
-        )}
-      </div>
-
-      {esTransfer ? (
-        <div className="grid-3">
-          <Field label="Cuenta origen" required>
-            <CuentaSelect filter="todas" value={origenId} onChange={setOrigenId} invalid={origenInvalido} />
-          </Field>
-          <Field label="Cuenta destino" required>
-            <CuentaSelect filter="todas" value={destinoId} onChange={setDestinoId} invalid={destinoInvalido} />
-          </Field>
-          <Field label="Monto (RD$)" required hint="Sale de origen, entra a destino (CTA-2)">
-            <MoneyInput value={monto} onChange={setMonto} placeholder="0" />
-          </Field>
-        </div>
-      ) : (
-        <div className="grid-3">
-          <Field label="Medio de pago" required hint="Tarjeta = cargo a la tarjeta (DRAWDOWN)">
-            <MedioPagoSelect value={medio} onChange={setMedio} invalid={cuentaInvalida} />
-          </Field>
-          <Field label="Monto (RD$)" required>
-            <MoneyInput value={monto} onChange={setMonto} placeholder="0" />
-          </Field>
-          <Field label="Notas" hint="opcional · contraparte, descripción">
-            <TextInput value={notas} onChange={setNotas} placeholder="ej. Facebook · banco · descripción" />
-          </Field>
-        </div>
-      )}
-
-      {esTransfer && (
-        <Field label="Notas" hint="opcional">
-          <TextInput value={notas} onChange={setNotas} placeholder="descripción de la transferencia" />
-        </Field>
-      )}
-
-      {esTarjeta && !esTransfer && (
-        <div className="field-hint" style={{ color: 'var(--accent)' }}>
-          Se registrará como cargo a la tarjeta (DRAWDOWN) y subirá su usado.
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>
-          {busy ? 'Registrando…' : esTransfer ? 'Registrar transferencia' : 'Registrar movimiento'}
-        </button>
-        <button className="btn ghost" disabled={busy} onClick={reset}>Limpiar</button>
-      </div>
-    </div>
-  );
-}
 
 // ════════════════════════════════════════════════════════════════
 // EditMovimientoModal — editar un movimiento suelto (no ligado a venta/lote/
