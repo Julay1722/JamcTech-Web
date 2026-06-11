@@ -23,7 +23,7 @@ import { DataTable } from '../components/Table.jsx';
 import { CuentaSelect } from '../components/Pickers.jsx';
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
-import { money, intNum, fmtDate, todayISO } from '../lib/format.js';
+import { money, intNum, fmtDate, todayISO, proximoDiaMesISO } from '../lib/format.js';
 
 // Días entre hoy y una fecha ISO (negativo = ya vencida).
 function diasHasta(iso) {
@@ -67,7 +67,19 @@ export default function AlertasPage() {
 
     const totalPorPagar = proximas.reduce((s, c) => s + c.montoTotal, 0);
 
-    return { criticos, atencion, proximas, totalPorPagar };
+    // Pagos de tarjeta próximos: tarjetas con saldo (usado>0) y día de vencimiento.
+    // El pago vence en su día de vencimiento (que rueda al mes siguiente si es
+    // menor que el día de corte — proximoDiaMesISO lo resuelve). No es una cuota
+    // fija: se paga el saldo usado del ciclo.
+    const tarjetasPago = (prestamos || [])
+      .filter((p) => p.tipo === 'TARJETA_CREDITO' && p.diaVencimiento && p.usado > 0)
+      .map((p) => {
+        const iso = proximoDiaMesISO(p.diaVencimiento);
+        return { ...p, proximoPago: iso, dias: diasHasta(iso) };
+      })
+      .sort((a, b) => (a.dias ?? 999) - (b.dias ?? 999));
+
+    return { criticos, atencion, proximas, totalPorPagar, tarjetasPago };
   }, [skus, prestamos, cuotas]);
 
   const totalAlertas = m.criticos.length + m.atencion.length + m.proximas.length;
@@ -181,23 +193,51 @@ export default function AlertasPage() {
       </div>
 
       {tab === 'cuotas' && (
-        <div className="section">
-          <div className="section-head">
-            <div>
-              <div className="section-title">Próximas cuotas a pagar</div>
-              <div className="section-desc">
-                Del schedule real de cada préstamo · ordenadas por fecha · marcar pagada actualiza la cuota y el banco
+        <>
+          <div className="section">
+            <div className="section-head">
+              <div>
+                <div className="section-title">Próximas cuotas a pagar</div>
+                <div className="section-desc">
+                  Del schedule real de cada préstamo · ordenadas por fecha · marcar pagada actualiza la cuota y el banco
+                </div>
               </div>
+              <span className="badge neutral">{m.proximas.length} pendientes</span>
             </div>
-            <span className="badge neutral">{m.proximas.length} pendientes</span>
+            <DataTable
+              columns={colsCuotas}
+              rows={m.proximas}
+              getRowKey={(c) => c.id}
+              empty="No hay cuotas pendientes. Todo al día."
+            />
           </div>
-          <DataTable
-            columns={colsCuotas}
-            rows={m.proximas}
-            getRowKey={(c) => c.id}
-            empty="No hay cuotas pendientes. Todo al día."
-          />
-        </div>
+
+          {m.tarjetasPago.length > 0 && (
+            <div className="section">
+              <div className="section-head">
+                <div>
+                  <div className="section-title">Pagos de tarjeta próximos</div>
+                  <div className="section-desc">
+                    Tarjetas con saldo · el pago vence el día configurado (rueda al mes siguiente si vence antes del corte)
+                  </div>
+                </div>
+                <span className="badge neutral">{m.tarjetasPago.length}</span>
+              </div>
+              <DataTable
+                columns={[
+                  { key: 'urg', label: 'Cuándo', render: (p) => { const u = urgencia(p.proximoPago); return <span className={`badge ${u.cls}`}>{u.text}</span>; } },
+                  { key: 'fecha', label: 'Vence', render: (p) => fmtDate(p.proximoPago) },
+                  { key: 'nombre', label: 'Tarjeta' },
+                  { key: 'corte', label: 'Corte', align: 'right', render: (p) => (p.diaCorte ? `día ${p.diaCorte}` : '—') },
+                  { key: 'usado', label: 'Saldo a pagar', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+                ]}
+                rows={m.tarjetasPago}
+                getRowKey={(p) => p.id}
+                empty="Sin pagos de tarjeta próximos."
+              />
+            </div>
+          )}
+        </>
       )}
 
       {tab === 'inventario' && (

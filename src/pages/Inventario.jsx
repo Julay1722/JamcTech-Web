@@ -773,6 +773,13 @@ function FormSKU({ onClose }) {
   const autoNombre = [f.marca, f.modelo, f.color].filter(Boolean).join(' ');
   const valid = mkCode && modCode && colCode;
   const yaExiste = valid && (data.skus || []).some((s) => s.id === skuId);
+  // Aviso suave: ya existe el MISMO modelo (marca+modelo), aunque el código difiera
+  // (otro color, o un casi-duplicado por tipeo). No bloquea, solo avisa.
+  const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  const modeloKey = norm(f.marca) + '|' + norm(f.modelo);
+  const mismoModelo = (valid && !yaExiste)
+    ? (data.skus || []).filter((s) => s.id !== skuId && s.id !== 'LEGACY-SALE' && `${norm(s.marca)}|${norm(s.modelo)}` === modeloKey)
+    : [];
 
   async function submit() {
     if (!valid) { t.err('Datos incompletos', 'Marca, modelo y color son obligatorios'); return; }
@@ -812,6 +819,11 @@ function FormSKU({ onClose }) {
         </div>
       )}
       {yaExiste && <div style={{ fontSize: 12, color: 'var(--danger)' }}>Ese código ya existe — ajustá modelo/color para diferenciarlo.</div>}
+      {mismoModelo.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--warning)' }}>
+          ⚠ Ya tienes <b>{f.marca} {f.modelo}</b> en: {mismoModelo.map((s) => s.color || s.id).join(', ')}. Verificá que no sea un duplicado (podés crearlo igual si es otra variante).
+        </div>
+      )}
 
       <div className="modal-actions">
         <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>

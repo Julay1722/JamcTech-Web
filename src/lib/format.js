@@ -34,3 +34,28 @@ export function ymLabel(ym) {
 }
 
 export const todayISO = () => new Date().toISOString().slice(0, 10);
+
+// Días entre hoy y una fecha ISO (negativo = ya pasó, 0 = hoy).
+export function diasHasta(iso) {
+  if (!iso) return null;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+  return Math.round((d - hoy) / 86400000);
+}
+
+// Próxima fecha (hoy o futura) cuyo día del mes sea `dia`. Devuelve ISO 'YYYY-MM-DD'.
+// Clampa a fin de mes (día 31 en feb → 28/29). Para corte/vencimiento de tarjetas:
+// si el día ya pasó este mes, rueda al mes siguiente (ej. vence día 9, hoy es 20 →
+// el 9 del mes que viene). Así el sistema entiende el ciclo corte→pago.
+export function proximoDiaMesISO(dia) {
+  const dn = Number(dia);
+  if (!dn || dn < 1) return null;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 13; i++) {
+    const y = hoy.getFullYear(), mo = hoy.getMonth() + i;
+    const ultimo = new Date(y, mo + 1, 0).getDate();
+    const d = new Date(y, mo, Math.min(dn, ultimo));
+    if (d >= hoy) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return null;
+}
