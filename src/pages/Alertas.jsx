@@ -67,12 +67,13 @@ export default function AlertasPage() {
 
     const totalPorPagar = proximas.reduce((s, c) => s + c.montoTotal, 0);
 
-    // Pagos de tarjeta próximos: tarjetas con saldo (usado>0) y día de vencimiento.
-    // El pago vence en su día de vencimiento (que rueda al mes siguiente si es
-    // menor que el día de corte — proximoDiaMesISO lo resuelve). No es una cuota
-    // fija: se paga el saldo usado del ciclo.
+    // Pagos próximos de crédito revolvente (tarjetas Y líneas) con saldo (usado>0)
+    // y día de vencimiento. El pago vence en su día de vencimiento (que rueda al
+    // mes siguiente si es menor que el día de corte — proximoDiaMesISO lo resuelve).
+    // No es una cuota fija: se paga el saldo usado del ciclo. (Los préstamos
+    // amortizados van por su schedule de cuotas, arriba.)
     const tarjetasPago = (prestamos || [])
-      .filter((p) => p.tipo === 'TARJETA_CREDITO' && p.diaVencimiento && p.usado > 0)
+      .filter((p) => (p.tipo === 'TARJETA_CREDITO' || p.tipo === 'LINEA_CREDITO') && p.diaVencimiento && p.usado > 0)
       .map((p) => {
         const iso = proximoDiaMesISO(p.diaVencimiento);
         return { ...p, proximoPago: iso, dias: diasHasta(iso) };
@@ -216,9 +217,9 @@ export default function AlertasPage() {
             <div className="section">
               <div className="section-head">
                 <div>
-                  <div className="section-title">Pagos de tarjeta próximos</div>
+                  <div className="section-title">Pagos de tarjeta y línea próximos</div>
                   <div className="section-desc">
-                    Tarjetas con saldo · el pago vence el día configurado (rueda al mes siguiente si vence antes del corte)
+                    Tarjetas y líneas con saldo · el pago vence el día configurado (rueda al mes siguiente si vence antes del corte)
                   </div>
                 </div>
                 <span className="badge neutral">{m.tarjetasPago.length}</span>
@@ -227,7 +228,7 @@ export default function AlertasPage() {
                 columns={[
                   { key: 'urg', label: 'Cuándo', render: (p) => { const u = urgencia(p.proximoPago); return <span className={`badge ${u.cls}`}>{u.text}</span>; } },
                   { key: 'fecha', label: 'Vence', render: (p) => fmtDate(p.proximoPago) },
-                  { key: 'nombre', label: 'Tarjeta' },
+                  { key: 'nombre', label: 'Producto', render: (p) => <>{p.nombre} <span className="muted" style={{ fontSize: 11 }}>{p.tipo === 'LINEA_CREDITO' ? 'línea' : 'tarjeta'}</span></> },
                   { key: 'corte', label: 'Corte', align: 'right', render: (p) => (p.diaCorte ? `día ${p.diaCorte}` : '—') },
                   { key: 'usado', label: 'Saldo a pagar', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
                 ]}

@@ -406,6 +406,33 @@ function DeudasTab({ prestamos, tarjetas }) {
             { key: 'cap', label: 'Capital pagado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--success)' }}>{money(p.capitalPagado)}</span> },
             { key: 'saldo', label: 'Saldo / Usado', align: 'right', num: true, render: (p) => <span style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</span> },
             { key: 'tasa', label: 'Tasa', align: 'right', num: true, render: (p) => (p.tasaMensual ? `${(p.tasaMensual * 100).toFixed(2)}%/mes` : '—') },
+            {
+              key: 'vence', label: 'Próximo pago', align: 'right',
+              render: (p) => {
+                // Préstamo amortizado → próxima cuota del schedule; línea → su día de pago mensual.
+                let iso = null, estimado = false;
+                if (p.tipo === 'LINEA_CREDITO') {
+                  iso = p.diaVencimiento ? proximoDiaMesISO(p.diaVencimiento) : null;
+                } else {
+                  const cuotasP = (data.cuotas || []).filter((c) => c.prestamoId === p.id);
+                  const next = cuotasP.filter((c) => !c.pagada)
+                    .sort((a, b) => String(a.fechaPago).localeCompare(String(b.fechaPago)))[0];
+                  if (next) {
+                    iso = next.fechaPago;
+                  } else if (p.saldoPendiente > 0) {
+                    // Schedule agotado pero aún debe → estimar el próximo pago mensual
+                    // por el día de la última cuota (o la fecha del primer pago).
+                    const ref = cuotasP.sort((a, b) => String(b.fechaPago).localeCompare(String(a.fechaPago)))[0]?.fechaPago || p.fechaPrimerPago;
+                    const dia = ref ? Number(String(ref).slice(8, 10)) : null;
+                    if (dia) { iso = proximoDiaMesISO(dia); estimado = true; }
+                  }
+                }
+                if (!iso) return <span className="muted">—</span>;
+                const d = diasHasta(iso);
+                const cls = d == null ? 'neutral' : d <= 3 ? 'danger' : d <= 7 ? 'warning' : 'neutral';
+                return <div title={estimado ? 'Estimado por el día de pago mensual (schedule incompleto)' : ''}><div style={{ fontSize: 12 }}>{estimado ? '~' : ''}{fmtDate(iso)}</div>{d != null && <span className={`badge ${cls}`} style={{ fontSize: 10 }}>en {d}d</span>}</div>;
+              },
+            },
             accionesCol(false),
           ]}
           rows={prestamos} empty="Sin préstamos · + Préstamo / línea" />
@@ -494,10 +521,23 @@ function DetalleAmortizacion({ prestamo }) {
   };
 
   if (!cuotas.length) {
+    // Líneas de crédito no tienen schedule de cuotas: muestran su ciclo de pago.
+    const venceDia = prestamo.diaVencimiento, corteDia = prestamo.diaCorte;
+    const proximoPago = venceDia ? proximoDiaMesISO(venceDia) : null;
+    const diasPago = proximoPago ? diasHasta(proximoPago) : null;
+    const venceMesSig = venceDia && corteDia && Number(venceDia) < Number(corteDia);
     return (
       <div className="section">
-        <div className="section-head"><div className="section-title">Amortización · {prestamo.nombre}</div></div>
-        <div className="empty">Este producto no tiene schedule de cuotas generado.</div>
+        <div className="section-head"><div className="section-title">{prestamo.tipo === 'LINEA_CREDITO' ? 'Línea de crédito' : 'Amortización'} · {prestamo.nombre}</div></div>
+        {proximoPago ? (
+          <div style={{ display: 'flex', gap: 'var(--s-5)', padding: 'var(--s-2) var(--s-3)', background: 'var(--surface-2)', borderRadius: 6, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>
+            {corteDia && <div><span className="muted">Corte:</span> día {corteDia} del mes</div>}
+            <div><span className="muted">Vence:</span> día {venceDia}{venceMesSig ? ' del mes siguiente al corte' : ''}</div>
+            <div style={{ marginLeft: 'auto' }}><span className="muted">Próximo pago:</span> <strong>{fmtDate(proximoPago)}</strong>{' '}{diasPago != null && <span className={`badge ${diasPago <= 3 ? 'danger' : diasPago <= 7 ? 'warning' : 'neutral'}`}>en {diasPago}d</span>}</div>
+          </div>
+        ) : (
+          <div className="empty">{prestamo.tipo === 'LINEA_CREDITO' ? 'Sin día de pago configurado — editá la línea (✎) y poné el día de vencimiento para ver el próximo pago.' : 'Este producto no tiene schedule de cuotas generado.'}</div>
+        )}
       </div>
     );
   }
@@ -1288,8 +1328,8 @@ function FormPrestamo({ tipoFijo, prestamo, onDone }) {
         plazoMeses: plazo || null,
         fechaInicio: fechaInicio || null,
         fechaPrimerPago: fechaPrimerPago || null,
-        diaCorte: esTarjeta && diaCorte ? num(diaCorte) : null,
-        diaVencimiento: esTarjeta && diaVencimiento ? num(diaVencimiento) : null,
+        diaCorte: esLinea && diaCorte ? num(diaCorte) : null,
+        diaVencimiento: esLinea && diaVencimiento ? num(diaVencimiento) : null,
         notas,
       };
       const label = { PRESTAMO: 'Préstamo', LINEA_CREDITO: 'Línea', TARJETA_CREDITO: 'Tarjeta' }[tipo];
@@ -1330,10 +1370,10 @@ function FormPrestamo({ tipoFijo, prestamo, onDone }) {
         </div>
       )}
 
-      {esTarjeta && (
+      {esLinea && (
         <div className="grid-2">
-          <Field label="Día de corte" hint="Día del mes que cierra el ciclo"><NumberInput value={diaCorte} onChange={setDiaCorte} placeholder="25" min="1" /></Field>
-          <Field label="Día de pago/vencimiento" hint="Día límite de pago"><NumberInput value={diaVencimiento} onChange={setDiaVencimiento} placeholder="15" min="1" /></Field>
+          <Field label="Día de corte" hint={esTarjeta ? 'Día del mes que cierra el ciclo' : 'Día de corte de la línea (opcional)'}><NumberInput value={diaCorte} onChange={setDiaCorte} placeholder="25" min="1" /></Field>
+          <Field label="Día de pago/vencimiento" hint="Día límite de pago cada mes"><NumberInput value={diaVencimiento} onChange={setDiaVencimiento} placeholder="15" min="1" /></Field>
         </div>
       )}
 
