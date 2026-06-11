@@ -1,5 +1,6 @@
 // Pickers que leen useData: cuentas, SKUs, contrapartes, préstamos, inversores.
 // MedioPagoSelect resuelve la regla 7/8 (pagar con tarjeta → prestamo_id del gemelo).
+import { useState, useEffect } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import { Select } from './Form.jsx';
 
@@ -34,11 +35,35 @@ export function MedioPagoSelect({ value, onChange, placeholder = '— medio de p
   );
 }
 
+// Picker de SKU en DOS pasos: primero la categoría, luego el SKU de esa categoría
+// (evita desplegar los ~50 SKUs de una). La categoría se deriva sola del SKU ya
+// elegido (al editar). Devuelve el skuId vía onChange, igual que antes.
 export function SkuSelect({ value, onChange, placeholder = '— elegí SKU —', invalid, soloActivos = true }) {
   const { skus } = useData();
-  const list = soloActivos ? skus.filter((s) => s.activa) : skus;
-  const options = list.map((s) => ({ value: s.id, label: `${s.nombre} · ${s.id} (stock ${s.stock})` }));
-  return <Select value={value} onChange={(v) => onChange(v || null)} options={options} placeholder={placeholder} invalid={invalid} />;
+  const list = (soloActivos ? skus.filter((s) => s.activa) : skus).filter((s) => s.id !== 'LEGACY-SALE');
+  const selSku = list.find((s) => s.id === value);
+  const skuCat = selSku ? selSku.categoria : '';
+  const [cat, setCat] = useState(skuCat);
+  // Sincroniza la categoría cuando el value externo trae un SKU (carga / editar).
+  useEffect(() => { if (skuCat && skuCat !== cat) setCat(skuCat); }, [skuCat]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const categorias = [...new Set(list.map((s) => s.categoria).filter(Boolean))].sort();
+  const skuList = cat ? list.filter((s) => s.categoria === cat) : [];
+
+  return (
+    <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
+      <div style={{ flex: '0 0 120px' }}>
+        <Select value={cat} onChange={(c) => { setCat(c); if (value) onChange(null); }}
+          options={categorias.map((c) => ({ value: c, label: c }))}
+          placeholder="— categoría —" invalid={invalid && !value} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Select value={value || ''} onChange={(v) => onChange(v || null)}
+          options={skuList.map((s) => ({ value: s.id, label: `${s.nombre} · stock ${s.stock}` }))}
+          placeholder={cat ? placeholder : 'elegí categoría primero'} invalid={invalid && !value} disabled={!cat} />
+      </div>
+    </div>
+  );
 }
 
 export function ContraparteSelect({ value, onChange, tipo, placeholder = '— elegí —', invalid, incluirTodas = false }) {
