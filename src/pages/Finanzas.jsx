@@ -53,6 +53,23 @@ const FRECUENCIAS = ['MENSUAL', 'TRIMESTRAL', 'ANUAL', 'UNICO'];
 
 const usoCls = (pct) => (pct > 80 ? 'danger' : pct > 50 ? 'warning' : 'success');
 
+// Suma separando RD vs USD. NO se convierte (no hay tasa fija fiable): las
+// entidades en USD se muestran aparte para no falsear el total en pesos.
+function splitMoneda(items, montoFn) {
+  let rd = 0, usd = 0;
+  for (const x of items) { const m = (montoFn ? montoFn(x) : x) || 0; if (x.moneda === 'USD') usd += m; else rd += m; }
+  return { rd, usd };
+}
+// Muestra RD$ y, si hay monto en USD, una segunda línea US$ (sin mezclar monedas).
+function DualMonto({ rd, usd, sub }) {
+  return (
+    <>
+      <span>{money(rd)}</span>
+      {usd > 0 && <span style={{ display: 'block', fontSize: sub || 12, color: 'var(--text-3)', fontWeight: 400, marginTop: 2 }}>+ {money(usd, 'USD$')}</span>}
+    </>
+  );
+}
+
 export default function FinanzasPage({ onNavigate }) {
   const data = useData();
   const [tab, setTab] = useState('resumen'); // resumen | analisis | prestamos | tarjetas | inversores | cuentas | movimientos
@@ -104,8 +121,8 @@ export default function FinanzasPage({ onNavigate }) {
 
 /* ════════════════════════ RESUMEN ════════════════════════ */
 function ResumenTab({ prestamos, inversores, cuentas }) {
-  const deudaTotal = prestamos.reduce((s, p) => s + p.saldoPendiente, 0);
-  const liquido = cuentas.filter((c) => c.esLiquida).reduce((s, c) => s + c.saldo, 0);
+  const dDeuda = splitMoneda(prestamos, (p) => p.saldoPendiente);
+  const dLiq = splitMoneda(cuentas.filter((c) => c.esLiquida), (c) => c.saldo);
   const invExternos = inversores.filter((i) => !i.esDueno);
   const pendienteInv = invExternos.reduce((s, i) => s + i.saldoPendiente, 0);
   const aportadoInv = invExternos.reduce((s, i) => s + i.capitalInvertido, 0);
@@ -117,8 +134,8 @@ function ResumenTab({ prestamos, inversores, cuentas }) {
   return (
     <>
       <div className="kpi-row">
-        <KPI label="Capital líquido" currency value={intNum(liquido)} deltaLabel="débito + efectivo" />
-        <KPI label="Deuda total" currency value={intNum(deudaTotal)} tone="neg" deltaLabel={`${nConSaldo} con saldo`} />
+        <KPI label="Capital líquido" currency value={intNum(dLiq.rd)} deltaLabel={dLiq.usd > 0 ? `débito + efectivo · + ${money(dLiq.usd, 'USD$')}` : 'débito + efectivo'} />
+        <KPI label="Deuda total" currency value={intNum(dDeuda.rd)} tone="neg" deltaLabel={dDeuda.usd > 0 ? `${nConSaldo} con saldo · + ${money(dDeuda.usd, 'USD$')}` : `${nConSaldo} con saldo`} />
         {coop && <KPI label="Saldo Coop" currency value={intNum(coop.saldoPendiente)} deltaLabel="préstamo principal" />}
         <KPI label="Pendiente a inversores" currency value={intNum(pendienteInv)} deltaLabel={`${invExternos.length} externo(s) · ${money(aportadoInv)} aportado`} />
       </div>
@@ -227,10 +244,14 @@ function AnalisisTab({ prestamosTab, tarjetas, inversores, cuentas }) {
     if (cobertura < 1) { semaforo = 'danger'; mensaje = 'Riesgo: el flujo mensual NO cubre los pagos de deuda.'; }
     else if (cobertura < 1.5) { semaforo = 'warning'; mensaje = 'Ajustado: el flujo cubre los pagos pero con poco margen.'; }
 
-    const deudaPrestamos = prestamosTab.reduce((s, p) => s + p.saldoPendiente, 0);
-    const deudaTarjetas = tarjetas.reduce((s, p) => s + p.saldoPendiente, 0);
+    // Deuda separada por moneda (no se mezclan pesos con dólares).
+    const dPrest = splitMoneda(prestamosTab, (p) => p.saldoPendiente);
+    const dTarj = splitMoneda(tarjetas, (p) => p.saldoPendiente);
     const deudaInversores = (inversores || []).filter((i) => !i.esDueno).reduce((s, i) => s + i.saldoPendiente, 0);
-    const deudaTotal = deudaPrestamos + deudaTarjetas + deudaInversores;
+    const deudaRD = dPrest.rd + dTarj.rd + deudaInversores;
+    const deudaUSD = dPrest.usd + dTarj.usd;
+    const deudaPrestamos = dPrest.rd;   // para el pago mensual / ratios (mayoría RD)
+    const deudaTarjetas = dTarj.rd;
 
     // Sobra/falta mensual y margen de colapso.
     const sobraFalta = cashflowProm - pagoTotal;
@@ -247,7 +268,7 @@ function AnalisisTab({ prestamosTab, tarjetas, inversores, cuentas }) {
       .map((p) => ({ id: p.id, nombre: p.nombre, tipo: p.tipo, saldo: p.saldoPendiente, tasa: p.tasaMensual || 0, interesMensual: p.saldoPendiente * (p.tasaMensual || 0), moneda: p.moneda }))
       .sort((x, y) => (y.tasa - x.tasa) || (y.interesMensual - x.interesMensual));
 
-    return { cashflowProm, pagoTotal, pagoPrestamos, pagoTarjetas, cobertura, semaforo, mensaje, breakdown, deudaTotal, deudaPrestamos, deudaTarjetas, deudaInversores, sobraFalta, margenColapso, utilizacion, ordenPago, nMeses: meses.length };
+    return { cashflowProm, pagoTotal, pagoPrestamos, pagoTarjetas, cobertura, semaforo, mensaje, breakdown, deudaRD, deudaUSD, dPrest, dTarj, deudaPrestamos, deudaTarjetas, deudaInversores, sobraFalta, margenColapso, utilizacion, ordenPago, nMeses: meses.length };
   }, [data.movimientos, data.cuotas, prestamosTab, tarjetas, inversores]);
 
   return (
@@ -295,20 +316,23 @@ function AnalisisTab({ prestamosTab, tarjetas, inversores, cuentas }) {
           )}
         </div>
 
-        {/* Desglose de deuda total */}
+        {/* Desglose de deuda total (RD$ y US$ por separado) */}
         <div className="section">
-          <div className="section-head"><div><div className="section-title">Deuda total · {money(a.deudaTotal)}</div><div className="section-desc">composición por tipo</div></div></div>
+          <div className="section-head"><div><div className="section-title">Deuda total · {money(a.deudaRD)}{a.deudaUSD > 0 && <> + {money(a.deudaUSD, 'USD$')}</>}</div><div className="section-desc">composición por tipo · pesos y dólares aparte</div></div></div>
           <div className="grid-3" style={{ marginBottom: 'var(--s-3)' }}>
-            <div className="stat-card"><div className="stat-label">Préstamos/líneas</div><div className="stat-value">{money(a.deudaPrestamos)}</div></div>
-            <div className="stat-card"><div className="stat-label">Tarjetas</div><div className="stat-value">{money(a.deudaTarjetas)}</div></div>
+            <div className="stat-card"><div className="stat-label">Préstamos/líneas</div><div className="stat-value"><DualMonto rd={a.dPrest.rd} usd={a.dPrest.usd} /></div></div>
+            <div className="stat-card"><div className="stat-label">Tarjetas</div><div className="stat-value"><DualMonto rd={a.dTarj.rd} usd={a.dTarj.usd} /></div></div>
             <div className="stat-card"><div className="stat-label">Inversores</div><div className="stat-value">{money(a.deudaInversores)}</div></div>
           </div>
-          {a.deudaTotal > 0 && (
-            <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden' }}>
-              <div style={{ width: `${(a.deudaPrestamos / a.deudaTotal) * 100}%`, background: 'var(--accent)' }} title="Préstamos/líneas" />
-              <div style={{ width: `${(a.deudaTarjetas / a.deudaTotal) * 100}%`, background: 'var(--danger)' }} title="Tarjetas" />
-              <div style={{ width: `${(a.deudaInversores / a.deudaTotal) * 100}%`, background: 'var(--warning)' }} title="Inversores" />
-            </div>
+          {a.deudaRD > 0 && (
+            <>
+              <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ width: `${(a.dPrest.rd / a.deudaRD) * 100}%`, background: 'var(--accent)' }} title="Préstamos/líneas" />
+                <div style={{ width: `${(a.dTarj.rd / a.deudaRD) * 100}%`, background: 'var(--danger)' }} title="Tarjetas" />
+                <div style={{ width: `${(a.deudaInversores / a.deudaRD) * 100}%`, background: 'var(--warning)' }} title="Inversores" />
+              </div>
+              <div className="field-hint" style={{ marginTop: 6 }}>Barra en RD$. {a.deudaUSD > 0 ? `Deuda en dólares aparte: ${money(a.deudaUSD, 'USD$')}.` : ''}</div>
+            </>
           )}
         </div>
       </div>
@@ -1015,7 +1039,7 @@ function CuentasTab({ cuentas }) {
 
   // Banco: débito + efectivo (las CREDITO/tarjetas viven en Deudas).
   const cuentasBanco = cuentas.filter((c) => c.tipo !== 'CREDITO');
-  const liquido = cuentasBanco.filter((c) => c.esLiquida).reduce((s, c) => s + c.saldo, 0);
+  const dLiq = splitMoneda(cuentasBanco.filter((c) => c.esLiquida), (c) => c.saldo);
 
   const doDelete = async (c) => {
     const ok = await confirm({ title: `¿Eliminar ${c.nombre}?`, body: 'Se desactiva la cuenta (soft-delete). Los movimientos quedan en el historial.', confirmLabel: 'Eliminar' });
@@ -1027,9 +1051,11 @@ function CuentasTab({ cuentas }) {
   return (
     <>
       <div className="kpi-row">
-        <KPI label="Capital líquido" currency value={intNum(liquido)} deltaLabel="débito + efectivo" />
+        <KPI label="Capital líquido" currency value={intNum(dLiq.rd)} deltaLabel={dLiq.usd > 0 ? `débito + efectivo · + ${money(dLiq.usd, 'USD$')}` : 'débito + efectivo'} />
         {cuentasBanco.slice(0, 3).map((c) => (
-          <KPI key={c.id} label={c.nombre} currency={c.moneda !== 'USD'} value={intNum(c.saldo)} deltaLabel={c.moneda === 'USD' ? 'USD$' : c.tipo.toLowerCase()} />
+          c.moneda === 'USD'
+            ? <KPI key={c.id} label={c.nombre} value={money(c.saldo, 'USD$')} deltaLabel="dólares" />
+            : <KPI key={c.id} label={c.nombre} currency value={intNum(c.saldo)} deltaLabel={c.tipo.toLowerCase()} />
         ))}
       </div>
 
