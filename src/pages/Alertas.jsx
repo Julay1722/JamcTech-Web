@@ -51,6 +51,7 @@ export default function AlertasPage() {
 
   const [tab, setTab] = useState('cuotas'); // 'cuotas' | 'inventario'
   const [pagando, setPagando] = useState(null); // cuota seleccionada para pagar
+  const [horizonte, setHorizonte] = useState(60); // días: solo cuotas que vencen dentro de este horizonte
 
   const m = useMemo(() => {
     // Estado de SKU ya viene calculado en la vista de stock (critico<=2, atencion<=5).
@@ -84,6 +85,12 @@ export default function AlertasPage() {
   }, [skus, prestamos, cuotas]);
 
   const totalAlertas = m.criticos.length + m.atencion.length + m.proximas.length;
+
+  // Horizonte: por defecto solo las cuotas que vencen pronto (no llenar la página
+  // con las de 2027-2029). Siempre incluye las vencidas (dias < 0).
+  const HORIZONTES = [{ d: 30, l: '30 días' }, { d: 60, l: '60 días' }, { d: 90, l: '90 días' }, { d: 99999, l: 'Todas' }];
+  const proximasH = m.proximas.filter((c) => c.dias == null || c.dias <= horizonte);
+  const porPagarH = proximasH.reduce((s, c) => s + c.montoTotal, 0);
 
   // ── Pago de cuota (DEU-2) ──
   const onPagar = async (cuentaId) => {
@@ -178,15 +185,15 @@ export default function AlertasPage() {
              tone={m.criticos.length > 0 ? 'danger' : undefined} deltaLabel="stock ≤ 2 · pedir ya" />
         <KPI label="SKUs en atención" value={intNum(m.atencion.length)}
              tone={m.atencion.length > 0 ? 'warning' : undefined} deltaLabel="stock ≤ 5 · vigilar" />
-        <KPI label="Cuotas próximas" value={intNum(m.proximas.length)}
-             tone={m.proximas.length > 0 ? 'warning' : undefined} deltaLabel="sin pagar (schedule real)" />
-        <KPI label="Por pagar" currency value={intNum(m.totalPorPagar)}
-             deltaLabel="suma de cuotas pendientes" />
+        <KPI label="Cuotas próximas" value={intNum(proximasH.length)}
+             tone={proximasH.length > 0 ? 'warning' : undefined} deltaLabel={horizonte > 9999 ? `todas · ${m.proximas.length} pendientes` : `próx. ${horizonte}d · de ${m.proximas.length} en total`} />
+        <KPI label="Por pagar" currency value={intNum(porPagarH)}
+             deltaLabel={horizonte > 9999 ? 'todas las cuotas pendientes' : `en próximos ${horizonte} días`} />
       </div>
 
       <div className="tabs">
         <button className={tab === 'cuotas' ? 'tab active' : 'tab'} onClick={() => setTab('cuotas')}>
-          Cuotas por pagar {m.proximas.length > 0 && <span className="badge warning" style={{ marginLeft: 6 }}>{m.proximas.length}</span>}
+          Cuotas por pagar {proximasH.length > 0 && <span className="badge warning" style={{ marginLeft: 6 }}>{proximasH.length}</span>}
         </button>
         <button className={tab === 'inventario' ? 'tab active' : 'tab'} onClick={() => setTab('inventario')}>
           Inventario {m.criticos.length > 0 && <span className="badge danger" style={{ marginLeft: 6 }}>{m.criticos.length}</span>}
@@ -200,16 +207,20 @@ export default function AlertasPage() {
               <div>
                 <div className="section-title">Próximas cuotas a pagar</div>
                 <div className="section-desc">
-                  Del schedule real de cada préstamo · ordenadas por fecha · marcar pagada actualiza la cuota y el banco
+                  {horizonte > 9999 ? 'Todas las cuotas pendientes' : `Cuotas que vencen en los próximos ${horizonte} días`} · marcar pagada actualiza la cuota y el banco
                 </div>
               </div>
-              <span className="badge neutral">{m.proximas.length} pendientes</span>
+              <div className="chips">
+                {HORIZONTES.map((h) => (
+                  <button key={h.d} className={`chip ${horizonte === h.d ? 'active' : ''}`} onClick={() => setHorizonte(h.d)}>{h.l}</button>
+                ))}
+              </div>
             </div>
             <DataTable
               columns={colsCuotas}
-              rows={m.proximas}
+              rows={proximasH}
               getRowKey={(c) => c.id}
-              empty="No hay cuotas pendientes. Todo al día."
+              empty={m.proximas.length > 0 ? `Sin cuotas en los próximos ${horizonte} días · ${m.proximas.length} más adelante (ver "Todas").` : 'No hay cuotas pendientes. Todo al día.'}
             />
           </div>
 
