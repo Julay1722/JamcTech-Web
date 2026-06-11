@@ -21,7 +21,9 @@ export default function OverviewPage({ period, customRange }) {
     const revenue = ventasP.reduce((s, v) => s + v.facturado, 0);
     const ganancia = ventasP.reduce((s, v) => s + v.gananciaNeta, 0);
     const stock = skus.reduce((s, k) => s + k.stock, 0); // ya excluye LEGACY-SALE
-    const deuda = prestamos.reduce((s, p) => s + p.saldoPendiente, 0);
+    // Deuda separada por moneda (RD$ y US$ no se mezclan: no hay tasa fija).
+    let deudaRD = 0, deudaUSD = 0;
+    prestamos.forEach((p) => { if (p.moneda === 'USD') deudaUSD += p.saldoPendiente; else deudaRD += p.saldoPendiente; });
 
     // Serie mensual de revenue + ganancia
     const byMonth = {};
@@ -48,7 +50,7 @@ export default function OverviewPage({ period, customRange }) {
       .filter((k) => k.ganancia > 0)
       .map((k) => ({ label: k.nombre, value: Math.round(k.ganancia) }));
 
-    return { capitalLiquido, revenue, ganancia, stock, deuda, revSerie, ganSerie, labels, donut, topSkus, nVentas: ventasP.length };
+    return { capitalLiquido, revenue, ganancia, stock, deudaRD, deudaUSD, revSerie, ganSerie, labels, donut, topSkus, nVentas: ventasP.length };
   }, [skus, ventas, cuentas, prestamos, period, customRange]);
 
   const margenPct = m.revenue > 0 ? (m.ganancia / m.revenue) * 100 : 0;
@@ -100,13 +102,13 @@ export default function OverviewPage({ period, customRange }) {
           {prestamos.map((p) => (
             <div key={p.id} className="stat-card">
               <div className="stat-label">{p.nombre}</div>
-              <div className="stat-value" style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente)}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.tipo.replace('_', ' ').toLowerCase()}</div>
+              <div className="stat-value" style={{ color: 'var(--danger)' }}>{money(p.saldoPendiente, p.moneda === 'USD' ? 'USD$' : 'RD$')}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{p.tipo.replace('_', ' ').toLowerCase()}{p.moneda === 'USD' ? ' · USD' : ''}</div>
             </div>
           ))}
         </div>
         <div style={{ marginTop: 'var(--s-3)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 600, color: 'var(--danger)' }}>
-          Total: {money(m.deuda)}
+          Total: {money(m.deudaRD)}{m.deudaUSD > 0 && <> + {money(m.deudaUSD, 'USD$')}</>}
         </div>
       </div>
     </div>
