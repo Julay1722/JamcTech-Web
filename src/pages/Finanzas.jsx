@@ -23,6 +23,7 @@ import {
   createCuenta, createPrestamo, updatePrestamo, createInversor, updateInversor,
   createCompensacion, updateCompensacion, removeCompensacion,
   createPagoFinanciero,
+  createPagoProgramado, updatePagoProgramado, removePagoProgramado, pagarPagoProgramado,
   removeCuenta, removePrestamo, removeInversor,
 } from '../lib/db/writers.js';
 import { Modal, useConfirm } from '../components/Modal.jsx';
@@ -108,6 +109,7 @@ export default function FinanzasPage({ onNavigate }) {
         <button className={['deudas', 'prestamos', 'tarjetas'].includes(tab) ? 'tab active' : 'tab'} onClick={() => setTab('deudas')}>Deudas</button>
         <button className={tab === 'inversores' ? 'tab active' : 'tab'} onClick={() => setTab('inversores')}>Inversores</button>
         <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Banco</button>
+        <button className={tab === 'pagos' ? 'tab active' : 'tab'} onClick={() => setTab('pagos')}>Pagos fijos</button>
       </div>
 
       {tab === 'resumen' && <ResumenTab prestamos={prestamos} inversores={inversores} cuentas={cuentas} />}
@@ -115,7 +117,177 @@ export default function FinanzasPage({ onNavigate }) {
       {['deudas', 'prestamos', 'tarjetas'].includes(tab) && <DeudasTab prestamos={prestamosTab} tarjetas={tarjetas} />}
       {tab === 'inversores' && <InversoresTab inversores={inversores} />}
       {tab === 'cuentas' && <CuentasTab cuentas={cuentas} />}
+      {tab === 'pagos' && <PagosProgramadosTab />}
     </div>
+  );
+}
+
+/* ════════════════════════ PAGOS PROGRAMADOS (servicios fijos) ════════════════════════ */
+const PP_FRECUENCIAS = [
+  { value: 'UNICO', label: 'Único (una vez)' }, { value: 'SEMANAL', label: 'Semanal' },
+  { value: 'QUINCENAL', label: 'Quincenal' }, { value: 'MENSUAL', label: 'Mensual' },
+  { value: 'BIMESTRAL', label: 'Bimestral' }, { value: 'TRIMESTRAL', label: 'Trimestral' },
+  { value: 'ANUAL', label: 'Anual' },
+];
+const PP_TIPOS = [
+  { value: 'COMPRA_OPERATIVA', label: 'Compra operativa' }, { value: 'PAGO_ADS', label: 'Ads / marketing' },
+  { value: 'PAGO_COMISION', label: 'Comisión' }, { value: 'PAGO_TRANSPORTE', label: 'Transporte / Courier' },
+  { value: 'FEE_BANCARIO', label: 'Fee bancario' }, { value: 'OTROS', label: 'Otro' },
+];
+
+function PagosProgramadosTab() {
+  const data = useData();
+  const t = useToast();
+  const [confirm, confirmNode] = useConfirm();
+  const pagos = data.pagosProgramados || [];
+  const [modal, setModal] = useState(null);   // null | {} | { pago }
+  const [pagar, setPagar] = useState(null);   // pago a pagar
+
+  const doDelete = async (p) => {
+    const ok = await confirm({ title: `¿Eliminar "${p.concepto}"?`, body: 'Borra el pago programado (los movimientos ya registrados quedan).', confirmLabel: 'Eliminar' });
+    if (!ok) return;
+    try { await removePagoProgramado(p.id); await data.refreshAll(); t.ok('Pago programado eliminado'); }
+    catch (e) { t.err('No se pudo eliminar', e.message); }
+  };
+  const toggleActiva = async (p) => {
+    try { await updatePagoProgramado(p.id, { activa: !p.activa }); await data.refreshAll(); }
+    catch (e) { t.err('Error', e.message); }
+  };
+
+  const activos = pagos.filter((p) => p.activa);
+  const totalMensual = activos.filter((p) => p.frecuencia === 'MENSUAL' && p.moneda !== 'USD').reduce((s, p) => s + p.monto, 0);
+
+  return (
+    <>
+      <div className="kpi-row">
+        <KPI label="Pagos fijos activos" value={intNum(activos.length)} deltaLabel={`de ${pagos.length} registrados`} />
+        <KPI label="Total mensual (RD$)" currency value={intNum(totalMensual)} deltaLabel="suma de los mensuales" />
+      </div>
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Pagos programados</div>
+            <div className="section-desc">Servicios fijos / recurrentes · el sistema recuerda y, al pagar, registra el movimiento y avanza la fecha</div>
+          </div>
+          <button className="btn" onClick={() => setModal({})}>+ Nuevo pago</button>
+        </div>
+        <DataTable getRowKey={(p) => p.id}
+          columns={[
+            { key: 'concepto', label: 'Concepto', render: (p) => <span style={{ opacity: p.activa ? 1 : 0.5 }}>{p.concepto}{!p.activa && <span className="badge neutral" style={{ marginLeft: 6 }}>pausado</span>}</span> },
+            { key: 'frecuencia', label: 'Frecuencia', render: (p) => <span className="muted">{(PP_FRECUENCIAS.find((x) => x.value === p.frecuencia)?.label || p.frecuencia).toLowerCase()}</span> },
+            { key: 'monto', label: 'Monto', align: 'right', num: true, render: (p) => money(p.monto, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+            {
+              key: 'prox', label: 'Próximo pago', align: 'right',
+              render: (p) => {
+                if (!p.activa) return <span className="muted">—</span>;
+                const d = diasHasta(p.proximaFecha);
+                const cls = d == null ? 'neutral' : d < 0 ? 'danger' : d <= 3 ? 'danger' : d <= 7 ? 'warning' : 'neutral';
+                return <div><div style={{ fontSize: 12 }}>{fmtDate(p.proximaFecha)}</div>{d != null && <span className={`badge ${cls}`} style={{ fontSize: 10 }}>{d < 0 ? `vencido ${-d}d` : `en ${d}d`}</span>}</div>;
+              },
+            },
+            {
+              key: 'acc', label: '', align: 'right',
+              render: (p) => (
+                <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
+                  {p.activa && <button className="btn ghost" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setPagar(p)}>Pagar</button>}
+                  <button className="icon-btn" title={p.activa ? 'Pausar' : 'Activar'} onClick={() => toggleActiva(p)}>{p.activa ? '⏸' : '▶'}</button>
+                  <button className="icon-btn" title="Editar" onClick={() => setModal({ pago: p })}>✎</button>
+                  <button className="icon-btn danger" title="Eliminar" onClick={() => doDelete(p)}>×</button>
+                </span>
+              ),
+            },
+          ]}
+          rows={pagos} empty="Sin pagos programados · + Nuevo pago (ej. internet, luz, courier mensual, suscripción…)" />
+      </div>
+      {modal && (
+        <Modal title={modal.pago ? `Editar ${modal.pago.concepto}` : 'Nuevo pago programado'} width={580} onClose={() => setModal(null)}>
+          <FormPagoProgramado pago={modal.pago} onDone={() => setModal(null)} />
+        </Modal>
+      )}
+      {pagar && <PagarPagoModal pago={pagar} onClose={() => setPagar(null)} />}
+      {confirmNode}
+    </>
+  );
+}
+
+function FormPagoProgramado({ pago, onDone }) {
+  const data = useData();
+  const t = useToast();
+  const editing = !!pago;
+  const [f, setF] = useState({
+    concepto: pago?.concepto || '', monto: pago?.monto || '', moneda: pago?.moneda || 'RD',
+    tipoMovimiento: pago?.tipoMovimiento || 'COMPRA_OPERATIVA', frecuencia: pago?.frecuencia || 'MENSUAL',
+    proximaFecha: pago?.proximaFecha || todayISO(), cuentaPagoId: pago?.cuentaPagoId || null,
+    contraparteId: pago?.contraparteId || null, notas: pago?.notas || '',
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (v) => setF((s) => ({ ...s, [k]: v }));
+  const valid = f.concepto.trim().length > 1 && num(f.monto) > 0 && !!f.proximaFecha;
+
+  const onSubmit = async () => {
+    if (!valid) { t.warn('Datos incompletos', 'Concepto, monto y próxima fecha son obligatorios'); return; }
+    setBusy(true);
+    try {
+      if (editing) { await updatePagoProgramado(pago.id, f); t.ok('Pago actualizado', f.concepto); }
+      else { await createPagoProgramado(f); t.ok('Pago programado creado', f.concepto); }
+      await data.refreshAll(); onDone?.();
+    } catch (e) { t.err('No se pudo guardar', e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+      <Field label="Concepto" required><TextInput value={f.concepto} onChange={set('concepto')} placeholder="ej. Internet Claro · Luz EDE · Courier mensual" /></Field>
+      <div className="grid-2">
+        <Field label="Monto" required><MoneyInput value={f.monto} onChange={set('monto')} placeholder="0" /></Field>
+        <Field label="Moneda"><Select value={f.moneda} onChange={set('moneda')} options={[{ value: 'RD', label: 'RD$' }, { value: 'USD', label: 'USD' }]} /></Field>
+        <Field label="Frecuencia"><Select value={f.frecuencia} onChange={set('frecuencia')} options={PP_FRECUENCIAS} /></Field>
+        <Field label="Próxima fecha" required><DateInput value={f.proximaFecha} onChange={set('proximaFecha')} /></Field>
+        <Field label="Concepto contable" hint="tipo del movimiento al pagar"><Select value={f.tipoMovimiento} onChange={set('tipoMovimiento')} options={PP_TIPOS} /></Field>
+        <Field label="Cuenta de pago" hint="opcional · default al pagar"><CuentaSelect value={f.cuentaPagoId} onChange={set('cuentaPagoId')} filter="liquidas" placeholder="— elegir al pagar —" /></Field>
+      </div>
+      <Field label="Contraparte (opcional)"><ContraparteSelect value={f.contraparteId} onChange={set('contraparteId')} incluirTodas placeholder="— ninguna —" /></Field>
+      <Field label="Notas"><TextInput value={f.notas} onChange={set('notas')} placeholder="opcional" /></Field>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn" disabled={!valid || busy} onClick={onSubmit}>{busy ? 'Guardando…' : (editing ? 'Guardar cambios' : 'Crear pago')}</button>
+      </div>
+    </div>
+  );
+}
+
+export function PagarPagoModal({ pago, onClose }) {
+  const data = useData();
+  const t = useToast();
+  const [cuentaId, setCuentaId] = useState(pago.cuentaPagoId || null);
+  const [fecha, setFecha] = useState(todayISO());
+  const [busy, setBusy] = useState(false);
+
+  const onPagar = async () => {
+    if (!cuentaId) { t.warn('Falta la cuenta', 'Elegí de qué cuenta sale el pago'); return; }
+    setBusy(true);
+    try {
+      const r = await pagarPagoProgramado(pago, { cuentaId, fecha });
+      await data.refreshAll();
+      t.ok('Pago registrado', r.next ? `Próximo: ${fmtDate(r.next)}` : 'Pago único completado');
+      onClose();
+    } catch (e) { t.err('No se pudo pagar', e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title={`Pagar · ${pago.concepto}`} width={440} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+        <div className="muted" style={{ fontSize: 13 }}>
+          {money(pago.monto, pago.moneda === 'USD' ? 'USD$' : 'RD$')} · {(PP_FRECUENCIAS.find((x) => x.value === pago.frecuencia)?.label || pago.frecuencia).toLowerCase()} · vence {fmtDate(pago.proximaFecha)}
+        </div>
+        <Field label="Fecha del pago"><DateInput value={fecha} onChange={setFecha} /></Field>
+        <Field label="Cuenta de pago" required><CuentaSelect value={cuentaId} onChange={setCuentaId} filter="liquidas" /></Field>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button className="btn" disabled={busy || !cuentaId} onClick={onPagar}>{busy ? 'Pagando…' : 'Registrar pago'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

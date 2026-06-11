@@ -24,6 +24,7 @@ import { CuentaSelect } from '../components/Pickers.jsx';
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
 import { money, intNum, fmtDate, todayISO, proximoDiaMesISO } from '../lib/format.js';
+import { PagarPagoModal } from './Finanzas.jsx';
 
 // Días entre hoy y una fecha ISO (negativo = ya vencida).
 function diasHasta(iso) {
@@ -52,6 +53,7 @@ export default function AlertasPage() {
   const [tab, setTab] = useState('cuotas'); // 'cuotas' | 'inventario'
   const [pagando, setPagando] = useState(null); // cuota seleccionada para pagar
   const [horizonte, setHorizonte] = useState(60); // días: solo cuotas que vencen dentro de este horizonte
+  const [pagarPP, setPagarPP] = useState(null); // pago programado a pagar
 
   const m = useMemo(() => {
     // Estado de SKU ya viene calculado en la vista de stock (critico<=2, atencion<=5).
@@ -91,6 +93,13 @@ export default function AlertasPage() {
   const HORIZONTES = [{ d: 30, l: '30 días' }, { d: 60, l: '60 días' }, { d: 90, l: '90 días' }, { d: 99999, l: 'Todas' }];
   const proximasH = m.proximas.filter((c) => c.dias == null || c.dias <= horizonte);
   const porPagarH = proximasH.reduce((s, c) => s + c.montoTotal, 0);
+
+  // Pagos programados (servicios fijos) activos, dentro del horizonte.
+  const pagosProx = (data.pagosProgramados || [])
+    .filter((p) => p.activa)
+    .map((p) => ({ ...p, dias: diasHasta(p.proximaFecha) }))
+    .sort((a, b) => (a.dias ?? 9999) - (b.dias ?? 9999));
+  const pagosProxH = pagosProx.filter((p) => p.dias == null || p.dias <= horizonte);
 
   // ── Pago de cuota (DEU-2) ──
   const onPagar = async (cuentaId) => {
@@ -249,6 +258,31 @@ export default function AlertasPage() {
               />
             </div>
           )}
+
+          {pagosProxH.length > 0 && (
+            <div className="section">
+              <div className="section-head">
+                <div>
+                  <div className="section-title">Pagos fijos próximos</div>
+                  <div className="section-desc">Servicios fijos / recurrentes programados · "Pagar" registra el movimiento y avanza la fecha</div>
+                </div>
+                <span className="badge neutral">{pagosProxH.length}</span>
+              </div>
+              <DataTable
+                columns={[
+                  { key: 'urg', label: 'Cuándo', render: (p) => { const u = urgencia(p.proximaFecha); return <span className={`badge ${u.cls}`}>{u.text}</span>; } },
+                  { key: 'fecha', label: 'Vence', render: (p) => fmtDate(p.proximaFecha) },
+                  { key: 'concepto', label: 'Concepto' },
+                  { key: 'frecuencia', label: 'Frecuencia', render: (p) => <span className="muted" style={{ fontSize: 11 }}>{p.frecuencia.toLowerCase()}</span> },
+                  { key: 'monto', label: 'Monto', align: 'right', num: true, render: (p) => money(p.monto, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+                  { key: 'acc', label: '', align: 'right', render: (p) => <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setPagarPP(p)}>Pagar</button> },
+                ]}
+                rows={pagosProxH}
+                getRowKey={(p) => p.id}
+                empty="Sin pagos fijos próximos."
+              />
+            </div>
+          )}
         </>
       )}
 
@@ -295,6 +329,8 @@ export default function AlertasPage() {
           onConfirm={onPagar}
         />
       )}
+
+      {pagarPP && <PagarPagoModal pago={pagarPP} onClose={() => setPagarPP(null)} />}
     </div>
   );
 }

@@ -10,7 +10,7 @@
 // QUÉ se escribe).
 // ════════════════════════════════════════════════════════════════
 import { supabase, CAT_TO_DB } from '../supabase.js';
-import { num } from '../format.js';
+import { num, todayISO } from '../format.js';
 import { LOTE_TO_ENTRADA_STATUS, toRD, nextVentaCodigo, nextLoteCodigo } from './helpers.js';
 
 const NOTA_INGRESO = (codigo) => `Ingreso venta ${codigo}`;
@@ -647,4 +647,73 @@ export async function removeCompensacion(id) {
   const { error } = await supabase.from('compensaciones_inversor').delete().eq('id', id);
   if (error) throw new Error(`removeCompensacion: ${error.message}`);
   return { deleted: true };
+}
+
+/* ════════════════════════ Pagos programados ════════════════════════ */
+// Pagos recurrentes/futuros que NO son préstamo/tarjeta/inversor (servicios
+// fijos: internet, luz, courier, suscripciones, etc.). El sistema recuerda la
+// próxima fecha; "pagar" registra el movimiento real y AVANZA a la siguiente.
+
+// Avanza una fecha ISO según la frecuencia. Devuelve null si es UNICO (se desactiva).
+function avanzarFechaPP(iso, frecuencia) {
+  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+  switch (frecuencia) {
+    case 'SEMANAL': d.setDate(d.getDate() + 7); break;
+    case 'QUINCENAL': d.setDate(d.getDate() + 15); break;
+    case 'MENSUAL': d.setMonth(d.getMonth() + 1); break;
+    case 'BIMESTRAL': d.setMonth(d.getMonth() + 2); break;
+    case 'TRIMESTRAL': d.setMonth(d.getMonth() + 3); break;
+    case 'ANUAL': d.setFullYear(d.getFullYear() + 1); break;
+    default: return null; // UNICO
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export async function createPagoProgramado(d) {
+  if (!d.concepto || !d.concepto.trim()) throw new Error('Falta el concepto del pago');
+  if (!(num(d.monto) > 0)) throw new Error('El monto debe ser mayor que 0');
+  if (!d.proximaFecha) throw new Error('Falta la próxima fecha de pago');
+  const row = {
+    concepto: d.concepto.trim(), monto: num(d.monto), moneda: d.moneda || 'RD',
+    tipo_movimiento: d.tipoMovimiento || 'COMPRA_OPERATIVA', frecuencia: d.frecuencia || 'MENSUAL',
+    proxima_fecha: d.proximaFecha, cuenta_pago_id: d.cuentaPagoId || null,
+    contraparte_id: d.contraparteId || null, activa: d.activa !== false, notas: d.notas || null,
+  };
+  const { data, error } = await supabase.from('pagos_programados').insert(row).select().single();
+  if (error) throw new Error(`createPagoProgramado: ${error.message}`);
+  return data;
+}
+
+export async function updatePagoProgramado(id, patch) {
+  const map = { concepto: 'concepto', monto: 'monto', moneda: 'moneda', tipoMovimiento: 'tipo_movimiento', frecuencia: 'frecuencia', proximaFecha: 'proxima_fecha', cuentaPagoId: 'cuenta_pago_id', contraparteId: 'contraparte_id', activa: 'activa', notas: 'notas' };
+  const row = {};
+  for (const k in patch) if (map[k]) row[map[k]] = patch[k] === '' ? null : patch[k];
+  if ('monto' in patch) row.monto = num(patch.monto);
+  const { data, error } = await supabase.from('pagos_programados').update(row).eq('id', id).select().single();
+  if (error) throw new Error(`updatePagoProgramado: ${error.message}`);
+  return data;
+}
+
+export async function removePagoProgramado(id) {
+  const { error } = await supabase.from('pagos_programados').delete().eq('id', id);
+  if (error) throw new Error(`removePagoProgramado: ${error.message}`);
+  return { deleted: true };
+}
+
+// Registrar el pago: crea el movimiento real (salida) y avanza la próxima fecha
+// (o desactiva si es UNICO). pp = el pago programado (shape camelCase del loader).
+export async function pagarPagoProgramado(pp, { cuentaId, prestamoId, fecha } = {}) {
+  if (!cuentaId) throw new Error('Selecciona la cuenta de pago'); // 🐛 CTA-1
+  const fechaPago = fecha || todayISO();
+  await createMovimiento({
+    fecha: fechaPago, tipo: pp.tipoMovimiento || 'COMPRA_OPERATIVA',
+    cuentaId, prestamoId: prestamoId || null,   // si paga con tarjeta → DRAWDOWN (regla 7)
+    salida: pp.monto, contraparteId: pp.contraparteId || null,
+    notas: `${pp.concepto} · pago programado`,
+  });
+  const next = avanzarFechaPP(pp.proximaFecha, pp.frecuencia);
+  const patch = next ? { proxima_fecha: next } : { activa: false };
+  const { error } = await supabase.from('pagos_programados').update(patch).eq('id', pp.id);
+  if (error) throw new Error(`pagarPagoProgramado (avanzar fecha): ${error.message}`);
+  return { next };
 }

@@ -346,12 +346,23 @@ export async function loadContrapartes() {
   return (data || []).map((c) => ({ id: c.id, nombre: c.nombre, tipo: c.tipo }));
 }
 
+// Pagos programados (servicios fijos / recurrentes). Tabla aditiva.
+export async function loadPagosProgramados() {
+  const { data, error } = await supabase.from('pagos_programados').select('*').order('proxima_fecha');
+  if (error) { console.error('loadPagosProgramados:', error.message); return []; }
+  return (data || []).map((p) => ({
+    id: p.id, concepto: p.concepto, monto: num(p.monto), moneda: p.moneda || 'RD',
+    tipoMovimiento: p.tipo_movimiento, frecuencia: p.frecuencia, proximaFecha: p.proxima_fecha,
+    cuentaPagoId: p.cuenta_pago_id, contraparteId: p.contraparte_id, activa: p.activa, notas: p.notas,
+  }));
+}
+
 /* ──────────── refreshAll: carga todo en paralelo ──────────── */
 export async function loadAll() {
-  const [skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes] =
+  const [skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes, pagosProgramados] =
     await Promise.all([
       loadSKUs(), loadVentas(), loadLotes(), loadMovimientos(),
-      loadCuentas(), loadPrestamos(), loadInversores(), loadCuotas(), loadContrapartes(),
+      loadCuentas(), loadPrestamos(), loadInversores(), loadCuotas(), loadContrapartes(), loadPagosProgramados(),
     ]);
-  return { skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes };
+  return { skus, ventas, lotes, movimientos, cuentas, prestamos, inversores, cuotas, contrapartes, pagosProgramados };
 }
