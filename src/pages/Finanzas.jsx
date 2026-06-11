@@ -437,7 +437,9 @@ function DeudasTab({ prestamos, tarjetas }) {
           ]}
           rows={prestamos} empty="Sin préstamos · + Préstamo / línea" />
       </div>
-      {selP && <DetalleAmortizacion prestamo={selP} />}
+      {selP && (selP.tipo === 'LINEA_CREDITO'
+        ? <DetalleUsosTarjeta tarjeta={selP} />   // línea = crédito revolvente: muestra usos (disposiciones/pagos), no cuotas
+        : <DetalleAmortizacion prestamo={selP} />)}
 
       <div className="section">
         <div className="section-head">
@@ -660,7 +662,7 @@ function DetalleUsosTarjeta({ tarjeta }) {
             { key: 'saldoDespues', label: 'Saldo', align: 'right', num: true, render: (m) => money(m.saldoDespues) },
           ]}
           rows={usos}
-          empty="Sin usos registrados · los cargos a esta tarjeta aparecen aquí (DRAWDOWN ligado por prestamo_id)"
+          empty="Sin movimientos registrados · las disposiciones/cargos aparecen aquí (DRAWDOWN ligado por prestamo_id)"
         />
       </div>
     </div>
