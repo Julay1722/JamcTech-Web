@@ -30,7 +30,7 @@ export default function App() {
     { id: 'overview',   label: 'Resumen',    icon: '◉', badge: null },
     { id: 'alertas',    label: 'Alertas',    icon: '!', badge: alertCount, badgeColor: 'var(--danger)' },
     { id: 'ventas',     label: 'Ventas',     icon: '$', badge: (data.ventas || []).length },
-    { id: 'inventario', label: 'Inventario', icon: '▤', badge: (data.skus || []).length },
+    { id: 'inventario', label: 'Inventario', icon: '▣', badge: (data.skus || []).length },
     { id: 'finanzas',   label: 'Finanzas',   icon: '∮', badge: null },
     { id: 'libro',      label: 'Libro',      icon: '≣', badge: (data.movimientos || []).length },
   ];
