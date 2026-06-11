@@ -220,8 +220,8 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
   const [expanded, setExpanded] = useState({}); // key 'cat|marca|modelo' → bool
 
   const exportarCSV = () => {
-    const headers = ['SKU', 'Nombre', 'Categoría', 'Marca', 'Stock', 'En tránsito', 'CPP', 'Precio sugerido', 'Estado'];
-    const csvRows = rows.map((s) => [s.id, s.nombre, s.categoria, s.marca, s.stock, s.enTransito, s.cpp, s.precioSugerido, s.estado]);
+    const headers = ['SKU', 'Nombre', 'Categoría', 'Marca', 'Stock', 'En tránsito', 'CPP', 'Precio sugerido', 'Precio 40%', 'Estado'];
+    const csvRows = rows.map((s) => [s.id, s.nombre, s.categoria, s.marca, s.stock, s.enTransito, s.cpp, s.precioSugerido, s.cpp > 0 ? Math.round((s.cpp / 0.6) * 100) / 100 : '', s.estado]);
     const n = downloadCSV(csvName('inventario'), headers, csvRows);
     t.ok('Inventario exportado', `${n} SKU(s) · CSV`);
   };
@@ -267,16 +267,20 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
     });
   }, [rows]);
 
+  // Precio al que hay que vender para mantener 40% de margen SOBRE LA VENTA
+  // (igual que mide la app el margen: ganancia/precio). 40% margen → precio =
+  // cpp / (1 − 0.40) = cpp / 0.60.
+  const MARGEN_OBJ = 0.40;
+  const precio40 = (cpp) => (cpp > 0 ? cpp / (1 - MARGEN_OBJ) : 0);
+
   // Sub-row (variante de color o SKU único): celdas de datos + acciones.
   const skuCells = (s, { indent = false } = {}) => {
-    const margen = s.precioSugerido > 0 ? Math.round(((s.precioSugerido - s.cpp) / s.precioSugerido) * 100) : 0;
     return (
       <>
         <td className={`num right ${s.stock <= 0 ? 'neg' : ''}`}>{s.stock}</td>
         <td className="num right" style={{ color: s.enTransito > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{s.enTransito > 0 ? s.enTransito : '—'}</td>
         <td className="num right">{money(s.cpp)}</td>
-        <td className="num right">{s.precioSugerido > 0 ? money(s.precioSugerido) : '—'}</td>
-        <td className="num right muted">{s.precioSugerido > 0 ? margen + '%' : '—'}</td>
+        <td className="num right" style={{ color: s.cpp > 0 ? 'var(--success)' : 'var(--text-3)' }}>{s.cpp > 0 ? money(precio40(s.cpp)) : '—'}</td>
         <td>
           <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <span className={`badge ${estadoCls(s.estado)}`} style={indent ? { fontSize: 9 } : undefined}>{estadoLabel(s.estado)}</span>
@@ -317,8 +321,7 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
               <th className="num right">Stock</th>
               <th className="num right">En camino</th>
               <th className="num right">CPP</th>
-              <th className="num right">Precio</th>
-              <th className="num right">Margen</th>
+              <th className="num right">Precio 40%</th>
               <th>Estado</th>
             </tr>
           </thead>
@@ -327,7 +330,7 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
               <Fragment key={cat}>
                 {/* ── NIVEL 1: cabecera de categoría con subtotales ── */}
                 <tr style={{ background: 'var(--surface-2)' }}>
-                  <td colSpan="8" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 12, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <td colSpan="7" style={{ padding: '10px 12px', fontWeight: 600, fontSize: 12, color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     {cat}
                     <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--text-3)', fontSize: 11, textTransform: 'none', letterSpacing: 0 }}>
                       {modelos.length} modelo{modelos.length !== 1 ? 's' : ''} · {nSkus} SKU{nSkus !== 1 ? 's' : ''} · {intNum(totalStock)} ud · {money(valorStock)} en stock
@@ -357,8 +360,6 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
                   const totStock = g.items.reduce((s, x) => s + (x.stock || 0), 0);
                   const totEC = g.items.reduce((s, x) => s + (x.enTransito || 0), 0);
                   const cppProm = g.items.reduce((s, x) => s + (x.cpp || 0), 0) / g.items.length;
-                  const pvAlguno = g.items.find((x) => x.precioSugerido > 0)?.precioSugerido || 0;
-                  const margen = pvAlguno > 0 ? Math.round(((pvAlguno - cppProm) / pvAlguno) * 100) : 0;
                   const est = estadoPeor(g.items);
                   return (
                     <Fragment key={key}>
@@ -375,8 +376,7 @@ function SkusTab({ rows, search, setSearch, filter, setFilter, onRow, onEdit, on
                         <td className={`num right ${totStock === 0 ? 'neg' : ''}`}>{totStock}</td>
                         <td className="num right" style={{ color: totEC > 0 ? 'var(--warning)' : 'var(--text-3)' }}>{totEC > 0 ? totEC : '—'}</td>
                         <td className="num right">{money(cppProm)}</td>
-                        <td className="num right">{pvAlguno > 0 ? money(pvAlguno) : '—'}</td>
-                        <td className="num right muted">{pvAlguno > 0 ? margen + '%' : '—'}</td>
+                        <td className="num right" style={{ color: cppProm > 0 ? 'var(--success)' : 'var(--text-3)' }}>{cppProm > 0 ? money(precio40(cppProm)) : '—'}</td>
                         <td><span className={`badge ${estadoCls(est)}`}>{estadoLabel(est)}</span></td>
                       </tr>
 
@@ -667,7 +667,8 @@ function ProductDetailModal({ sku, data, onClose, onEdit }) {
         <div className="stat-card"><div className="stat-label">En camino</div><div className="stat-value" style={{ color: sku.enTransito > 0 ? 'var(--warning)' : undefined }}>{intNum(sku.enTransito)} ud</div></div>
         <div className="stat-card"><div className="stat-label">CPP actual</div><div className="stat-value">{money(sku.cpp)}</div></div>
         <div className="stat-card"><div className="stat-label">Precio sugerido</div><div className="stat-value">{sku.precioSugerido > 0 ? money(sku.precioSugerido) : '—'}</div></div>
-        <div className="stat-card"><div className="stat-label">Margen</div><div className="stat-value">{sku.precioSugerido > 0 ? margen + '%' : '—'}</div></div>
+        <div className="stat-card"><div className="stat-label">Precio 40%</div><div className="stat-value" style={{ color: sku.cpp > 0 ? 'var(--success)' : undefined }}>{sku.cpp > 0 ? money(sku.cpp / 0.6) : '—'}</div></div>
+        <div className="stat-card"><div className="stat-label">Margen actual</div><div className="stat-value" style={{ color: sku.precioSugerido > 0 ? (margen >= 40 ? 'var(--success)' : 'var(--warning)') : undefined }}>{sku.precioSugerido > 0 ? margen + '%' : '—'}</div></div>
         <div className="stat-card"><div className="stat-label">Valor en stock</div><div className="stat-value">{money(sku.stock * sku.cpp)}</div></div>
         <div className="stat-card"><div className="stat-label">Vendidas</div><div className="stat-value">{intNum(sku.vendidas)} ud</div></div>
         <div className="stat-card"><div className="stat-label">Ingresos</div><div className="stat-value">{money(sku.ingresos)}</div></div>
