@@ -717,3 +717,40 @@ export async function pagarPagoProgramado(pp, { cuentaId, prestamoId, fecha } = 
   if (error) throw new Error(`pagarPagoProgramado (avanzar fecha): ${error.message}`);
   return { next };
 }
+
+/* ════════════════════════ Contrapartes ════════════════════════ */
+// Contrapartes gestionables desde la UI (ej. "Netlify" tipo SERVICIO).
+export async function createContraparte(d) {
+  if (!d.nombre || !d.nombre.trim()) throw new Error('Falta el nombre de la contraparte');
+  const row = { nombre: d.nombre.trim(), tipo: d.tipo || 'SERVICIO' };
+  if (d.notas) row.notas = d.notas;
+  const { data, error } = await supabase.from('contrapartes').insert(row).select().single();
+  if (error) throw new Error(`createContraparte: ${error.message}`);
+  return data;
+}
+
+// Cuántas filas referencian la contraparte (7 FKs). Para bloquear el borrado
+// con un mensaje claro en vez de un error críptico de FK.
+export async function countContraparteRefs(id) {
+  const q = (tabla, col) => supabase.from(tabla).select('*', { count: 'exact', head: true }).eq(col, id);
+  const checks = [
+    ['movimientos', 'contraparte_id'], ['ventas', 'canal_id'], ['lotes', 'proveedor_id'],
+    ['prestamos', 'contraparte_id'], ['inversores', 'contraparte_id'], ['cuentas', 'banco_id'],
+    ['pagos_programados', 'contraparte_id'],
+  ];
+  const results = await Promise.all(checks.map(([t, c]) => q(t, c)));
+  let total = 0; const detalle = {};
+  results.forEach((r, i) => { const n = r.count || 0; total += n; if (n > 0) detalle[checks[i][0]] = n; });
+  return { total, detalle };
+}
+
+export async function removeContraparte(id) {
+  const refs = await countContraparteRefs(id);
+  if (refs.total > 0) {
+    const donde = Object.entries(refs.detalle).map(([t, n]) => `${n} en ${t}`).join(', ');
+    throw new Error(`Está en uso (${donde}). No se puede eliminar sin dejar registros huérfanos.`);
+  }
+  const { error } = await supabase.from('contrapartes').delete().eq('id', id);
+  if (error) throw new Error(`removeContraparte: ${error.message}`);
+  return { deleted: true };
+}
