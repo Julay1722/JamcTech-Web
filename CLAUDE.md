@@ -187,7 +187,9 @@ MOUSE, TECLADO, HEADSET, STAND, MOUSEPAD, OTRO
 
 ## Discrepancia conocida
 
-El saldo BHD calculado por suma de movimientos da $33,759.66 vs V2.1 que muestra $31,959.66. Diferencia: $1,800. Esto viene de un error en el sheet V2.1 de septiembre 2025 (registró una venta de 1,800 pero no la sumó al balance running). La data Supabase es **más correcta** porque esa venta existe en V-LEG-0019.
+**Auditoría 2026-06-11 (filas con notas "audit 11-jun-2026"):** la DB se reconcilió fila por fila contra el sheet V2.1 y BHD quedó EXACTO al sheet (55,168.29). Se corrigió: 4 pagos "Cuentas por pagar Scotiabanck" que faltaban (1,030 + 27,040.50 + 589.88 + 371.55 — el reload nunca los cargó), 2 pagos Coop con monto corto (3,574 → 4,006, sheet manda), un refund +2 mal parseado (borrado), la venta del 9-jun que faltaba (VTA-260609-001, AJ159 Pro Blanco 2,600) y el AJUSTE id 573 recalculado a −2,260.01 (= 1,800 drift sep-25 del sheet + 460 envío VTA-260606-002 que el sheet saca de BHD pero la DB tiene como cargo a tarjeta Scotia + 0.01 redondeo).
+
+Historia del 1,800: el sheet V2.1 registró una venta de 1,800 en sep-2025 (existe como V-LEG-0019) pero nunca la sumó a su balance corrido. Originalmente se mantuvo la DB "+1,800 más correcta"; en la auditoría se decidió cuadrar con el sheet (es contra lo que Julio cuadra su banco real) absorbiéndolo en el AJUSTE id 573.
 
 ## Estilo de comunicación con Julio
 
