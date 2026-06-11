@@ -16,18 +16,22 @@ const EMPTY = {
 export function DataProvider({ children }) {
   const [state, setState] = useState({ ...EMPTY, loading: true, error: null });
 
-  const refreshAll = useCallback(async () => {
-    setState((s) => ({ ...s, loading: true, error: null }));
+  // refreshAll({ initial }): solo la PRIMERA carga muestra el skeleton "Cargando".
+  // Los refrescos tras guardar un form actualizan los datos EN SITIO, sin poner
+  // loading=true → la página no se desmonta ni se reinicia al sub-tab por defecto
+  // (así se pueden hacer varios cambios seguidos en un mismo apartado).
+  const refreshAll = useCallback(async (opts = {}) => {
+    if (opts.initial) setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const data = await loadAll();
-      setState({ ...data, loading: false, error: null });
+      setState((s) => ({ ...s, ...data, loading: false, error: null }));
     } catch (e) {
       console.error('[useData] carga falló:', e);
       setState((s) => ({ ...s, loading: false, error: e.message || String(e) }));
     }
   }, []);
 
-  useEffect(() => { refreshAll(); }, [refreshAll]);
+  useEffect(() => { refreshAll({ initial: true }); }, [refreshAll]);
 
   const alertCount = (state.skus || []).filter((s) => s.estado === 'critico').length;
 

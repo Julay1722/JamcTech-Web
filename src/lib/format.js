@@ -1,10 +1,12 @@
 // Helpers de formato compartidos (moneda RD$/USD$, fechas, números).
 export const num = (v) => (v == null || v === '' ? 0 : parseFloat(v) || 0);
 
+const NBSP = ' '; // espacio NO separable: la moneda nunca se parte del número.
+
 export function money(v, currency = 'RD$') {
   const n = num(v);
   const s = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `${currency} ${s}`;
+  return `${currency}${NBSP}${s}`;
 }
 
 export function moneyShort(v) {
