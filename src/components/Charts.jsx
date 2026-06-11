@@ -158,14 +158,14 @@ export function BarChart({ data, color = 'var(--accent)', fmt = (n) => n.toLocal
   );
 }
 
-export function DonutChart({ data, size = 180, strokeW = 26, fmt = (n, p) => `${n.toLocaleString('en-US')} (${p.toFixed(1)}%)`, title = '' }) {
+export function DonutChart({ data, size = 180, strokeW = 26, fmt = (n, p) => `${n.toLocaleString('en-US')} (${p.toFixed(1)}%)`, title = '', legend = true }) {
   if (!data || data.length === 0) return null;
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
   const cx = size / 2, cy = size / 2, r = size / 2 - strokeW / 2;
   const circ = 2 * Math.PI * r;
   let offset = 0;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 24, width: '100%' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: legend ? 24 : 0, width: legend ? '100%' : 'auto', justifyContent: 'center' }}>
       <svg width={size} height={size} style={{ flexShrink: 0 }}>
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border)" strokeWidth={strokeW} />
         {data.map((d, i) => {
@@ -180,15 +180,17 @@ export function DonutChart({ data, size = 180, strokeW = 26, fmt = (n, p) => `${
         <text x={cx} y={cy - 2} textAnchor="middle" fontSize={16} fontWeight={600} fontFamily="var(--font-mono)" fill="var(--text)">{total.toLocaleString('en-US')}</text>
         <text x={cx} y={cy + 16} textAnchor="middle" fontSize={9} fill="var(--text-3)" style={{ textTransform: 'uppercase' }} letterSpacing={0.6}>{title || 'TOTAL'}</text>
       </svg>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, flex: 1, minWidth: 0 }}>
-        {data.map((d, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 8px', borderRadius: 4, background: 'var(--surface-2)' }}>
-            <span style={{ width: 12, height: 12, background: d.color, borderRadius: 3, flexShrink: 0 }} />
-            <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>{d.label}</span>
-            <span style={{ color: 'var(--text-3)', marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{fmt(d.value, (d.value / total) * 100)}</span>
-          </div>
-        ))}
-      </div>
+      {legend && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, flex: 1, minWidth: 0 }}>
+          {data.map((d, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 8px', borderRadius: 4, background: 'var(--surface-2)' }}>
+              <span style={{ width: 12, height: 12, background: d.color, borderRadius: 3, flexShrink: 0 }} />
+              <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>{d.label}</span>
+              <span style={{ color: 'var(--text-3)', marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{fmt(d.value, (d.value / total) * 100)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Resumen / Mando — KPIs (capital líquido, revenue, ganancia neta, stock) +
 // charts. KPIs verificados vs SQL (ver Fase 3). Capital = saldo de cuentas
 // líquidas (KPI-2/3), stock excluye LEGACY-SALE (KPI-1), deuda incluye tarjetas (KPI-5).
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useData } from '../hooks/useData.jsx';
 import { KPI, LineChart, BarChart, DonutChart } from '../components/Charts.jsx';
 import { money, intNum, ymLabel } from '../lib/format.js';
@@ -38,22 +38,49 @@ export default function OverviewPage({ period, customRange }) {
     const ganSerie = months.map((ym) => byMonth[ym].g);
     const labels = months.map(ymLabel);
 
-    // Mix de valor de inventario por categoría
-    const catVal = {};
-    skus.forEach((k) => { catVal[k.categoria] = (catVal[k.categoria] || 0) + k.stock * k.cpp; });
-    const donut = Object.entries(catVal).filter(([, v]) => v > 0)
-      .map(([label, value]) => ({ label, value: Math.round(value), color: CAT_COLORS[label] || '#847b64' }))
-      .sort((a, b) => b.value - a.value);
+    // Inventario por categoría: valor (stock×cpp), # SKUs con stock, unidades.
+    const catAgg = {};
+    skus.forEach((k) => {
+      const a = (catAgg[k.categoria] ||= { skus: 0, stock: 0, valor: 0 });
+      if (k.stock > 0) a.skus += 1;
+      a.stock += k.stock;
+      a.valor += k.stock * k.cpp;
+    });
+    const invTotal = Object.values(catAgg).reduce((s, a) => s + a.valor, 0);
+    const skusConStock = Object.values(catAgg).reduce((s, a) => s + a.skus, 0);
+    const donut = Object.entries(catAgg).filter(([, a]) => a.valor > 0)
+      .map(([label, a]) => ({ label, value: Math.round(a.valor), color: CAT_COLORS[label] || '#847b64' }))
+      .sort((x, y) => y.value - x.value);
+    const catRows = donut.map((d) => ({
+      label: d.label, color: d.color,
+      skus: catAgg[d.label].skus, stock: catAgg[d.label].stock, valor: d.value,
+      pct: invTotal > 0 ? (d.value / invTotal) * 100 : 0,
+    }));
 
-    // Top SKUs por ganancia (período completo, desde la vista de stock)
-    const topSkus = [...skus].sort((a, b) => b.ganancia - a.ganancia).slice(0, 8)
-      .filter((k) => k.ganancia > 0)
-      .map((k) => ({ label: k.nombre, value: Math.round(k.ganancia) }));
+    // Top SKUs precalculado por las 4 métricas (de por vida, como hoy).
+    const TOP_KEYS = { ganancia: (k) => k.ganancia, ingresos: (k) => k.ingresos, vendidas: (k) => k.vendidas, valorStock: (k) => k.stock * k.cpp };
+    const topByMetric = {};
+    for (const key in TOP_KEYS) {
+      const f = TOP_KEYS[key];
+      topByMetric[key] = [...skus].map((k) => ({ label: k.nombre, value: Math.round(f(k)) }))
+        .filter((d) => d.value > 0).sort((a, b) => b.value - a.value).slice(0, 8);
+    }
 
-    return { capitalLiquido, revenue, ganancia, stock, deudaRD, deudaUSD, revSerie, ganSerie, labels, donut, topSkus, nVentas: ventasP.length };
+    return { capitalLiquido, revenue, ganancia, stock, deudaRD, deudaUSD, revSerie, ganSerie, labels, donut, invTotal, skusConStock, catRows, topByMetric, nVentas: ventasP.length };
   }, [skus, ventas, cuentas, prestamos, period, customRange]);
 
   const margenPct = m.revenue > 0 ? (m.ganancia / m.revenue) * 100 : 0;
+
+  // Selector de métrica del Top SKUs (chips). No recalcula el useMemo: solo elige
+  // qué precálculo de m.topByMetric leer.
+  const [topMetric, setTopMetric] = useState('ganancia');
+  const TOP_METRICS = [
+    { key: 'ganancia', label: 'Ganancia', color: 'var(--success)', fmt: (n) => 'RD$ ' + intNum(n) },
+    { key: 'ingresos', label: 'Ingresos', color: 'var(--accent)', fmt: (n) => 'RD$ ' + intNum(n) },
+    { key: 'vendidas', label: 'Vendidas', color: 'var(--warning)', fmt: (n) => intNum(n) + ' ud' },
+    { key: 'valorStock', label: 'Valor stock', color: 'var(--accent)', fmt: (n) => 'RD$ ' + intNum(n) },
+  ];
+  const metric = TOP_METRICS.find((x) => x.key === topMetric) || TOP_METRICS[0];
 
   return (
     <div>
@@ -84,12 +111,65 @@ export default function OverviewPage({ period, customRange }) {
 
       <div className="grid-2">
         <div className="section">
-          <div className="section-head"><div className="section-title">Valor de inventario por categoría</div></div>
-          <DonutChart data={m.donut} fmt={(n, p) => money(n) + ` (${p.toFixed(0)}%)`} title="RD$" />
+          <div className="section-head">
+            <div>
+              <div className="section-title">Inventario por categoría</div>
+              <div className="section-desc">{money(m.invTotal)} · {m.catRows.length} categorías · {intNum(m.stock)} ud en stock</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--s-4)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ flexShrink: 0 }}>
+              <DonutChart data={m.donut} size={150} strokeW={24} title="RD$" legend={false} />
+            </div>
+            <div style={{ flex: 1, minWidth: 260, overflowX: 'auto' }}>
+              <table className="data">
+                <thead><tr>
+                  <th>Categoría</th>
+                  <th className="right num">SKUs</th>
+                  <th className="right num">Stock</th>
+                  <th className="right num">Valor</th>
+                  <th className="right num">% cartera</th>
+                </tr></thead>
+                <tbody>
+                  {m.catRows.map((c) => (
+                    <tr key={c.label}>
+                      <td><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: c.color, marginRight: 8, verticalAlign: 'middle' }} />{c.label}</td>
+                      <td className="right num">{c.skus}</td>
+                      <td className="right num">{intNum(c.stock)}</td>
+                      <td className="right num">{money(c.valor)}</td>
+                      <td className="right num">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                          <span style={{ color: 'var(--text-3)' }}>{c.pct.toFixed(0)}%</span>
+                          <span style={{ display: 'inline-block', width: 44, height: 6, borderRadius: 3, background: 'var(--surface-3)' }}>
+                            <span style={{ display: 'block', height: 6, borderRadius: 3, width: `${c.pct}%`, background: c.color }} />
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  <tr style={{ fontWeight: 600 }}>
+                    <td>Total</td>
+                    <td className="right num">{m.skusConStock}</td>
+                    <td className="right num">{intNum(m.stock)}</td>
+                    <td className="right num">{money(m.invTotal)}</td>
+                    <td className="right num muted">100%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
+
         <div className="section">
-          <div className="section-head"><div className="section-title">Top SKUs por ganancia</div></div>
-          <BarChart data={m.topSkus} fmt={(n) => 'RD$' + intNum(n)} color="var(--success)" />
+          <div className="section-head">
+            <div className="section-title">Top SKUs por {metric.label.toLowerCase()}</div>
+            <div className="chips">
+              {TOP_METRICS.map((mt) => (
+                <button key={mt.key} type="button" className={`chip${topMetric === mt.key ? ' active' : ''}`} onClick={() => setTopMetric(mt.key)}>{mt.label}</button>
+              ))}
+            </div>
+          </div>
+          <BarChart data={m.topByMetric[topMetric]} fmt={metric.fmt} color={metric.color} />
         </div>
       </div>
 
