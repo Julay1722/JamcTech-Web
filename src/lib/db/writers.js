@@ -754,3 +754,45 @@ export async function removeContraparte(id) {
   if (error) throw new Error(`removeContraparte: ${error.message}`);
   return { deleted: true };
 }
+
+/* ════════════════════════ Cuadrar deuda a saldo real ════════════════════════ */
+// Reconcilia una deuda al saldo REAL del banco (estado de cuenta). Evita que el
+// drift por centavos/intereses se acumule y que un préstamo "no se pueda cerrar".
+// - TARJETA/LINEA: inserta un movimiento de ajuste ligado al prestamo_id, sobre la
+//   cuenta CREDITO gemela (no toca cuentas líquidas): entrada=DRAWDOWN si el saldo
+//   real es mayor (ej. interés cobrado), salida=AJUSTE si es menor.
+// - PRESTAMO: inserta una cuota de ajuste (abono_capital = diferencia, pagada=true,
+//   sin cash) — la vista resta abono_capital del saldo. No toca cuotas existentes.
+// Los registros pasados NUNCA se recalculan: el ajuste es una fila nueva con nota.
+export async function cuadrarDeuda(prestamo, { saldoReal, fecha, notas } = {}) {
+  const real = num(saldoReal);
+  const actual = num(prestamo.saldoPendiente);
+  const diff = Math.round((real - actual) * 100) / 100;
+  if (Math.abs(diff) < 0.005) return { diff: 0, mensaje: 'Ya cuadra, sin cambios' };
+  const f = fecha || todayISO();
+  const nota = `Cuadre a saldo real ${real.toFixed(2)} (sistema: ${actual.toFixed(2)}, dif ${diff > 0 ? '+' : ''}${diff.toFixed(2)})${notas ? ' · ' + notas : ''}`;
+
+  if (prestamo.tipo === 'PRESTAMO') {
+    // abono_capital positivo BAJA el saldo; negativo lo sube. diff>0 (real mayor) → abono negativo.
+    const { data: maxRow } = await supabase.from('cuotas').select('numero').eq('prestamo_id', prestamo.id).order('numero', { ascending: false }).limit(1);
+    const numero = ((maxRow && maxRow[0]?.numero) || 0) + 1;
+    const { error } = await supabase.from('cuotas').insert({
+      prestamo_id: prestamo.id, numero, fecha_pago: f, fecha_pagada: f,
+      capital: 0, interes: 0, seguro: 0, abono_capital: -diff, pagada: true, notas: nota,
+    });
+    if (error) throw new Error(`cuadrarDeuda (cuota ajuste): ${error.message}`);
+    return { diff, via: 'cuota-ajuste' };
+  }
+
+  // Tarjeta / línea: movimiento sobre la cuenta CREDITO gemela (mismo nombre).
+  const { data: cuentas } = await supabase.from('cuentas').select('id, nombre').eq('tipo', 'CREDITO');
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const gemela = (cuentas || []).find((c) => norm(c.nombre) === norm(prestamo.nombre));
+  if (!gemela) throw new Error(`No encontré la cuenta CREDITO gemela de "${prestamo.nombre}"`);
+  const row = diff > 0
+    ? { fecha: f, tipo: 'DRAWDOWN', cuenta_id: gemela.id, entrada: diff, salida: 0, prestamo_id: prestamo.id, notas: nota }
+    : { fecha: f, tipo: 'AJUSTE', cuenta_id: gemela.id, entrada: 0, salida: -diff, prestamo_id: prestamo.id, notas: nota };
+  const { error } = await supabase.from('movimientos').insert(row);
+  if (error) throw new Error(`cuadrarDeuda (mov ajuste): ${error.message}`);
+  return { diff, via: 'movimiento-ajuste' };
+}

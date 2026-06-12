@@ -24,6 +24,7 @@ import {
   createCompensacion, updateCompensacion, removeCompensacion,
   createPagoFinanciero,
   createPagoProgramado, updatePagoProgramado, removePagoProgramado, pagarPagoProgramado,
+  cuadrarDeuda,
   removeCuenta, removePrestamo, removeInversor,
 } from '../lib/db/writers.js';
 import { Modal, useConfirm } from '../components/Modal.jsx';
@@ -541,6 +542,7 @@ function DeudasTab({ prestamos, tarjetas }) {
   const [confirm, confirmNode] = useConfirm();
   const [nuevo, setNuevo] = useState(null);   // 'prestamo' | 'tarjeta'
   const [editar, setEditar] = useState(null); // registro a editar
+  const [cuadrar, setCuadrar] = useState(null); // deuda a cuadrar contra el banco
   const [selP, setSelP] = useState(null);     // préstamo expandido
   const [selT, setSelT] = useState(null);     // tarjeta expandida
 
@@ -554,6 +556,7 @@ function DeudasTab({ prestamos, tarjetas }) {
     key: 'acc', label: '', align: 'right',
     render: (p) => (
       <span className="row-actions-inner" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="Cuadrar a saldo real del banco" onClick={() => setCuadrar(p)}>⚖</button>
         <button className="icon-btn" title="Editar" onClick={() => setEditar(p)}>✎</button>
         <button className="icon-btn danger" title="Eliminar" onClick={() => doDelete(p, esTarjeta)}>×</button>
       </span>
@@ -658,8 +661,72 @@ function DeudasTab({ prestamos, tarjetas }) {
           <FormPrestamo prestamo={editar} tipoFijo={editar.tipo === 'TARJETA_CREDITO' ? 'TARJETA_CREDITO' : undefined} onDone={() => setEditar(null)} />
         </Modal>
       )}
+      {cuadrar && <CuadrarDeudaModal prestamo={cuadrar} onClose={() => setCuadrar(null)} />}
       {confirmNode}
     </>
+  );
+}
+
+// Cuadrar una deuda al saldo REAL del banco. Crea UN ajuste con nota (no toca
+// registros pasados). Si queda en 0, ofrece cerrar (inactivar) el préstamo.
+function CuadrarDeudaModal({ prestamo, onClose }) {
+  const data = useData();
+  const t = useToast();
+  const [saldoReal, setSaldoReal] = useState('');
+  const [nota, setNota] = useState('');
+  const [cerrar, setCerrar] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const real = num(saldoReal);
+  const tieneValor = saldoReal !== '' && real >= 0;
+  const diff = tieneValor ? Math.round((real - prestamo.saldoPendiente) * 100) / 100 : null;
+  const cur = prestamo.moneda === 'USD' ? 'USD$' : 'RD$';
+
+  const onCuadrar = async () => {
+    if (!tieneValor) { t.warn('Falta el saldo real', 'Escribe el saldo que dice tu banco (0 si está saldado).'); return; }
+    setBusy(true);
+    try {
+      const r = await cuadrarDeuda(prestamo, { saldoReal: real, notas: nota });
+      if (real === 0 && cerrar) await removePrestamo(prestamo.id); // soft-delete: inactiva, historial queda
+      await data.refreshAll();
+      t.ok(r.diff === 0 ? 'Ya cuadraba' : 'Deuda cuadrada', r.diff === 0 ? 'Sin cambios' : `Ajuste de ${money(Math.abs(r.diff), cur)} registrado${real === 0 && cerrar ? ' · préstamo cerrado' : ''}`);
+      onClose();
+    } catch (e) { t.err('No se pudo cuadrar', e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title={`Cuadrar · ${prestamo.nombre}`} width={460} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+        <div className="muted" style={{ fontSize: 13 }}>
+          El sistema dice: <strong>{money(prestamo.saldoPendiente, cur)}</strong>. Escribe el saldo REAL según tu banco
+          y se registra UN ajuste con nota — los pagos e intereses pasados no se tocan.
+        </div>
+        <Field label={`Saldo real según el banco (${cur})`} required>
+          <MoneyInput value={saldoReal} onChange={setSaldoReal} min="0" placeholder="0.00" />
+        </Field>
+        {diff != null && (
+          <div style={{ fontSize: 13, padding: 'var(--s-2) var(--s-3)', borderRadius: 6, background: 'var(--surface-2)' }}>
+            {Math.abs(diff) < 0.005
+              ? <>✓ Ya cuadra — no se crea ningún ajuste.</>
+              : diff > 0
+                ? <>Se registrará un cargo de <strong style={{ color: 'var(--danger)' }}>+{money(diff, cur)}</strong> (ej. interés/fee que el sistema no tenía).</>
+                : <>Se registrará un ajuste a favor de <strong style={{ color: 'var(--success)' }}>−{money(-diff, cur)}</strong> (la deuda real es menor).</>}
+          </div>
+        )}
+        {tieneValor && real === 0 && (
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={cerrar} onChange={(e) => setCerrar(e.target.checked)} />
+            Cerrar el préstamo al quedar en 0 (se inactiva; el historial se conserva)
+          </label>
+        )}
+        <Field label="Nota (opcional)"><TextInput value={nota} onChange={setNota} placeholder="ej. estado de cuenta junio" /></Field>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button className="btn" onClick={onCuadrar} disabled={busy || !tieneValor}>{busy ? 'Cuadrando…' : 'Cuadrar'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
