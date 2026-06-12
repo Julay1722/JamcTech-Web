@@ -789,9 +789,12 @@ export async function cuadrarDeuda(prestamo, { saldoReal, fecha, notas } = {}) {
   const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
   const gemela = (cuentas || []).find((c) => norm(c.nombre) === norm(prestamo.nombre));
   if (!gemela) throw new Error(`No encontré la cuenta CREDITO gemela de "${prestamo.nombre}"`);
+  // Ambos lados con naturaleza FINANCIERO (DRAWDOWN / PAGO_*): el cuadre no entra
+  // en el cash flow operacional ni toca ninguna cuenta líquida (va a la gemela CREDITO).
+  const tipoBaja = prestamo.tipo === 'TARJETA_CREDITO' ? 'PAGO_TARJETA_CREDITO' : 'PAGO_LINEA_CREDITO';
   const row = diff > 0
     ? { fecha: f, tipo: 'DRAWDOWN', cuenta_id: gemela.id, entrada: diff, salida: 0, prestamo_id: prestamo.id, notas: nota }
-    : { fecha: f, tipo: 'AJUSTE', cuenta_id: gemela.id, entrada: 0, salida: -diff, prestamo_id: prestamo.id, notas: nota };
+    : { fecha: f, tipo: tipoBaja, cuenta_id: gemela.id, entrada: 0, salida: -diff, prestamo_id: prestamo.id, notas: nota };
   const { error } = await supabase.from('movimientos').insert(row);
   if (error) throw new Error(`cuadrarDeuda (mov ajuste): ${error.message}`);
   return { diff, via: 'movimiento-ajuste' };
