@@ -33,7 +33,7 @@ import { DataTable } from '../components/Table.jsx';
 import { CuentaSelect, MedioPagoSelect, ContraparteSelect } from '../components/Pickers.jsx';
 import { KPI, Bar } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
-import { money, intNum, fmtDate, todayISO, num, proximoDiaMesISO, diasHasta } from '../lib/format.js';
+import { money, intNum, fmtDate, todayISO, num, proximoDiaMesISO, diasHasta, cicloPagoEstado } from '../lib/format.js';
 import LibroPage from './Libro.jsx';
 import MovForm from '../components/forms/MovForm.jsx';
 
@@ -587,7 +587,10 @@ function DeudasTab({ prestamos, tarjetas }) {
                 // Préstamo amortizado → próxima cuota del schedule; línea → su día de pago mensual.
                 let iso = null, estimado = false;
                 if (p.tipo === 'LINEA_CREDITO') {
-                  iso = p.diaVencimiento ? proximoDiaMesISO(p.diaVencimiento) : null;
+                  // Si ya pagó en el ciclo en curso, no marca urgencia (✓ pagado).
+                  const c = cicloPagoEstado(p, data.movimientos);
+                  if (c.yaPagoCiclo) return <div><div style={{ fontSize: 12 }}>{fmtDate(c.proximoPago)}</div><span className="badge success" style={{ fontSize: 10 }}>✓ pagado</span></div>;
+                  iso = c.proximoPago;
                 } else {
                   const cuotasP = (data.cuotas || []).filter((c) => c.prestamoId === p.id);
                   const next = cuotasP.filter((c) => !c.pagada)
@@ -635,7 +638,9 @@ function DeudasTab({ prestamos, tarjetas }) {
               key: 'vence', label: 'Próximo pago', align: 'right',
               render: (p) => {
                 if (!p.diaVencimiento) return <span className="muted">—</span>;
-                const iso = proximoDiaMesISO(p.diaVencimiento);
+                const c = cicloPagoEstado(p, data.movimientos);
+                if (c.yaPagoCiclo) return <div><div style={{ fontSize: 12 }}>{fmtDate(c.proximoPago)}</div><span className="badge success" style={{ fontSize: 10 }}>✓ pagado</span></div>;
+                const iso = c.proximoPago;
                 const d = diasHasta(iso);
                 const cls = d == null ? 'neutral' : d <= 3 ? 'danger' : d <= 7 ? 'warning' : 'neutral';
                 return <div><div style={{ fontSize: 12 }}>{fmtDate(iso)}</div>{d != null && <span className={`badge ${cls}`} style={{ fontSize: 10 }}>en {d}d</span>}</div>;
@@ -764,7 +769,8 @@ function DetalleAmortizacion({ prestamo }) {
   if (!cuotas.length) {
     // Líneas de crédito no tienen schedule de cuotas: muestran su ciclo de pago.
     const venceDia = prestamo.diaVencimiento, corteDia = prestamo.diaCorte;
-    const proximoPago = venceDia ? proximoDiaMesISO(venceDia) : null;
+    const c = cicloPagoEstado(prestamo, data.movimientos);
+    const proximoPago = c.proximoPago;
     const diasPago = proximoPago ? diasHasta(proximoPago) : null;
     const venceMesSig = venceDia && corteDia && Number(venceDia) < Number(corteDia);
     return (
@@ -774,7 +780,8 @@ function DetalleAmortizacion({ prestamo }) {
           <div style={{ display: 'flex', gap: 'var(--s-5)', padding: 'var(--s-2) var(--s-3)', background: 'var(--surface-2)', borderRadius: 6, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>
             {corteDia && <div><span className="muted">Corte:</span> día {corteDia} del mes</div>}
             <div><span className="muted">Vence:</span> día {venceDia}{venceMesSig ? ' del mes siguiente al corte' : ''}</div>
-            <div style={{ marginLeft: 'auto' }}><span className="muted">Próximo pago:</span> <strong>{fmtDate(proximoPago)}</strong>{' '}{diasPago != null && <span className={`badge ${diasPago <= 3 ? 'danger' : diasPago <= 7 ? 'warning' : 'neutral'}`}>en {diasPago}d</span>}</div>
+            {c.yaPagoCiclo && <div><span className="badge success">✓ pagado este ciclo</span> <span className="muted">{money(c.pagadoCiclo)}{c.ultimoPago ? ` · ${fmtDate(c.ultimoPago)}` : ''}</span></div>}
+            <div style={{ marginLeft: 'auto' }}><span className="muted">Próximo pago:</span> <strong>{fmtDate(proximoPago)}</strong>{' '}{c.yaPagoCiclo ? <span className="badge success">✓ pagado</span> : (diasPago != null && <span className={`badge ${diasPago <= 3 ? 'danger' : diasPago <= 7 ? 'warning' : 'neutral'}`}>en {diasPago}d</span>)}</div>
           </div>
         ) : (
           <div className="empty">{prestamo.tipo === 'LINEA_CREDITO' ? 'Sin día de pago configurado — editá la línea (✎) y poné el día de vencimiento para ver el próximo pago.' : 'Este producto no tiene schedule de cuotas generado.'}</div>
@@ -861,7 +868,8 @@ function DetalleUsosTarjeta({ tarjeta }) {
   // Ciclo de la tarjeta: el corte cierra el ciclo el día X; el pago vence el día Y.
   // Si Y < X, ese vencimiento cae en el MES SIGUIENTE al corte (ej. corte 15 → paga el 9).
   const corteDia = tarjeta.diaCorte, venceDia = tarjeta.diaVencimiento;
-  const proximoPago = venceDia ? proximoDiaMesISO(venceDia) : null;
+  const cicloEstado = cicloPagoEstado(tarjeta, data.movimientos);
+  const proximoPago = cicloEstado.proximoPago;
   const diasPago = proximoPago ? diasHasta(proximoPago) : null;
   const venceMesSiguiente = venceDia && corteDia && Number(venceDia) < Number(corteDia);
 
@@ -880,10 +888,11 @@ function DetalleUsosTarjeta({ tarjeta }) {
         <div style={{ display: 'flex', gap: 'var(--s-5)', padding: 'var(--s-2) var(--s-3)', background: 'var(--surface-2)', borderRadius: 6, marginBottom: 'var(--s-3)', flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>
           {corteDia && <div><span className="muted">Corte:</span> día {corteDia} del mes</div>}
           {venceDia && <div><span className="muted">Vence:</span> día {venceDia}{venceMesSiguiente ? ' del mes siguiente al corte' : ''}</div>}
+          {cicloEstado.yaPagoCiclo && <div><span className="badge success">✓ pagado este ciclo</span> <span className="muted">{money(cicloEstado.pagadoCiclo)}{cicloEstado.ultimoPago ? ` · ${fmtDate(cicloEstado.ultimoPago)}` : ''}</span></div>}
           {proximoPago && (
             <div style={{ marginLeft: 'auto' }}>
               <span className="muted">Próximo pago:</span> <strong>{fmtDate(proximoPago)}</strong>{' '}
-              {diasPago != null && <span className={`badge ${diasPago <= 3 ? 'danger' : diasPago <= 7 ? 'warning' : 'neutral'}`}>en {diasPago}d</span>}
+              {cicloEstado.yaPagoCiclo ? <span className="badge success">✓ pagado</span> : (diasPago != null && <span className={`badge ${diasPago <= 3 ? 'danger' : diasPago <= 7 ? 'warning' : 'neutral'}`}>en {diasPago}d</span>)}
             </div>
           )}
         </div>

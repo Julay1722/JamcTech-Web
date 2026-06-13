@@ -23,7 +23,7 @@ import { DataTable } from '../components/Table.jsx';
 import { CuentaSelect } from '../components/Pickers.jsx';
 import { KPI } from '../components/Charts.jsx';
 import { useToast } from '../components/Toast.jsx';
-import { money, intNum, fmtDate, todayISO, proximoDiaMesISO } from '../lib/format.js';
+import { money, intNum, fmtDate, todayISO, cicloPagoEstado } from '../lib/format.js';
 import { PagarPagoModal } from './Finanzas.jsx';
 
 // Días entre hoy y una fecha ISO (negativo = ya vencida).
@@ -47,7 +47,7 @@ function urgencia(iso) {
 
 export default function AlertasPage() {
   const data = useData();
-  const { skus, prestamos, cuotas, loading } = data;
+  const { skus, prestamos, cuotas, movimientos, loading } = data;
   const t = useToast();
 
   const [tab, setTab] = useState('cuotas'); // 'cuotas' | 'inventario'
@@ -78,13 +78,18 @@ export default function AlertasPage() {
     const tarjetasPago = (prestamos || [])
       .filter((p) => (p.tipo === 'TARJETA_CREDITO' || p.tipo === 'LINEA_CREDITO') && p.diaVencimiento && p.usado > 0)
       .map((p) => {
-        const iso = proximoDiaMesISO(p.diaVencimiento);
-        return { ...p, proximoPago: iso, dias: diasHasta(iso) };
+        // ¿Ya pagué en este ciclo? (helper compartido con Finanzas). Si sí, deja de
+        // gritar "vence mañana" aunque la fecha de vencimiento siga cerca.
+        const c = cicloPagoEstado(p, movimientos);
+        return { ...p, proximoPago: c.proximoPago, dias: diasHasta(c.proximoPago), pagadoCiclo: c.pagadoCiclo, ultimoPago: c.ultimoPago, yaPagoCiclo: c.yaPagoCiclo };
       })
-      .sort((a, b) => (a.dias ?? 999) - (b.dias ?? 999));
+      .sort((a, b) => {
+        if (a.yaPagoCiclo !== b.yaPagoCiclo) return a.yaPagoCiclo ? 1 : -1; // pendientes primero
+        return (a.dias ?? 999) - (b.dias ?? 999);
+      });
 
     return { criticos, atencion, proximas, totalPorPagar, tarjetasPago };
-  }, [skus, prestamos, cuotas]);
+  }, [skus, prestamos, cuotas, movimientos]);
 
   const totalAlertas = m.criticos.length + m.atencion.length + m.proximas.length;
 
@@ -239,18 +244,23 @@ export default function AlertasPage() {
                 <div>
                   <div className="section-title">Pagos de tarjeta y línea próximos</div>
                   <div className="section-desc">
-                    Tarjetas y líneas con saldo · el pago vence el día configurado (rueda al mes siguiente si vence antes del corte)
+                    Tarjetas y líneas con saldo · el pago vence el día configurado (rueda al mes siguiente si vence antes del corte). Si ya pagaste en el ciclo, se marca <span style={{ color: 'var(--success)' }}>✓ pagado</span>.
                   </div>
                 </div>
-                <span className="badge neutral">{m.tarjetasPago.length}</span>
+                <span className="badge neutral">{m.tarjetasPago.filter((p) => !p.yaPagoCiclo).length}</span>
               </div>
               <DataTable
                 columns={[
-                  { key: 'urg', label: 'Cuándo', render: (p) => { const u = urgencia(p.proximoPago); return <span className={`badge ${u.cls}`}>{u.text}</span>; } },
+                  { key: 'urg', label: 'Cuándo', render: (p) => p.yaPagoCiclo
+                    ? <span className="badge success">✓ pagado</span>
+                    : (() => { const u = urgencia(p.proximoPago); return <span className={`badge ${u.cls}`}>{u.text}</span>; })() },
                   { key: 'fecha', label: 'Vence', render: (p) => fmtDate(p.proximoPago) },
                   { key: 'nombre', label: 'Producto', render: (p) => <>{p.nombre} <span className="muted" style={{ fontSize: 11 }}>{p.tipo === 'LINEA_CREDITO' ? 'línea' : 'tarjeta'}</span></> },
                   { key: 'corte', label: 'Corte', align: 'right', render: (p) => (p.diaCorte ? `día ${p.diaCorte}` : '—') },
-                  { key: 'usado', label: 'Saldo a pagar', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
+                  { key: 'pagado', label: 'Pagado este ciclo', align: 'right', num: true, render: (p) => p.pagadoCiclo > 0
+                    ? <span className="pos">{money(p.pagadoCiclo, p.moneda === 'USD' ? 'USD$' : 'RD$')}<span className="muted" style={{ fontSize: 11 }}>{p.ultimoPago ? ` · ${fmtDate(p.ultimoPago)}` : ''}</span></span>
+                    : <span className="muted">—</span> },
+                  { key: 'usado', label: 'Saldo actual', align: 'right', num: true, render: (p) => money(p.usado, p.moneda === 'USD' ? 'USD$' : 'RD$') },
                 ]}
                 rows={m.tarjetasPago}
                 getRowKey={(p) => p.id}
