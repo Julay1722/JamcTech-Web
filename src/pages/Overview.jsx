@@ -13,7 +13,7 @@ const CAT_COLORS = {
 };
 
 export default function OverviewPage({ period, customRange }) {
-  const { skus, ventas, cuentas, prestamos } = useData();
+  const { skus, ventas, cuentas, prestamos, movimientos } = useData();
 
   const m = useMemo(() => {
     const ventasP = ventas.filter((v) => inPeriod(v.fecha, period, customRange));
@@ -37,6 +37,43 @@ export default function OverviewPage({ period, customRange }) {
     const revSerie = months.map((ym) => byMonth[ym].v);
     const ganSerie = months.map((ym) => byMonth[ym].g);
     const labels = months.map(ymLabel);
+
+    // ── Resumen mensual estilo "25/26 Overview" del sheet (histórico completo,
+    // no respeta el filtro de período). Capital = saldo acumulado de las cuentas
+    // líquidas RD al CIERRE de cada mes (como el sheet). Cash flow = operacional
+    // neto del mes (naturaleza CASHFLOW). Rendimiento = ganancia/ventas.
+    const liquidasRD = new Set(cuentas.filter((c) => c.esLiquida && c.moneda !== 'USD').map((c) => c.id));
+    const mensual = {};
+    const mes = (f) => (f || '').slice(0, 7);
+    ventas.forEach((v) => {
+      const ym = mes(v.fecha); if (!ym) return;
+      const r = (mensual[ym] ||= { ventas: 0, ganancia: 0, n: 0, cashflow: 0, capDelta: 0 });
+      r.ventas += v.facturado; r.ganancia += v.gananciaNeta; r.n += 1;
+    });
+    (movimientos || []).forEach((mv) => {
+      const ym = mes(mv.fecha); if (!ym) return;
+      const r = (mensual[ym] ||= { ventas: 0, ganancia: 0, n: 0, cashflow: 0, capDelta: 0 });
+      if (mv.naturaleza === 'CASHFLOW') r.cashflow += mv.entrada - mv.salida;
+      if (liquidasRD.has(mv.cuentaId)) r.capDelta += mv.entrada - mv.salida;
+    });
+    let capAcum = 0;
+    const overviewMensual = Object.keys(mensual).sort().map((ym) => {
+      const r = mensual[ym];
+      capAcum += r.capDelta;
+      return {
+        ym, label: ymLabel(ym),
+        capital: capAcum, ventas: r.ventas, ganancia: r.ganancia, n: r.n,
+        rendimiento: r.ventas > 0 ? (r.ganancia / r.ventas) * 100 : null,
+        cashflow: r.cashflow,
+      };
+    });
+    const ovTot = {
+      ventas: overviewMensual.reduce((s, r) => s + r.ventas, 0),
+      ganancia: overviewMensual.reduce((s, r) => s + r.ganancia, 0),
+      cashflow: overviewMensual.reduce((s, r) => s + r.cashflow, 0),
+      n: overviewMensual.reduce((s, r) => s + r.n, 0),
+    };
+    ovTot.rendimiento = ovTot.ventas > 0 ? (ovTot.ganancia / ovTot.ventas) * 100 : null;
 
     // Inventario por categoría: valor (stock×cpp), # SKUs con stock, unidades.
     const catAgg = {};
@@ -66,8 +103,8 @@ export default function OverviewPage({ period, customRange }) {
         .filter((d) => d.value > 0).sort((a, b) => b.value - a.value).slice(0, 8);
     }
 
-    return { capitalLiquido, revenue, ganancia, stock, deudaRD, deudaUSD, revSerie, ganSerie, labels, donut, invTotal, skusConStock, catRows, topByMetric, nVentas: ventasP.length };
-  }, [skus, ventas, cuentas, prestamos, period, customRange]);
+    return { capitalLiquido, revenue, ganancia, stock, deudaRD, deudaUSD, revSerie, ganSerie, labels, donut, invTotal, skusConStock, catRows, topByMetric, overviewMensual, ovTot, nVentas: ventasP.length };
+  }, [skus, ventas, cuentas, prestamos, movimientos, period, customRange]);
 
   const margenPct = m.revenue > 0 ? (m.ganancia / m.revenue) * 100 : 0;
 
@@ -107,6 +144,54 @@ export default function OverviewPage({ period, customRange }) {
           <div className="section-head"><div className="section-title">Ganancia mensual</div></div>
           <LineChart values={m.ganSerie} labels={m.labels} fmt={(n) => 'RD$' + (n / 1000).toFixed(0) + 'k'} color="var(--success)" />
         </div>
+      </div>
+
+      {/* Resumen mensual estilo "25/26 Overview" del sheet + cash flow */}
+      <div className="section">
+        <div className="section-head">
+          <div>
+            <div className="section-title">Resumen mensual · 25/26</div>
+            <div className="section-desc">capital líquido al cierre de cada mes · ventas, ganancia y cash flow operacional del mes</div>
+          </div>
+        </div>
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Mes</th>
+              <th className="right num">Capital</th>
+              <th className="right num">Ventas</th>
+              <th className="right num">#</th>
+              <th className="right num">Ganancia</th>
+              <th className="right num">Rendimiento</th>
+              <th className="right num">Cash flow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {m.overviewMensual.map((r, i) => {
+              const esActual = i === m.overviewMensual.length - 1;
+              return (
+                <tr key={r.ym} className={esActual ? 'row-active' : ''}>
+                  <td style={{ fontWeight: esActual ? 600 : 400 }}>{r.label}{esActual && <span className="muted" style={{ fontSize: 10 }}> · en curso</span>}</td>
+                  <td className="right num" style={{ fontWeight: 500 }}>{money(r.capital)}</td>
+                  <td className="right num">{r.ventas > 0 ? money(r.ventas) : <span className="muted">—</span>}</td>
+                  <td className="right num muted">{r.n || ''}</td>
+                  <td className="right num" style={{ color: r.ganancia > 0 ? 'var(--success)' : r.ganancia < 0 ? 'var(--danger)' : 'var(--text-3)' }}>{r.ganancia !== 0 ? money(r.ganancia) : '—'}</td>
+                  <td className="right num">{r.rendimiento != null ? <span className={`badge ${r.rendimiento >= 40 ? 'success' : r.rendimiento >= 30 ? 'warning' : 'neutral'}`}>{r.rendimiento.toFixed(1)}%</span> : <span className="muted">—</span>}</td>
+                  <td className="right num" style={{ color: r.cashflow >= 0 ? 'var(--success)' : 'var(--danger)' }}>{money(r.cashflow)}</td>
+                </tr>
+              );
+            })}
+            <tr style={{ fontWeight: 600, borderTop: '2px solid var(--border-2)' }}>
+              <td>Total</td>
+              <td className="right num muted">—</td>
+              <td className="right num">{money(m.ovTot.ventas)}</td>
+              <td className="right num muted">{m.ovTot.n}</td>
+              <td className="right num" style={{ color: 'var(--success)' }}>{money(m.ovTot.ganancia)}</td>
+              <td className="right num">{m.ovTot.rendimiento != null ? m.ovTot.rendimiento.toFixed(1) + '%' : '—'}</td>
+              <td className="right num" style={{ color: m.ovTot.cashflow >= 0 ? 'var(--success)' : 'var(--danger)' }}>{money(m.ovTot.cashflow)}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div className="grid-2">
