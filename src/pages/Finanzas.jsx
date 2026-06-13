@@ -24,7 +24,7 @@ import {
   createCompensacion, updateCompensacion, removeCompensacion,
   createPagoFinanciero,
   createPagoProgramado, updatePagoProgramado, removePagoProgramado, pagarPagoProgramado,
-  cuadrarDeuda,
+  cuadrarDeuda, abonarCapital, previewAbono,
   removeCuenta, removePrestamo, removeInversor,
 } from '../lib/db/writers.js';
 import { Modal, useConfirm } from '../components/Modal.jsx';
@@ -743,6 +743,7 @@ function DetalleAmortizacion({ prestamo }) {
   const [pagando, setPagando] = useState(null); // cuota a pagar
   const [cuentaId, setCuentaId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [abonar, setAbonar] = useState(false); // modal de abono a capital
 
   const proxima = cuotas.find((c) => !c.pagada);
   const pagadas = cuotas.filter((c) => c.pagada).length;
@@ -799,7 +800,10 @@ function DetalleAmortizacion({ prestamo }) {
             {cuotas.length} cuota(s) · {pagadas} pagada(s) · {cuotas.length - pagadas} restante(s) · interés proyectado {money(interesProyectado)}
           </div>
         </div>
-        {proxima && <span className="pill">Próxima: #{proxima.numero} · {money(proxima.montoTotal)}</span>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {proxima && <span className="pill">Próxima: #{proxima.numero} · {money(proxima.montoTotal)}</span>}
+          {proxima && <button className="btn ghost" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => setAbonar(true)}>+ Abono a capital</button>}
+        </div>
       </div>
       <div style={{ maxHeight: 420, overflowY: 'auto' }}>
         <DataTable
@@ -841,7 +845,102 @@ function DetalleAmortizacion({ prestamo }) {
           </div>
         </Modal>
       )}
+
+      {abonar && <AbonoModal prestamo={prestamo} onClose={() => setAbonar(false)} />}
     </div>
+  );
+}
+
+// Abono a capital: pago EXTRA que baja el capital y regenera las cuotas restantes.
+// Dos modos: bajar la cuota (mismo plazo) o acortar el plazo (misma cuota).
+// Muestra preview en vivo del efecto antes de confirmar.
+function AbonoModal({ prestamo, onClose }) {
+  const data = useData();
+  const t = useToast();
+  const [monto, setMonto] = useState('');
+  const [cuentaId, setCuentaId] = useState(null);
+  const [modo, setModo] = useState('ACORTAR_PLAZO');
+  const [nota, setNota] = useState('');
+  const [pv, setPv] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const m = num(monto);
+
+  // Preview en vivo (debounced) cuando cambia monto o modo. Limpia el preview viejo
+  // de inmediato para no mostrar números desfasados con la etiqueta del nuevo modo.
+  useEffect(() => {
+    let vivo = true;
+    setPv(null);
+    if (!(m > 0)) return;
+    const id = setTimeout(async () => {
+      try { const r = await previewAbono(prestamo, { monto: m, modo }); if (vivo) setPv(r); }
+      catch { if (vivo) setPv(null); }
+    }, 250);
+    return () => { vivo = false; clearTimeout(id); };
+  }, [m, modo, prestamo]);
+
+  const onConfirm = async () => {
+    if (!(m > 0)) { t.warn('Falta el monto', 'Escribe cuánto vas a abonar al capital.'); return; }
+    if (!cuentaId) { t.warn('Falta la cuenta', 'Elegí de qué cuenta sale el abono.'); return; }
+    setBusy(true);
+    try {
+      const r = await abonarCapital(prestamo, { monto: m, cuentaId, modo, notas: nota });
+      await data.refreshAll();
+      t.ok(r.liquida ? 'Préstamo saldado' : 'Abono aplicado',
+        r.liquida ? `${money(r.abono)} · saldo en 0` : `${money(r.abono)} · ${r.cuotasNuevas} cuotas de ${money(r.nuevaCuota)}`);
+      onClose();
+    } catch (e) { t.err('No se pudo abonar', e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title={`Abono a capital · ${prestamo.nombre}`} width={480} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--s-3)' }}>
+        <div className="muted" style={{ fontSize: 13 }}>
+          Pago EXTRA que va 100% a capital. Baja la deuda y regenera las cuotas que faltan.
+        </div>
+        <Field label="Monto del abono (RD$)" required>
+          <MoneyInput value={monto} onChange={setMonto} min="0" placeholder="0.00" />
+        </Field>
+        <Field label="¿Cómo aplicarlo?" required>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: 'pointer' }}>
+              <input type="radio" name="modoabono" checked={modo === 'ACORTAR_PLAZO'} onChange={() => setModo('ACORTAR_PLAZO')} />
+              <span><strong>Acortar el plazo</strong> — la cuota se mantiene, terminas antes <span className="muted">(ahorras más interés)</span></span>
+            </label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: 'pointer' }}>
+              <input type="radio" name="modoabono" checked={modo === 'REDUCIR_CUOTA'} onChange={() => setModo('REDUCIR_CUOTA')} />
+              <span><strong>Bajar la cuota</strong> — mismo plazo, pagas menos cada mes</span>
+            </label>
+          </div>
+        </Field>
+        <Field label="Cuenta de donde sale" required>
+          <CuentaSelect filter="liquidas" value={cuentaId} onChange={setCuentaId} invalid={busy && !cuentaId} />
+        </Field>
+        {pv && (
+          <div style={{ fontSize: 13, padding: 'var(--s-2) var(--s-3)', borderRadius: 6, background: 'var(--surface-2)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div><span className="muted">Saldo:</span> {money(pv.saldoActual)} → <strong>{money(pv.saldoPost)}</strong></div>
+            {pv.liquida ? (
+              <div><span className="badge success">✓ liquida el préstamo</span> — quedaría en 0</div>
+            ) : modo === 'REDUCIR_CUOTA' ? (
+              <>
+                <div><span className="muted">Cuota:</span> {money(pv.cuotaPIactual)} → <strong style={{ color: 'var(--success)' }}>{money(pv.nuevaCuota)}</strong> <span className="muted">(mismo plazo: {pv.nuevoPlazo} cuotas)</span></div>
+                <div><span className="muted">Ahorro en interés:</span> <strong style={{ color: 'var(--success)' }}>{money(pv.ahorroInteres)}</strong></div>
+              </>
+            ) : (
+              <>
+                <div><span className="muted">Plazo:</span> {pv.plazoActual} → <strong style={{ color: 'var(--success)' }}>{pv.nuevoPlazo} cuotas</strong> <span className="muted">(misma cuota: {money(pv.nuevaCuota)})</span></div>
+                <div><span className="muted">Ahorro en interés:</span> <strong style={{ color: 'var(--success)' }}>{money(pv.ahorroInteres)}</strong></div>
+              </>
+            )}
+          </div>
+        )}
+        <Field label="Nota (opcional)"><TextInput value={nota} onChange={setNota} placeholder="ej. abono extra de junio" /></Field>
+        <div className="modal-actions">
+          <button className="btn ghost" disabled={busy} onClick={onClose}>Cancelar</button>
+          <button className="btn" disabled={busy || !(m > 0) || !cuentaId} onClick={onConfirm}>{busy ? 'Aplicando…' : 'Aplicar abono'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

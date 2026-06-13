@@ -11,7 +11,7 @@
 // ════════════════════════════════════════════════════════════════
 import { supabase, CAT_TO_DB } from '../supabase.js';
 import { num, todayISO } from '../format.js';
-import { LOTE_TO_ENTRADA_STATUS, toRD, nextVentaCodigo, nextLoteCodigo } from './helpers.js';
+import { LOTE_TO_ENTRADA_STATUS, toRD, nextVentaCodigo, nextLoteCodigo, construirScheduleAmortizado } from './helpers.js';
 
 const NOTA_INGRESO = (codigo) => `Ingreso venta ${codigo}`;
 const NOTA_GASTO = (codigo) => `Asociado a venta ${codigo}`;
@@ -798,4 +798,120 @@ export async function cuadrarDeuda(prestamo, { saldoReal, fecha, notas } = {}) {
   const { error } = await supabase.from('movimientos').insert(row);
   if (error) throw new Error(`cuadrarDeuda (mov ajuste): ${error.message}`);
   return { diff, via: 'movimiento-ajuste' };
+}
+
+/* ════════════════════════ Abono a capital (préstamo amortizado) ════════════════════════ */
+const _r2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
+
+// Lee el estado vivo del préstamo amortizado para calcular un abono: saldo actual,
+// cuotas pendientes, cuota P&I vigente y la fecha de la próxima cuota.
+async function _estadoAmortizado(prestamo) {
+  if (prestamo.tipo !== 'PRESTAMO') throw new Error('El abono a capital aplica solo a préstamos amortizados (no líneas/tarjetas).');
+  const { data: cuotas, error } = await supabase.from('cuotas')
+    .select('id,numero,capital,interes,seguro,monto_total,fecha_pago,pagada,abono_capital')
+    .eq('prestamo_id', prestamo.id).order('numero');
+  if (error) throw new Error(`abono (leer cuotas): ${error.message}`);
+  const pagadas = (cuotas || []).filter((c) => c.pagada);
+  const pendientes = (cuotas || []).filter((c) => !c.pagada).sort((a, b) => a.numero - b.numero);
+  const capitalPagado = pagadas.reduce((s, c) => s + num(c.capital) + num(c.abono_capital), 0);
+  const saldoActual = _r2(num(prestamo.montoInicial) - capitalPagado);
+  const cuotaPI = pendientes.length ? _r2(num(pendientes[0].capital) + num(pendientes[0].interes))
+    : _r2(num(prestamo.cuotaMensual || 0) - num(prestamo.seguroMensual || 0));
+  return { cuotas, pagadas, pendientes, saldoActual, cuotaPI };
+}
+
+// Previsualiza el efecto de un abono SIN escribir nada (para el modal).
+// Devuelve, según el modo, la nueva cuota o el nuevo plazo + ahorro de interés.
+export async function previewAbono(prestamo, { monto, modo }) {
+  const m = num(monto);
+  const { saldoActual, pendientes, cuotaPI } = await _estadoAmortizado(prestamo);
+  const r = num(prestamo.tasaMensual), seguro = num(prestamo.seguroMensual);
+  const saldoPost = _r2(saldoActual - m);
+  const out = { saldoActual, saldoPost, cuotaPIactual: _r2(cuotaPI + seguro), plazoActual: pendientes.length, liquida: m >= saldoActual };
+  if (out.liquida || saldoPost <= 0) return { ...out, liquida: true, nuevaCuota: 0, nuevoPlazo: 0, ahorroInteres: 0 };
+  const interesRestanteActual = pendientes.reduce((s, c) => s + num(c.interes), 0);
+  const fechaPrimera = pendientes.length ? pendientes[0].fecha_pago : null;
+  const sched = construirScheduleAmortizado({
+    saldo: saldoPost, r, seguro, fechaPrimera, numeroInicial: 1,
+    modo, nCuotas: pendientes.length, cuotaPI,
+  });
+  const interesNuevo = sched.reduce((s, c) => s + num(c.interes), 0);
+  return {
+    ...out,
+    nuevaCuota: modo === 'REDUCIR_CUOTA' ? _r2(num(sched[0].monto_total)) : _r2(cuotaPI + seguro),
+    nuevoPlazo: sched.length,
+    ahorroInteres: _r2(interesRestanteActual - interesNuevo),
+  };
+}
+
+// Aplica un abono a capital: registra el egreso real de caja, baja el capital del
+// préstamo (fila de abono pagada con abono_capital) y REGENERA las cuotas pendientes.
+// modo 'REDUCIR_CUOTA' (mismo plazo, cuota menor) | 'ACORTAR_PLAZO' (misma cuota, menos meses).
+// Transacción con rollback: si algo falla, deshace el movimiento y la fila de abono.
+// d = { monto, fecha, cuentaId, modo, notas }
+export async function abonarCapital(prestamo, { monto, fecha, cuentaId, modo, notas } = {}) {
+  const m = num(monto);
+  if (!(m > 0)) throw new Error('El abono debe ser mayor que 0.');
+  if (!cuentaId) throw new Error('Selecciona la cuenta de donde sale el abono.');
+  if (!['REDUCIR_CUOTA', 'ACORTAR_PLAZO'].includes(modo)) throw new Error('Modo de abono inválido.');
+  const f = fecha || todayISO();
+  const { pendientes, saldoActual, cuotaPI } = await _estadoAmortizado(prestamo);
+  if (saldoActual <= 0) throw new Error('Este préstamo ya está saldado.');
+  const abono = Math.min(m, saldoActual);            // no se puede abonar más que el saldo
+  const saldoPost = _r2(saldoActual - abono);
+  const liquida = saldoPost <= 0;
+  const r = num(prestamo.tasaMensual), seguro = num(prestamo.seguroMensual);
+  const numAbono = pendientes.length ? pendientes[0].numero : ((prestamo.plazoMeses || 0) + 1);
+  const fechaPrimera = pendientes.length ? pendientes[0].fecha_pago : null;
+  const nota = `Abono a capital (${modo === 'REDUCIR_CUOTA' ? 'baja cuota' : 'acorta plazo'}) · saldo ${saldoActual.toFixed(2)} → ${saldoPost.toFixed(2)}${notas ? ' · ' + notas : ''}`;
+
+  // 1) Egreso real de caja (FINANCIERO). Sale de la cuenta elegida.
+  const { data: mov, error: e1 } = await supabase.from('movimientos').insert({
+    fecha: f, tipo: 'PAGO_PRESTAMO', cuenta_id: cuentaId, entrada: 0, salida: abono,
+    prestamo_id: prestamo.id, notas: nota,
+  }).select().single();
+  if (e1) throw new Error(`abono (movimiento): ${e1.message}`);
+
+  // Snapshot de las pendientes ANTES de borrarlas (para restaurar si algo falla).
+  const { data: snap } = await supabase.from('cuotas')
+    .select('numero,fecha_pago,capital,interes,seguro,abono_capital,saldo_post,pagada,fecha_pagada,movimiento_id,notas')
+    .eq('prestamo_id', prestamo.id).eq('pagada', false);
+  const restaurarPendientes = async () => {
+    if (snap && snap.length) await supabase.from('cuotas').insert(snap.map((c) => ({ ...c, prestamo_id: prestamo.id })));
+  };
+
+  // 2) Borrar las pendientes PRIMERO (libera sus numeros para la fila de abono / regeneración).
+  const idsBorrar = pendientes.map((c) => c.id);
+  if (idsBorrar.length) {
+    const { error: e2 } = await supabase.from('cuotas').delete().in('id', idsBorrar);
+    if (e2) { await supabase.from('movimientos').delete().eq('id', mov.id); throw new Error(`abono (borrar pendientes): ${e2.message}`); }
+  }
+
+  // 3) Fila de abono (pagada, abono_capital = abono) → la vista baja el saldo de una vez.
+  // monto_total es columna GENERADA (capital+interes+seguro+abono_capital) → no se inserta.
+  const { error: e3 } = await supabase.from('cuotas').insert({
+    prestamo_id: prestamo.id, numero: numAbono, fecha_pago: f, fecha_pagada: f,
+    capital: 0, interes: 0, seguro: 0, abono_capital: abono,
+    saldo_post: saldoPost, pagada: true, movimiento_id: mov.id, notas: nota,
+  });
+  if (e3) { await restaurarPendientes(); await supabase.from('movimientos').delete().eq('id', mov.id); throw new Error(`abono (fila): ${e3.message}`); }
+
+  // 4) Regenerar las cuotas pendientes desde el nuevo saldo.
+  let nuevas = [];
+  if (!liquida && fechaPrimera) {
+    nuevas = construirScheduleAmortizado({
+      saldo: saldoPost, r, seguro, fechaPrimera, numeroInicial: numAbono + 1,
+      modo, nCuotas: pendientes.length, cuotaPI,
+    }).map(({ monto_total, ...c }) => ({ ...c, prestamo_id: prestamo.id })); // monto_total es generada
+    if (nuevas.length) {
+      const { error: e4 } = await supabase.from('cuotas').insert(nuevas);
+      if (e4) {
+        await supabase.from('cuotas').delete().eq('movimiento_id', mov.id); // quita la fila de abono
+        await restaurarPendientes();
+        await supabase.from('movimientos').delete().eq('id', mov.id);
+        throw new Error(`abono (regenerar cuotas): ${e4.message}`);
+      }
+    }
+  }
+  return { abono, saldoPost, liquida, cuotasNuevas: nuevas.length, nuevaCuota: nuevas.length ? _r2(num(nuevas[0].monto_total)) : 0 };
 }
