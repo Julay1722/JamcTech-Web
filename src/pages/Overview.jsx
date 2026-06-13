@@ -150,7 +150,7 @@ export default function OverviewPage({ period, customRange }) {
       <div className="section">
         <div className="section-head">
           <div>
-            <div className="section-title">Resumen mensual · 25/26</div>
+            <div className="section-title">Resumen mensual</div>
             <div className="section-desc">capital líquido al cierre de cada mes · ventas, ganancia y cash flow operacional del mes</div>
           </div>
         </div>
