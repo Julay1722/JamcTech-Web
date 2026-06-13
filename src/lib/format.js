@@ -33,7 +33,12 @@ export function ymLabel(ym) {
   return `${MES_LABELS[mm] || mm}-${yy}`;
 }
 
-export const todayISO = () => new Date().toISOString().slice(0, 10);
+// Fecha de HOY en hora LOCAL (no UTC: con RD a UTC-4, toISOString() ya es
+// "mañana" a partir de las 8:00 PM — registraría ventas/pagos con fecha corrida).
+export const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 // Días entre hoy y una fecha ISO (negativo = ya pasó, 0 = hoy).
 export function diasHasta(iso) {

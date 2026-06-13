@@ -1,6 +1,7 @@
 // Export CSV — función pura. El caller pasa headers + rows y hace el toast.
 // BOM UTF-8 para que Excel reconozca acentos y RD$; escape RFC4180 (dobla "").
 // (Adaptado de la versión paralela del otro chat — su helper estaba bien hecho.)
+import { todayISO } from './format.js';
 
 function escapeCell(v) {
   if (v == null) return '';
@@ -27,7 +28,7 @@ export function downloadCSV(filename, headers, rows) {
   return rows.length;
 }
 
-// Helper de fecha para nombres de archivo: 'ventas-2026-06-08.csv'
+// Helper de fecha para nombres de archivo: 'ventas-2026-06-08.csv' (fecha local)
 export function csvName(prefix) {
-  return `${prefix}-${new Date().toISOString().slice(0, 10)}.csv`;
+  return `${prefix}-${todayISO()}.csv`;
 }

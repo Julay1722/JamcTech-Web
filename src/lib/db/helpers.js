@@ -1,5 +1,5 @@
 // Helpers de escritura: conversión de moneda, status maps, generación de códigos.
-import { num } from '../format.js';
+import { num, todayISO } from '../format.js';
 
 // status_lote ↔ status_entrada. Un lote RECIBIDO pone sus entradas RECIBIDO;
 // estados de tránsito del lote mantienen la entrada PENDIENTE.
@@ -19,7 +19,7 @@ export function toRD(monto, moneda, tasaCambio) {
 
 // Código de venta nuevo: VTA-YYMMDD-NNN (incremental dentro del día).
 export function nextVentaCodigo(fecha, ventasExistentes) {
-  const f = String(fecha || new Date().toISOString().slice(0, 10)).replace(/-/g, '').slice(2);
+  const f = String(fecha || todayISO()).replace(/-/g, '').slice(2);
   const prefix = `VTA-${f}`;
   const n = (ventasExistentes || []).filter((v) => (v.codigo || '').startsWith(prefix)).length;
   return `${prefix}-${String(n + 1).padStart(3, '0')}`;
@@ -27,7 +27,7 @@ export function nextVentaCodigo(fecha, ventasExistentes) {
 
 // Código de lote nuevo: L-YYMMDD-NN.
 export function nextLoteCodigo(fecha, lotesExistentes) {
-  const f = String(fecha || new Date().toISOString().slice(0, 10)).replace(/-/g, '').slice(2);
+  const f = String(fecha || todayISO()).replace(/-/g, '').slice(2);
   const prefix = `L-${f}`;
   const n = (lotesExistentes || []).filter((l) => (l.codigo || '').startsWith(prefix)).length;
   return `${prefix}-${String(n + 1).padStart(2, '0')}`;

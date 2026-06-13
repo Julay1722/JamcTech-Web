@@ -2,6 +2,7 @@
 // Las páginas se montan según la pestaña activa (5 tabs, igual que el monolito).
 import { useState, useEffect } from 'react';
 import { auth } from './lib/supabase.js';
+import { todayISO } from './lib/format.js';
 import { useData } from './hooks/useData.jsx';
 import PeriodFilter from './components/PeriodFilter.jsx';
 import OverviewPage from './pages/Overview.jsx';
@@ -35,7 +36,7 @@ export default function App() {
     { id: 'libro',      label: 'Libro',      icon: '≣', badge: (data.movimientos || []).length },
   ];
   const showPeriod = ['overview', 'ventas', 'libro'].includes(page);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO(); // fecha LOCAL (no UTC: a las 8 PM de RD ya sería "mañana")
 
   return (
     <div className={`app ${navCollapsed ? 'collapsed' : ''}`}>
