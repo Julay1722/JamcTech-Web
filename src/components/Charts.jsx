@@ -1,5 +1,5 @@
 // Primitivas de visualización (SVG, sin librerías). Extraídas del monolito.
-import { useRef, useState, useLayoutEffect } from 'react';
+import { useRef, useState, useLayoutEffect, useId } from 'react';
 
 export function fmtPct(n) {
   if (n == null || isNaN(n)) return '';
@@ -91,6 +91,7 @@ function useContainerWidth() {
 
 export function LineChart({ values, labels = [], h = 200, color = 'var(--accent)', fmt = (n) => n.toLocaleString('en-US'), title = '', yTicks = 4 }) {
   const [ref, containerW] = useContainerWidth();
+  const gradId = 'lg' + useId().replace(/[:]/g, '');
   if (!values || values.length < 2) return <div ref={ref} className="muted" style={{ fontSize: 12, padding: 16, color: 'var(--text-3)' }}>Sin datos suficientes</div>;
   const w = Math.max(320, containerW);
   const PAD_L = 64, PAD_R = 16, PAD_T = 10, PAD_B = 28;
@@ -107,16 +108,22 @@ export function LineChart({ values, labels = [], h = 200, color = 'var(--accent)
     <div ref={ref} style={{ width: '100%', position: 'relative' }}>
       {title && <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>}
       <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.30" />
+            <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
         {ticks.map((t, i) => (
           <g key={i}>
             <line x1={PAD_L} y1={y(t)} x2={PAD_L + cw} y2={y(t)} stroke="var(--border)" strokeDasharray="2 4" strokeWidth={0.5} />
-            <text x={PAD_L - 8} y={y(t) + 3} fontSize={10} fill="var(--text-3)" textAnchor="end" fontFamily="var(--font-mono)">{fmt(t)}</text>
+            <text x={PAD_L - 8} y={y(t) + 3} fontSize={10} fill="var(--text-3)" textAnchor="end">{fmt(t)}</text>
           </g>
         ))}
-        <polygon points={`${PAD_L},${PAD_T + ch} ${points} ${PAD_L + cw},${PAD_T + ch}`} fill={color} opacity={0.12} />
-        <polyline points={points} fill="none" stroke={color} strokeWidth={1.8} />
+        <polygon points={`${PAD_L},${PAD_T + ch} ${points} ${PAD_L + cw},${PAD_T + ch}`} fill={`url(#${gradId})`} />
+        <polyline points={points} fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
         {values.map((v, i) => (
-          <circle key={i} cx={x(i)} cy={y(v)} r={3} fill={color}><title>{(labels[i] || `#${i + 1}`) + ': ' + fmt(v)}</title></circle>
+          <circle key={i} cx={x(i)} cy={y(v)} r={3} fill="var(--card)" stroke={color} strokeWidth={2}><title>{(labels[i] || `#${i + 1}`) + ': ' + fmt(v)}</title></circle>
         ))}
         {labels.map((l, i) => (i % labelEvery === 0 || i === labels.length - 1) && (
           <text key={i} x={x(i)} y={h - 8} fontSize={10} fill="var(--text-3)" textAnchor="middle" fontFamily="var(--font-mono)">{l}</text>
@@ -147,9 +154,9 @@ export function BarChart({ data, color = 'var(--accent)', fmt = (n) => n.toLocal
           const lblShort = d.label.length > maxChars ? d.label.slice(0, maxChars - 1) + '…' : d.label;
           return (
             <g key={i}>
-              <text x={PAD_L - 8} y={yPos + barH / 2 + 4} fontSize={11} fill="var(--text-2)" textAnchor="end">{lblShort}<title>{d.label}</title></text>
-              <rect x={PAD_L} y={yPos} width={bw} height={barH} fill={d.color || color} opacity={0.85} rx={2} />
-              <text x={PAD_L + bw + 6} y={yPos + barH / 2 + 4} fontSize={11} fill="var(--text)" fontFamily="var(--font-mono)">{fmt(d.value)}</text>
+              <text x={PAD_L - 8} y={yPos + barH / 2 + 4} fontSize={11} fill="var(--text-2)" textAnchor="end" fontWeight={600}>{lblShort}<title>{d.label}</title></text>
+              <rect x={PAD_L} y={yPos} width={Math.max(bw, 3)} height={barH} fill={d.color || color} rx={7} />
+              <text x={PAD_L + bw + 8} y={yPos + barH / 2 + 4} fontSize={11} fill="var(--text)" fontWeight={700} style={{ fontVariantNumeric: 'tabular-nums' }}>{fmt(d.value)}</text>
             </g>
           );
         })}
