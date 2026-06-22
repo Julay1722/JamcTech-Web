@@ -74,7 +74,9 @@ function DualMonto({ rd, usd, sub }) {
 
 export default function FinanzasPage({ onNavigate }) {
   const data = useData();
-  const [tab, setTab] = useState('resumen'); // resumen | analisis | prestamos | tarjetas | inversores | cuentas | movimientos
+  // Aurora: 4 áreas (antes 6 sub-tabs). El "Resumen" financiero se absorbe en el
+  // strip fijo de arriba + Análisis; Inversores + Pagos fijos = "Compromisos".
+  const [tab, setTab] = useState('deudas'); // deudas | cuentas | compromisos | analisis
 
   if (data.loading) {
     return (
@@ -89,36 +91,74 @@ export default function FinanzasPage({ onNavigate }) {
   const inversores = data.inversores || [];
   const cuentas = data.cuentas || [];
 
-  // Préstamos amortizados (PRESTAMO + LINEA_CREDITO van al tab Préstamos).
   const prestamosTab = prestamos.filter((p) => p.tipo === 'PRESTAMO' || p.tipo === 'LINEA_CREDITO');
-  // Tarjetas: TARJETA_CREDITO (revolventes con corte).
   const tarjetas = prestamos.filter((p) => p.tipo === 'TARJETA_CREDITO');
+
+  // ── Strip fijo: las 4 cifras que más mira (siempre visibles) ──
+  const dLiq = splitMoneda(cuentas.filter((c) => c.esLiquida), (c) => c.saldo);
+  const dDeuda = splitMoneda(prestamos, (p) => p.saldoPendiente);
+  const capitalRD = dLiq.rd, deudaRD = dDeuda.rd;
+  // Patrimonio neto = activos (capital líquido + valor de inventario al CPP) − deuda.
+  const valorInventario = (data.skus || []).reduce((s, k) => s + (k.stock > 0 ? k.stock * k.cpp : 0), 0);
+  const patrimonioRD = capitalRD + valorInventario - deudaRD;
+  const proxItems = [
+    ...(data.cuotas || []).filter((c) => !c.pagada).map((c) => ({ fecha: c.fechaPago, monto: c.montoTotal })),
+    ...prestamos.filter((p) => (p.tipo === 'TARJETA_CREDITO' || p.tipo === 'LINEA_CREDITO') && p.diaVencimiento && p.saldoPendiente > 0)
+      .map((p) => ({ fecha: proximoDiaMesISO(p.diaVencimiento), monto: p.saldoPendiente })),
+  ].filter((x) => x.fecha).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  const prox = proxItems[0];
+
+  const AREAS = [
+    { id: 'deudas', label: 'Deudas' },
+    { id: 'cuentas', label: 'Bancos & Caja' },
+    { id: 'compromisos', label: 'Compromisos' },
+    { id: 'analisis', label: 'Análisis' },
+  ];
 
   return (
     <div>
       <div className="topbar">
         <div>
           <h1>Finanzas</h1>
-          <div className="sub">Deudas · inversores · banco</div>
+          <div className="sub">Deudas · banco · compromisos · análisis</div>
         </div>
       </div>
 
-      {/* Sub-tabs planos (un solo nivel, sin anidamiento) */}
-      <div className="tabs">
-        <button className={tab === 'resumen' ? 'tab active' : 'tab'} onClick={() => setTab('resumen')}>Resumen</button>
-        <button className={tab === 'analisis' ? 'tab active' : 'tab'} onClick={() => setTab('analisis')}>Análisis deuda</button>
-        <button className={['deudas', 'prestamos', 'tarjetas'].includes(tab) ? 'tab active' : 'tab'} onClick={() => setTab('deudas')}>Deudas</button>
-        <button className={tab === 'inversores' ? 'tab active' : 'tab'} onClick={() => setTab('inversores')}>Inversores</button>
-        <button className={tab === 'cuentas' ? 'tab active' : 'tab'} onClick={() => setTab('cuentas')}>Banco</button>
-        <button className={tab === 'pagos' ? 'tab active' : 'tab'} onClick={() => setTab('pagos')}>Pagos fijos</button>
+      {/* Strip fijo de resumen — siempre visible aunque cambie de área */}
+      <div className="fin-strip">
+        <div className="mini-stat capital">
+          <span className="ms-label">Capital líquido</span>
+          <span className="ms-value">{money(capitalRD)}</span>
+        </div>
+        <div className="mini-stat deuda">
+          <span className="ms-label">Deuda total</span>
+          <span className="ms-value" style={{ color: 'var(--danger)' }}>{money(deudaRD)}{dDeuda.usd > 0 ? <span className="ms-label" style={{ display: 'block' }}>+ {money(dDeuda.usd, 'USD$')}</span> : null}</span>
+        </div>
+        <div className="mini-stat neto">
+          <span className="ms-label">Patrimonio neto</span>
+          <span className="ms-value" style={{ color: patrimonioRD >= 0 ? 'var(--success)' : 'var(--danger)' }}>{money(patrimonioRD)}</span>
+        </div>
+        <div className="mini-stat proximo">
+          <span className="ms-label">Próximo pago</span>
+          <span className="ms-value">{prox ? fmtDate(prox.fecha) : '—'}{prox ? <span className="ms-label" style={{ display: 'block' }}>{money(prox.monto)}</span> : null}</span>
+        </div>
       </div>
 
-      {tab === 'resumen' && <ResumenTab prestamos={prestamos} inversores={inversores} cuentas={cuentas} />}
-      {tab === 'analisis' && <AnalisisTab prestamosTab={prestamosTab} tarjetas={tarjetas} inversores={inversores} cuentas={cuentas} />}
-      {['deudas', 'prestamos', 'tarjetas'].includes(tab) && <DeudasTab prestamos={prestamosTab} tarjetas={tarjetas} />}
-      {tab === 'inversores' && <InversoresTab inversores={inversores} />}
+      <div className="tabs">
+        {AREAS.map((a) => (
+          <button key={a.id} className={tab === a.id ? 'tab active' : 'tab'} onClick={() => setTab(a.id)}>{a.label}</button>
+        ))}
+      </div>
+
+      {tab === 'deudas' && <DeudasTab prestamos={prestamosTab} tarjetas={tarjetas} />}
       {tab === 'cuentas' && <CuentasTab cuentas={cuentas} />}
-      {tab === 'pagos' && <PagosProgramadosTab />}
+      {tab === 'compromisos' && (
+        <>
+          <PagosProgramadosTab />
+          <InversoresTab inversores={inversores} />
+        </>
+      )}
+      {tab === 'analisis' && <AnalisisTab prestamosTab={prestamosTab} tarjetas={tarjetas} inversores={inversores} cuentas={cuentas} />}
     </div>
   );
 }

@@ -435,6 +435,11 @@ table.data tr.row-active td:first-child { box-shadow: inset 3px 0 0 var(--accent
 .center-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
 .login-card { width: 340px; max-width: 90vw; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 30px; display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow-lg); }
 
+/* Strip de resumen de Finanzas (4 mini-stats, siempre visible) */
+.fin-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-3); margin-bottom: var(--s-5); }
+@media (max-width: 1024px) { .fin-strip { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 480px) { .fin-strip { grid-template-columns: 1fr; } }
+
 /* Mini stat con borde de color (strip Finanzas Aurora) */
 .mini-stat { background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--r-md); padding: var(--s-3) var(--s-4); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 3px; }
 .mini-stat.capital { border-left-color: var(--accent); }
