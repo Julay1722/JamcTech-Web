@@ -8,6 +8,16 @@ import { DataProvider } from './hooks/useData.jsx';
 import LoginScreen from './components/LoginScreen.jsx';
 import App from './App.jsx';
 
+// Tema Aurora: aplica el tema guardado (o el del sistema la 1ra vez) ANTES de
+// montar, para que no haya flash. El toggle (en App) actualiza esto en vivo.
+(function initTheme() {
+  try {
+    const saved = localStorage.getItem('jamc_theme');
+    const theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch { document.documentElement.setAttribute('data-theme', 'light'); }
+})();
+
 function Root() {
   const [authState, setAuthState] = useState('loading'); // 'loading' | 'out' | sessionObj
 

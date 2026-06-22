@@ -26,6 +26,15 @@ export default function App() {
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem('nav-collapsed') === '1');
   useEffect(() => { localStorage.setItem('nav-collapsed', navCollapsed ? '1' : '0'); }, [navCollapsed]);
 
+  // Tema Aurora light/dark (init en main.jsx; aquí el toggle + persistencia).
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'light');
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('jamc_theme', next); } catch { /* ignore */ }
+  };
+
   const alertCount = data.alertCount || 0;
   const pages = [
     { id: 'overview',   label: 'Resumen',    icon: '◉', badge: null },
@@ -70,11 +79,16 @@ export default function App() {
         </div>
 
         <div style={{ marginTop: 'auto', padding: 'var(--s-3)', fontSize: 11, color: 'var(--text-4)' }}>
-          <div>Build v3.0</div>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            <button className="theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'} aria-label="Cambiar tema">
+              {theme === 'dark' ? '☀' : '☾'}
+            </button>
+            <button className="btn ghost" onClick={() => auth.signOut()} style={{ flex: 1, fontSize: 11, padding: '4px 10px' }}>
+              ⎋ Salir
+            </button>
+          </div>
+          <div>Build Aurora · v3.2</div>
           <div>{fmtDate(today)} · Supabase ✓</div>
-          <button className="btn ghost" onClick={() => auth.signOut()} style={{ marginTop: 8, fontSize: 11, padding: '4px 10px' }}>
-            ⎋ Salir
-          </button>
         </div>
       </aside>
 
