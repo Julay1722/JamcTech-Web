@@ -169,6 +169,14 @@ Principio del fix: cada crear/editar/borrar es una **transacción atómica
 sincronizada** (toca todas las tablas de la entidad, monto y moneda correctos,
 FKs siempre ligadas) y cada KPI/saldo lee **una sola fuente de verdad** (vistas
 `vw_*`). Auditar cada arreglo con [[jamc-paridad]].
+- **CTA-2 transferencia interna = DOS patas** (RESUELTO 2026-06-08): `vw_saldo_cuenta`
+  solo suma por `cuenta_id` (NO lee `cuenta_destino_id`). Por eso una transferencia
+  de UNA sola fila (salida del origen + `cuenta_destino_id`) debita el origen pero
+  **nunca acredita el destino** en el saldo. Correcto = 2 movimientos
+  `TRANSFERENCIA_INTERNA` (salida del origen + entrada al destino) con un token
+  `#TRF-...` compartido en `notas`; al borrar una pata se borran ambas (sin pata
+  huérfana). Arreglado en `createMovimiento`/`removeMovimiento` (src/lib/db/writers.js),
+  verificado contra `vw_saldo_cuenta`.
 - *(Añadir aquí cada nuevo hallazgo: form/KPI afectado, qué guardaba mal, cuál
   es el guardado correcto y dónde se arregló.)*
 

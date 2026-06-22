@@ -2,7 +2,25 @@
 
 > Doc vivo de lo que falta. Contexto del negocio → `CLAUDE.md` · Schema DB → `SCHEMA.md` ·
 > Agentes (futuro) → `JARVIS.md` · Login de los tests → `tests/README-AUTH.md`.
-> Última actualización: **2026-06-05**.
+> Última actualización: **2026-06-07**.
+
+---
+
+## 🚧 Reescritura Vite + React (branch `reconstruccion`) — COMPLETA
+
+El dashboard fue reescrito desde cero (Vite + React modular) en el branch
+`reconstruccion`, arreglando los bugs de guardado de `BUGS_DATOS.md`. Estado:
+- ✅ 6 páginas (Resumen, Ventas, Inventario, Finanzas, Libro, Alertas) + auth + shell.
+- ✅ Capa de datos limpia (`src/lib/db/`), KPIs cuadran vs SQL, writers verificados
+  end-to-end contra la DB (ventas, lote USD→RD, pago de cuota, transferencia, CRUD).
+- ✅ Build/preview de producción OK, `netlify.toml` a Vite, código muerto borrado.
+- **Falta (acciones de Julio):** conectar el repo a Netlify desde el branch nuevo,
+  hacer un walkthrough manual de cada form, y mergear `reconstruccion` → `master`
+  cuando esté conforme. Pendientes menores en `REWRITE_INVENTORY.md`.
+
+Correrlo: `npm install && npm run dev` → http://localhost:5173 (ver `CLAUDE.md`).
+
+---
 
 ---
 
