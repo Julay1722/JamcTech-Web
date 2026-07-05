@@ -60,9 +60,23 @@ export function ultimoDiaMesISO(dia) {
 // PAGO_* ligado a ese préstamo con fecha dentro de la ventana = ciclo ya atendido.
 // Así la UI deja de marcar "vence mañana / no pagado" cuando Julio ya pagó.
 export function cicloPagoEstado(prestamo, movimientos) {
-  const venceDia = prestamo.diaVencimiento;
+  const venceDia = Number(prestamo.diaVencimiento) || 0;
+  const corteDia = Number(prestamo.diaCorte) || 0;
   const proximoPago = venceDia ? proximoDiaMesISO(venceDia) : null;
-  const cicloStart = ultimoDiaMesISO(prestamo.diaCorte) || ultimoDiaMesISO(venceDia);
+  // El ciclo cuyo pago vence en `proximoPago` cerró en SU corte correspondiente:
+  // si vence > corte, el corte es del MISMO mes que el vencimiento; si vence <= corte,
+  // el corte fue el mes ANTERIOR. Anclar al vencimiento (no a "el último corte antes de
+  // hoy") evita que un pago del ciclo YA vencido marque como pagado el ciclo siguiente.
+  let cicloStart = null;
+  if (proximoPago && corteDia) {
+    const [y, m] = proximoPago.slice(0, 10).split('-').map(Number);
+    const base = new Date(y, (m - 1) - (venceDia > corteDia ? 0 : 1), 1);
+    const ultimo = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+    const dd = Math.min(corteDia, ultimo);
+    cicloStart = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  } else if (proximoPago) {
+    cicloStart = ultimoDiaMesISO(venceDia); // sin día de corte: fallback al vencimiento
+  }
   const pagos = (movimientos || []).filter((mv) => mv.prestamoId === prestamo.id
     && (mv.tipo === 'PAGO_LINEA_CREDITO' || mv.tipo === 'PAGO_TARJETA_CREDITO') && mv.salida > 0
     && (!cicloStart || String(mv.fecha).slice(0, 10) >= cicloStart));
