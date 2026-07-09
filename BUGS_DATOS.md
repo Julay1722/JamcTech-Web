@@ -229,7 +229,17 @@ rastro de la tasa (resuelve el pendiente **CTA-3 / INV-4**).
   que el DRAWDOWN quede con `entrada>0` (regla 7) por esta ruta.
 - **Modelo de inventario (no es bug):** en el lote 19 se separaron los AK820 PRO
   por switch (Gift $33.35 / Fly Fish $30.97) en SKUs distintos y se renombraron
-  los códigos basura `-BAG`/`-GIB` a color legible. Costos y prorrateo intactos.
+  los códigos basura `-BAG`/`-GIB` a color legible.
+- **PRORRATEO — cambio de método (regla 2).** `fn_prorratear_costos_lote` pasó de
+  repartir el costo compartido **proporcional al valor base** a repartirlo **por
+  cantidad** (cada unidad carga `total_compartido / total_unidades`). Motivo: Julio
+  no quería que los productos caros (Pro) absorbieran courier de más y le comieran
+  el margen. Es el nuevo método por defecto (aplica a lotes NUEVOS automáticamente).
+  El total del lote NO cambia (solo la distribución interna); las ventas pasadas
+  conservan su `cpp_historico`. Se recalculó **solo el lote 19** (los lotes viejos
+  conservan su reparto por valor hasta que se re-editen — decisión explícita de
+  Julio). Reversible: volver la fórmula a valor base y re-correr `fn_prorratear_costos_lote`.
+  Docs actualizadas: `CLAUDE.md` regla 2, `TODO.md`. **Frontend sin cambios** (solo lee).
 
 ### PENDIENTE (decisión de Julio — se optó por "dejar por ahora")
 
