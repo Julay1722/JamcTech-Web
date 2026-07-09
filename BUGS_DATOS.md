@@ -198,3 +198,53 @@ Actualizar `SCHEMA.md`/`CLAUDE.md` con esto antes de codificar nada.
 
 Todo verificable: cada hallazgo trae evidencia SQL o `archivo:línea` en los
 reportes de los subagentes. Auditar cada arreglo con la skill `jamc-paridad`.
+
+---
+
+## Auditoría FX / moneda — 2026-07-09 (branch JAMCClaudeV3.2)
+
+Origen: auditoría del lote AK820 (L-20260515-17) que destapó que el modelo **no
+registraba moneda en cuentas/tarjetas USD**. `monto_usd` estaba vacío en el 100%
+de `movimientos` y las tarjetas USD llevaban su saldo en USD implícito sin dejar
+rastro de la tasa (resuelve el pendiente **CTA-3 / INV-4**).
+
+### RESUELTOS en esta sesión (fix de escritura, no copiar el bug)
+
+- **FX-1 — Transferencias RD↔USD no guardaban `monto_usd`** (solo `tasa_cambio`).
+  Las patas quedaban sin el valor USD → conversión no auditable. **Fix:**
+  `createMovimiento` (transfer branch, `src/lib/db/writers.js` ~L387) ahora
+  persiste `monto_usd` en AMBAS patas; `MovForm.jsx` calcula el valor USD del
+  cruce (`montoUsdTransfer`) y lo pasa. La tasa ya se calculaba bien
+  (`montoNum/llegaNum`); el `6.2799` de la transfer 727/728 fue dato viejo/manual.
+  Verificado con build. Fila 727/728 corregida a mano: tasa 60.2799, monto_usd 250.
+- **FX-2 — Gasto/pago con cuenta o tarjeta USD no capturaba USD+tasa.** El form
+  pedía solo "Monto (RD$)" aunque la cuenta/tarjeta fuera USD → se perdía el
+  equivalente RD y la diferencia cambiaria al pagar después (el caso que reportó
+  Julio). **Fix:** `MovForm.jsx` detecta contexto USD (medio o préstamo con
+  `moneda==='USD'`), pide el monto en **USD** + "Tasa del día (RD/USD)" y guarda
+  `monto_usd`+`tasa_cambio`; `createPagoFinanciero` (`writers.js` ~L484) ahora
+  persiste ambos. Regla adoptada: **una deuda USD se paga desde una cuenta USD**
+  (si es RD, el form lo bloquea y pide transferir primero — ahí queda la tasa).
+  De paso se corrigió que el gasto a **tarjeta** pasara `monto` (no `salida`) para
+  que el DRAWDOWN quede con `entrada>0` (regla 7) por esta ruta.
+- **Modelo de inventario (no es bug):** en el lote 19 se separaron los AK820 PRO
+  por switch (Gift $33.35 / Fly Fish $30.97) en SKUs distintos y se renombraron
+  los códigos basura `-BAG`/`-GIB` a color legible. Costos y prorrateo intactos.
+
+### PENDIENTE (decisión de Julio — se optó por "dejar por ahora")
+
+- **FX-3 — Diferencia cambiaria no se contabiliza como línea propia.** Con FX-1/2
+  la info queda registrada (USD+tasa), pero pagar un cargo USD a una tasa distinta
+  a la del cargo no genera un movimiento de ganancia/pérdida FX. Falta definir el
+  método de emparejamiento (promedio vs FIFO) antes de automatizarlo.
+- **LINK-1 — Dinero registrado pero sin ligar (~RD$ 942K).** El reload del sheet
+  cargó `movimientos` sin `lote_id`/`venta_id`: 18 de 20 lotes y casi todas las
+  ventas migradas sin caja ligada. Backfill por match fecha+monto (staging +
+  revisión con Julio antes de aplicar).
+- **LINK-2 — 6 pagos de tarjeta Scotia sin `prestamo_id` (RD$ 48,731).** No se
+  ligan solos: la tarjeta Scotia CC RD está en saldo 0 y solo tiene 700.50 en
+  cargos; ligar los pagos sin registrar los cargos la dejaría en −48K. Requiere
+  reconstruir el lado de consumos (estado de cuenta) o registrar un cargo agregado.
+- **LINK-3 — Coop: schedule vs pagos reales (RD$ 14,137)** y **Qik saldo negativo
+  (RD$ 1,830)** y **BHD Línea `saldo_corte` vs FK (RD$ 7,742)** — reconciliación
+  cuota↔caja pendiente.
