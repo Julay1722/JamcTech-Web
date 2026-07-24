@@ -142,7 +142,7 @@ Si Julio decide hacer abonos extra al capital, regenerar el schedule (ver funci�
 
 1. **CPP automático**: al insertar/actualizar `entradas` con status='Recibido', se recalcula `skus.cpp_actual` (promedio ponderado por lote considerando todas las entradas recibidas históricas).
 
-2. **Prorrateo de costos compartidos del lote**: cuando un lote tiene `costo_envio` + `costo_courier` + `costo_impuestos`, se reparte proporcionalmente entre las entradas del lote según valor base de cada una.
+2. **Prorrateo de costos compartidos del lote**: cuando un lote tiene `costo_envio` + `costo_courier` + `costo_impuestos`, se reparte **por cantidad** (cada unidad carga la misma porción) entre las entradas del lote. *(Cambiado 2026-07-09 desde "proporcional al valor base" — Julio prefiere por cantidad para no inflar el costo/margen de los productos caros. Los lotes creados antes conservan el reparto por valor hasta que se re-editen; ver `BUGS_DATOS.md`.)*
 
 3. **Snapshot de CPP en venta**: al insertar `ventas_items`, se captura el `cpp_actual` del SKU en ese momento como `cpp_historico` (así la ganancia es históricamente correcta aunque el CPP cambie después).
 

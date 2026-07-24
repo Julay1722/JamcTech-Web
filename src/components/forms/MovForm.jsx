@@ -68,6 +68,7 @@ export default function MovForm({ onDone }) {
   const [fecha, setFecha] = useState(todayISO());
   const [monto, setMonto] = useState('');
   const [montoLlega, setMontoLlega] = useState(''); // transferencia entre monedas distintas
+  const [tasa, setTasa] = useState(''); // tasa RD/USD para gasto/pago en cuenta o tarjeta USD
   const [notas, setNotas] = useState('');
 
   // Gasto / Ingreso
@@ -99,11 +100,34 @@ export default function MovForm({ onDone }) {
   const tasaTransfer = crossCurrency && montoNum > 0 && llegaNum > 0
     ? (origen.moneda === 'RD' ? montoNum / llegaNum : llegaNum / montoNum) // RD por 1 USD
     : null;
+  // Valor USD del cruce: el lado que está en USD (sale o llega, según cuál cuenta es USD).
+  const montoUsdTransfer = crossCurrency
+    ? (origen.moneda === 'USD' ? montoNum : llegaNum)
+    : null;
+
+  // ── Contexto USD: gasto pagado con cuenta/tarjeta USD, o pago de una deuda USD.
+  // El monto se captura en USD (moneda nativa de la cuenta/tarjeta) y se guarda
+  // monto_usd + tasa del día para tener el equivalente RD auditable.
+  const medioCuenta = (cuentas || []).find((c) => c.id === medio.cuentaId);
+  const prestamoSel = (prestamos || []).find((p) => p.id === prestamoId);
+  const cuentaPago = (cuentas || []).find((c) => c.id === cuentaPagoId);
+  const gastoUsd = modo === 'gasto' && medioCuenta?.moneda === 'USD';
+  const pagoUsd = modo === 'pago_deuda' && prestamoSel?.moneda === 'USD';
+  const usdCtx = gastoUsd || pagoUsd;
+  const tasaNum = num(tasa);
+  const rdEquiv = usdCtx && montoNum > 0 && tasaNum > 0 ? montoNum * tasaNum : null;
+  // Pagar una tarjeta/deuda USD desde una cuenta RD es cross-currency (no se puede en
+  // una sola pata sin perder la tasa). Se exige pagar desde una cuenta USD: primero
+  // transferí a tu cuenta USD (ahí queda la tasa) y paga desde ahí.
+  const pagoUsdCuentaMismatch = pagoUsd && cuentaPago && cuentaPago.moneda !== 'USD';
+  const gastoUsdTasaOk = !gastoUsd || tasaNum > 0; // gasto USD exige tasa del día
+  const usdCtxOk = gastoUsdTasaOk && !pagoUsdCuentaMismatch;
   const transferOk = !crossCurrency || llegaNum > 0;
 
   function reset() {
     setMonto('');
     setMontoLlega('');
+    setTasa('');
     setNotas('');
     setContraparteId(null);
   }
@@ -117,12 +141,18 @@ export default function MovForm({ onDone }) {
     try {
       if (modo === 'gasto') {
         if (!medio.cuentaId) throw new Error('Selecciona el medio de pago.');
-        // Si medio.prestamoId viene ligado (tarjeta), createMovimiento lo hace DRAWDOWN (regla 7).
+        if (gastoUsd && !(tasaNum > 0)) throw new Error('Indica la tasa del día (RD por USD).');
+        const esCard = !!medio.prestamoId;
+        // Si medio.prestamoId viene ligado (tarjeta), createMovimiento lo hace DRAWDOWN
+        // con entrada = monto (regla 7). En efectivo/débito va como salida.
         await createMovimiento({
           fecha, tipo: tipoGasto,
           cuentaId: medio.cuentaId,
           prestamoId: medio.prestamoId || null,
-          salida: montoNum,
+          monto: montoNum,
+          salida: esCard ? undefined : montoNum,
+          montoUsd: gastoUsd ? montoNum : null,
+          tasaCambio: gastoUsd ? tasaNum : null,
           contraparteId: contraparteId || null,
           notas,
         });
@@ -154,12 +184,14 @@ export default function MovForm({ onDone }) {
           monto: montoNum,
           montoLlega: crossCurrency ? llegaNum : montoNum,
           tasaCambio: tasaTransfer,
+          montoUsd: montoUsdTransfer,
           notas,
         });
         toast.ok('Transferencia registrada');
       } else if (modo === 'pago_deuda') {
         if (!prestamoId) throw new Error('Selecciona el préstamo o tarjeta.');
         if (!cuentaPagoId) throw new Error('Selecciona la cuenta de pago.');
+        if (pagoUsdCuentaMismatch) throw new Error('Una deuda USD se paga desde una cuenta USD. Transferí primero a tu cuenta USD (ahí queda la tasa) y paga desde ahí.');
         const prestamo = (prestamos || []).find((p) => p.id === prestamoId);
         await createPagoFinanciero({
           fecha, monto: montoNum,
@@ -167,6 +199,8 @@ export default function MovForm({ onDone }) {
           tipo: tipoPagoDeuda(prestamo),
           side: 'salida',
           prestamoId,
+          montoUsd: pagoUsd ? montoNum : null,
+          tasaCambio: pagoUsd && tasaNum > 0 ? tasaNum : null,
           notas: notas || `Pago ${prestamo?.nombre || 'deuda'}`,
         });
         toast.ok('Pago de deuda registrado');
@@ -223,9 +257,19 @@ export default function MovForm({ onDone }) {
           <Field label="Medio de pago" hint="Si elegís una tarjeta, el gasto se registra como DRAWDOWN." required>
             <MedioPagoSelect value={medio} onChange={setMedio} invalid={!medio.cuentaId} />
           </Field>
-          <Field label="Monto (RD$)" required>
+          <Field label={gastoUsd ? 'Monto (USD$)' : 'Monto (RD$)'} required>
             <MoneyInput value={monto} onChange={setMonto} min="0" invalid={!montoOk} placeholder="0.00" />
           </Field>
+          {gastoUsd && (
+            <>
+              <Field label="Tasa del día (RD por 1 USD)" hint="La cuenta/tarjeta es en USD: guardamos el monto USD + la tasa para el equivalente RD." required>
+                <MoneyInput value={tasa} onChange={setTasa} min="0" invalid={!(tasaNum > 0)} placeholder="0.00" />
+              </Field>
+              <div className="field-hint" style={{ marginTop: -6, marginBottom: 12 }}>
+                {rdEquiv ? <>Equivalente: <strong>RD$ {rdEquiv.toFixed(2)}</strong></> : 'Equivalente RD: completa monto y tasa.'}
+              </div>
+            </>
+          )}
           <Field label="Contraparte (opcional)">
             <ContraparteSelect value={contraparteId} onChange={setContraparteId} incluirTodas placeholder="— ninguna —" />
           </Field>
@@ -281,11 +325,28 @@ export default function MovForm({ onDone }) {
             <PrestamoSelect value={prestamoId} onChange={setPrestamoId} invalid={!prestamoId} />
           </Field>
           <Field label="Cuenta de pago" required>
-            <CuentaSelect value={cuentaPagoId} onChange={setCuentaPagoId} filter="liquidas" invalid={!cuentaPagoId} />
+            <CuentaSelect value={cuentaPagoId} onChange={setCuentaPagoId} filter="liquidas" invalid={!cuentaPagoId || pagoUsdCuentaMismatch} />
           </Field>
-          <Field label="Monto (RD$)" required>
+          {pagoUsdCuentaMismatch && (
+            <div className="field-hint" style={{ marginTop: -6, marginBottom: 12, color: 'var(--danger, #c0392b)' }}>
+              Esta deuda es en USD: págala desde una cuenta USD. Transferí primero a tu cuenta USD (ahí queda la tasa) y paga desde ahí.
+            </div>
+          )}
+          <Field label={pagoUsd ? 'Monto (USD$)' : 'Monto (RD$)'} required>
             <MoneyInput value={monto} onChange={setMonto} min="0" invalid={!montoOk} placeholder="0.00" />
           </Field>
+          {pagoUsd && (
+            <>
+              <Field label="Tasa del día (RD por 1 USD)" hint="Opcional: para dejar el equivalente RD del pago.">
+                <MoneyInput value={tasa} onChange={setTasa} min="0" placeholder="0.00" />
+              </Field>
+              {rdEquiv && (
+                <div className="field-hint" style={{ marginTop: -6, marginBottom: 12 }}>
+                  Equivalente: <strong>RD$ {rdEquiv.toFixed(2)}</strong>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -309,7 +370,7 @@ export default function MovForm({ onDone }) {
 
       <div className="modal-actions">
         <button type="button" className="btn ghost" onClick={() => onDone?.()} disabled={busy}>Cancelar</button>
-        <button type="submit" className="btn" disabled={busy || !montoOk || !transferOk}>
+        <button type="submit" className="btn" disabled={busy || !montoOk || !transferOk || !usdCtxOk}>
           {busy ? 'Guardando…' : 'Registrar'}
         </button>
       </div>

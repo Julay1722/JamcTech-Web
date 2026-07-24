@@ -382,6 +382,9 @@ export async function createMovimiento(d) {
     // destino, tasa 59. Cada saldo queda correcto en la moneda de su cuenta.
     const montoLlega = d.montoLlega != null && num(d.montoLlega) > 0 ? num(d.montoLlega) : monto;
     const tasa = d.tasaCambio != null && num(d.tasaCambio) ? num(d.tasaCambio) : null;
+    // Persistimos el valor USD del cruce en AMBAS patas para que la conversión
+    // quede auditable (antes quedaba null y la diferencia cambiaria se perdía).
+    const montoUsd = d.montoUsd != null && num(d.montoUsd) ? num(d.montoUsd) : null;
     // 🐛 CTA-2: transferencia = DOS patas. vw_saldo_cuenta solo suma por cuenta_id
     // (NO lee cuenta_destino_id), así que una sola fila debitaría el origen pero
     // NUNCA acreditaría el destino. Creamos: (salida del origen) + (entrada al
@@ -391,8 +394,8 @@ export async function createMovimiento(d) {
     const token = `#TRF-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const nota = d.notas || 'Transferencia interna';
     const legs = [
-      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId, cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, tasa_cambio: tasa, notas: `${nota} ${token}` },
-      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaDestinoId, cuenta_destino_id: d.cuentaId, entrada: montoLlega, salida: 0, tasa_cambio: tasa, notas: `${nota} ${token}` },
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaId, cuenta_destino_id: d.cuentaDestinoId, entrada: 0, salida: monto, monto_usd: montoUsd, tasa_cambio: tasa, notas: `${nota} ${token}` },
+      { fecha: d.fecha, tipo: 'TRANSFERENCIA_INTERNA', cuenta_id: d.cuentaDestinoId, cuenta_destino_id: d.cuentaId, entrada: montoLlega, salida: 0, monto_usd: montoUsd, tasa_cambio: tasa, notas: `${nota} ${token}` },
     ];
     const { data, error } = await supabase.from('movimientos').insert(legs).select();
     if (error) throw new Error(`createMovimiento (transfer): ${error.message}`);
@@ -479,6 +482,10 @@ export async function createPagoFinanciero(d) {
     prestamo_id: d.prestamoId || null,
     inversor_id: d.inversorId || null, // 🐛 INVR-1
     cuota_id: d.cuotaId || null,
+    // FX: en pagos a deuda/cuenta USD guardamos el valor USD + la tasa del día,
+    // para que quede el equivalente RD y sea auditable (antes se perdía).
+    monto_usd: d.montoUsd != null && num(d.montoUsd) ? num(d.montoUsd) : null,
+    tasa_cambio: d.tasaCambio != null && num(d.tasaCambio) ? num(d.tasaCambio) : null,
     notas: d.notas || '',
   }).select().single();
   if (error) throw new Error(`createPagoFinanciero: ${error.message}`);

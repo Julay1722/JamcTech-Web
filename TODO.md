@@ -28,7 +28,7 @@ Correrlo: `npm install && npm run dev` → http://localhost:5173 (ver `CLAUDE.md
 - Migración Google Sheets V2.1 → Supabase + dashboard Airtable → Supabase.
 - Dashboard v3 (estilo "Amber Terminal"): Resumen · Alertas · Ventas · Inventario · Finanzas.
 - Finanzas: USD nativo (tasa configurable), análisis de deuda con semáforo, compensaciones dueño/inversor.
-- Inventario: SKUs/lotes/CPP, prorrateo por valor base, estado **Descontinuado** con apartado propio.
+- Inventario: SKUs/lotes/CPP, prorrateo por cantidad (cambiado 2026-07-09; antes por valor base), estado **Descontinuado** con apartado propio.
 - Ventas legacy: 8 descifradas del sheet "1722", el resto quedan legacy (sin producto en la fuente).
 - **Seguridad para web (2026-06-05):** login real (Supabase Auth) + RLS cerrado a solo `authenticated`
   (`anon` = 0 policies) + Netlify publica solo `dist/` (allowlist, sin docs/tests).

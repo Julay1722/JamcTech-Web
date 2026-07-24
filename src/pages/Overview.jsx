@@ -43,6 +43,11 @@ export default function OverviewPage({ period, customRange }) {
     // líquidas RD al CIERRE de cada mes (como el sheet). Cash flow = operacional
     // neto del mes (naturaleza CASHFLOW). Rendimiento = ganancia/ventas.
     const liquidasRD = new Set(cuentas.filter((c) => c.esLiquida && c.moneda !== 'USD').map((c) => c.id));
+    const usdCuentas = new Set(cuentas.filter((c) => c.moneda === 'USD').map((c) => c.id));
+    // Cash flow OPERATIVO (CFO): solo la operación del negocio. Se excluye lo que NO
+    // es flujo operativo real: financiamiento (aporte del dueño), transferencias
+    // internas (mover dinero propio) y ajustes/cuadres (no son efectivo real).
+    const noOperativo = new Set(['TRANSFERENCIA_INTERNA', 'APORTE_DUENO', 'AJUSTE']);
     const mensual = {};
     const mes = (f) => (f || '').slice(0, 7);
     ventas.forEach((v) => {
@@ -53,7 +58,12 @@ export default function OverviewPage({ period, customRange }) {
     (movimientos || []).forEach((mv) => {
       const ym = mes(mv.fecha); if (!ym) return;
       const r = (mensual[ym] ||= { ventas: 0, ganancia: 0, n: 0, cashflow: 0, capDelta: 0 });
-      if (mv.naturaleza === 'CASHFLOW') r.cashflow += mv.entrada - mv.salida;
+      if (mv.naturaleza === 'CASHFLOW' && !noOperativo.has(mv.tipo)) {
+        // Movimiento en cuenta USD → convertir a RD con su tasa antes de sumar.
+        r.cashflow += usdCuentas.has(mv.cuentaId) && mv.tasaCambio
+          ? (mv.entrada - mv.salida) * mv.tasaCambio
+          : (mv.entrada - mv.salida);
+      }
       if (liquidasRD.has(mv.cuentaId)) r.capDelta += mv.entrada - mv.salida;
     });
     let capAcum = 0;
@@ -151,7 +161,7 @@ export default function OverviewPage({ period, customRange }) {
         <div className="section-head">
           <div>
             <div className="section-title">Resumen mensual</div>
-            <div className="section-desc">capital líquido al cierre de cada mes · ventas, ganancia y cash flow operacional del mes</div>
+            <div className="section-desc">capital líquido al cierre de cada mes · ventas, ganancia y cash flow operativo (operación pura: sin aportes, préstamos ni transferencias)</div>
           </div>
         </div>
         <table className="data">
