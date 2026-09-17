@@ -15,7 +15,8 @@ Tienda online de periféricos gaming (mouse, teclados, headsets, mousepads, stan
 | **Database** | Supabase (Postgres) | ✓ Reload total del sheet live 1722 ProV2.1 (2026-05-30): 269 movimientos · 196 ventas · 79 entradas · 19 lotes · 49 SKUs (con stock+precio) · 5 préstamos. KPIs cuadran con el sheet: capital 36,960 · revenue 393,450 · ganancia 157,846 · stock 111 ud. Cuadre vs cierre = 1 fila AJUSTE (drift manual del sheet). Generador: `backup_2026-05-30/build_load.js`. |
 | **Frontend dashboard** | **Vite + React** (branch `reconstruccion`, 2026-06-07) | ✓ Reescritura modular: `src/lib/db/{loaders,writers}.js` + `src/pages/*`. Capa de datos limpia, bugs de `BUGS_DATOS.md` arreglados y verificados contra la DB. `master` conserva el monolito Babel viejo. |
 | **RLS / Auth** | 🔒 Blindado (2026-06-05): solo `authenticated` tiene acceso (login real Supabase Auth). `anon` = 0 policies → la llave pública del bundle NO devuelve nada sin login. Agentes usan rol `jarvis_readonly` (separado). Usuario dueño: jamctech17@gmail.com. Gate en `Root()` (index.html) + boot gateado en supabase-client.js. | ✓ Listo para publicar |
-| **Repo dashboard local** | C:\Users\coco2\OneDrive\Escritorio\V17 | Git inicializado · 5+ commits |
+| **Repo dashboard local** | C:\Users\user1\Desktop\Jamc Webpage | Clon de GitHub · branch de trabajo `JAMCClaudeV3.2` |
+| **Repo GitHub (activo)** | github.com/Julay1722/jamcs-dashboard | ✓ Fuente de verdad. Branch de trabajo: `JAMCClaudeV3.2` |
 | **Repo GitHub (legacy)** | github.com/Julay1722/Jamc-s | NO sincronizado con esta versión |
 | **Fuente histórica** | Google Sheets "1722PRO V2.1" (ya migrado a Supabase) | Solo referencia |
 
@@ -31,9 +32,9 @@ Service role key: [NO usar en frontend. Solo para scripts admin.]
 
 ## Cómo correrlo
 
-> **Branch `reconstruccion` (Vite + React, versión nueva):**
+> **Versión Vite + React (actual, branch de trabajo `JAMCClaudeV3.2`):**
 ```powershell
-cd C:\Users\coco2\OneDrive\Escritorio\V17
+cd "C:\Users\user1\Desktop\Jamc Webpage"
 npm install
 npm run dev      # Vite → http://localhost:5173 (pide login Supabase Auth)
 npm run build    # genera dist/ (solo eso se publica en Netlify)
@@ -69,7 +70,7 @@ index.html                      ← solo <div id="root"> + <script src=/src/main
 ## Estructura del proyecto local
 
 ```
-C:\Users\coco2\OneDrive\Escritorio\V17\
+C:\Users\user1\Desktop\Jamc Webpage\
 ├── index.html               # Entry Vite (div#root + módulo)
 ├── package.json             # vite, react, @supabase/supabase-js · scripts dev/build/preview
 ├── vite.config.js
