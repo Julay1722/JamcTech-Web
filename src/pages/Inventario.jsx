@@ -15,8 +15,11 @@
 //    DRAWDOWN ligado al prestamo_id gemelo). Nunca defaultea a BHD.
 //  - FormSKU genera id_sku {CAT}-{MARCA}-{MODELO}-{COLOR} en MAYÚSCULAS y
 //    valida que no exista ya en data.skus.
-//  - EditLoteModal usa updateLoteHeader/updateEntrada/addEntradaToLote/
+//  - EditLoteModal usa updateLoteHeader/updateEntrada/addTandaToLote/
 //    removeEntrada con (moneda, tasa) correctos.
+//  - Lotes por TANDAS: cada compra agregada al lote (fecha + medio de pago
+//    propios) genera su propio movimiento de mercancía (col entradas.tanda).
+//  - Se escribe el COSTO TOTAL por SKU; el costo/ud lo calcula el sistema.
 // ════════════════════════════════════════════════════════════════
 import { useState, useMemo, useEffect, Fragment } from 'react';
 import { useData } from '../hooks/useData.jsx';
@@ -28,7 +31,7 @@ import { SkuSelect, MedioPagoSelect, ContraparteSelect } from '../components/Pic
 import { KPI, Sparkline } from '../components/Charts.jsx';
 import {
   createSKU, updateSKU, removeSKU, countSKURefs,
-  createLote, updateLoteHeader, updateEntrada, addEntradaToLote, removeEntrada, removeLote,
+  createLote, updateLoteHeader, updateEntrada, addTandaToLote, removeEntrada, removeLote, saveLoteCostos,
 } from '../lib/db/writers.js';
 import { SKU_CATEGORIAS, STATUS_LOTE } from '../lib/supabase.js';
 import { money, intNum, num, fmtDate, todayISO } from '../lib/format.js';
@@ -36,6 +39,41 @@ import { downloadCSV, csvName } from '../lib/csv.js';
 
 /* ──────────── helpers de presentación ──────────── */
 const CAT_CODE = { Mouse: 'MOU', Teclado: 'TEC', Headset: 'HEA', Stand: 'STA', 'Mouse Pad': 'PAD', Otro: 'OTR' };
+
+// Costos flexibles (Fase 2): proveedores pesan en KG, courier cobra en LB.
+const KG_TO_LB = 2.20462;
+const toLb = (v, unidad) => (unidad === 'kg' ? num(v) * KG_TO_LB : num(v));
+const fromLb = (lb, unidad) => (unidad === 'kg' ? num(lb) / KG_TO_LB : num(lb));
+const TIPOS_COSTO = ['Courier (USA→RD)', 'Envío (China→USA)', 'Impuestos / Aduana', 'Comisión / Fees', 'Otro'];
+const METODOS_COSTO = [
+  { value: 'PESO', label: 'Por peso' },
+  { value: 'VALOR', label: 'Por valor' },
+  { value: 'CANTIDAD', label: 'Por cantidad' },
+  { value: 'FIJO', label: 'Fijo por SKU' },
+];
+// Reparte los costos entre las líneas según cada método (espejo del trigger DB).
+// Devuelve un mapa key→{ total, porUd }. `linea` usa { cantidad, costoUd, pesoLb }.
+function repartoCostos(lineas, costos) {
+  const valid = lineas.filter((l) => l.skuId && num(l.cantidad) > 0);
+  const totQty = valid.reduce((s, l) => s + num(l.cantidad), 0);
+  const totVal = valid.reduce((s, l) => s + num(l.cantidad) * num(l.costoUd), 0);
+  const totPeso = valid.reduce((s, l) => s + num(l.pesoLb), 0);
+  const nLines = valid.length || 1;
+  const out = {};
+  valid.forEach((l) => {
+    let total = 0;
+    (costos || []).forEach((c) => {
+      const m = num(c.monto);
+      if (!(m > 0)) return;
+      if (c.metodo === 'PESO') total += totPeso > 0 ? m * (num(l.pesoLb) / totPeso) : (totQty > 0 ? m * (num(l.cantidad) / totQty) : 0);
+      else if (c.metodo === 'VALOR') total += totVal > 0 ? m * ((num(l.cantidad) * num(l.costoUd)) / totVal) : 0;
+      else if (c.metodo === 'FIJO') total += m / nLines;
+      else total += totQty > 0 ? m * (num(l.cantidad) / totQty) : 0;
+    });
+    out[l.key ?? l.skuId] = { total, porUd: num(l.cantidad) > 0 ? total / num(l.cantidad) : 0 };
+  });
+  return out;
+}
 const STATUS_LABEL = {
   PENDIENTE: 'Pendiente', EN_TRANSITO: 'En tránsito', EN_COURIER_USA: 'En courier USA',
   RECIBIDO: 'Recibido', CANCELADO: 'Cancelado',
@@ -834,13 +872,16 @@ function FormSKU({ onClose }) {
 }
 
 /* ════════════════════════ Líneas de SKU (reusable lote) ════════════════════════ */
-function LineasSku({ lineas, setLineas, monedaLabel }) {
-  const addLinea = () => setLineas((arr) => [...arr, { key: 'k' + Date.now() + Math.random(), skuId: null, cantidad: 1, costoUd: '' }]);
+// Escribís el COSTO TOTAL por SKU (lo que pagaste) y el sistema calcula el
+// costo/ud (total ÷ cantidad). El writer sigue recibiendo costoUd.
+const LINEA_COLS = '2fr 60px 90px 72px 74px 40px';
+function LineasSku({ lineas, setLineas, monedaLabel, pesoUnidad = 'kg', titulo = 'SKUs del lote' }) {
+  const addLinea = () => setLineas((arr) => [...arr, { key: 'k' + Date.now() + Math.random(), skuId: null, cantidad: 1, costoTotal: '', peso: '' }]);
   const updateLinea = (key, patch) => setLineas((arr) => {
     const next = arr.map((l) => (l.key === key ? { ...l, ...patch } : l));
     const last = next[next.length - 1];
     if (patch.skuId && last.key === key && last.skuId) {
-      next.push({ key: 'k' + Date.now() + Math.random(), skuId: null, cantidad: 1, costoUd: '' });
+      next.push({ key: 'k' + Date.now() + Math.random(), skuId: null, cantidad: 1, costoTotal: '', peso: '' });
     }
     return next;
   });
@@ -848,27 +889,102 @@ function LineasSku({ lineas, setLineas, monedaLabel }) {
 
   return (
     <div>
-      <div className="field-label" style={{ marginBottom: 8 }}>SKUs del lote</div>
-      <div className="line-row" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
+      <div className="field-label" style={{ marginBottom: 8 }}>{titulo}</div>
+      <div className="line-row" style={{ gridTemplateColumns: LINEA_COLS, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
         <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>SKU</span>
-        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Cantidad</span>
-        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo/ud ({monedaLabel})</span>
-        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Subtotal</span>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Cant.</span>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo total ({monedaLabel})</span>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Peso ({pesoUnidad})</span>
+        <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo/ud</span>
         <span></span>
       </div>
       {lineas.map((l) => {
-        const subtotal = num(l.cantidad) * num(l.costoUd);
+        const cant = num(l.cantidad);
+        const costoUd = cant > 0 ? num(l.costoTotal) / cant : 0;
         return (
-          <div key={l.key} className="line-row">
+          <div key={l.key} className="line-row" style={{ gridTemplateColumns: LINEA_COLS }}>
             <SkuSelect value={l.skuId} onChange={(v) => updateLinea(l.key, { skuId: v })} soloActivos={false} />
             <NumberInput value={l.cantidad} onChange={(v) => updateLinea(l.key, { cantidad: v })} min="1" />
-            <NumberInput value={l.costoUd} onChange={(v) => updateLinea(l.key, { costoUd: v })} placeholder="0" />
-            <span className="num" style={{ fontSize: 12, textAlign: 'right' }}>{subtotal > 0 ? subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</span>
+            <NumberInput value={l.costoTotal} onChange={(v) => updateLinea(l.key, { costoTotal: v })} placeholder="0" />
+            <NumberInput value={l.peso} onChange={(v) => updateLinea(l.key, { peso: v })} placeholder="0" step="0.01" />
+            <span className="num" style={{ fontSize: 12, textAlign: 'right', color: costoUd > 0 ? 'var(--text)' : 'var(--text-3)' }}>{costoUd > 0 ? costoUd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</span>
             <button className="icon-btn danger" onClick={() => removeLinea(l.key)} disabled={lineas.length === 1}>×</button>
           </div>
         );
       })}
       <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
+    </div>
+  );
+}
+
+/* ════════════════════════ CostosEditor (lista "Añadir costo") ════════════════════════ */
+// Lista flexible de costos del lote: cada uno con tipo + método de reparto + monto.
+// Muestra una vista previa de cómo se reparte entre los SKU (usa repartoCostos).
+function CostosEditor({ costos, setCostos, lineas, monedaLabel, defaultMedio = { cuentaId: null, prestamoId: null }, defaultFecha = null }) {
+  const add = () => setCostos((arr) => [...arr, { key: 'c' + Date.now() + Math.random(), tipo: TIPOS_COSTO[0], metodo: 'PESO', monto: '', medio: defaultMedio, fecha: defaultFecha }]);
+  const upd = (key, patch) => setCostos((arr) => arr.map((c) => (c.key === key ? { ...c, ...patch } : c)));
+  const del = (key) => setCostos((arr) => arr.filter((c) => c.key !== key));
+
+  const validLineas = lineas.filter((l) => l.skuId && num(l.cantidad) > 0);
+  const reparto = repartoCostos(validLineas, costos.map((c) => ({ metodo: c.metodo, monto: num(c.monto) })));
+  const totalCostos = costos.reduce((s, c) => s + num(c.monto), 0);
+  const hayPeso = validLineas.some((l) => num(l.pesoLb) > 0);
+  const faltaPeso = costos.some((c) => c.metodo === 'PESO' && num(c.monto) > 0) && !hayPeso;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div className="field-label">Costos del lote</div>
+        <button className="btn ghost" onClick={add}>+ Añadir costo</button>
+      </div>
+
+      {costos.length === 0 && <div className="field-hint">Sin costos compartidos. Añade courier, envío, aduana, etc. — cada uno con su método de reparto y su medio de pago.</div>}
+
+      {costos.map((c) => (
+        <div key={c.key} style={{ border: '1px solid var(--border)', borderRadius: 4, padding: 'var(--s-2)', marginBottom: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 90px 40px', gap: 'var(--s-2)', alignItems: 'center' }}>
+            <Select value={c.tipo} onChange={(v) => upd(c.key, { tipo: v })} options={TIPOS_COSTO} />
+            <Select value={c.metodo} onChange={(v) => upd(c.key, { metodo: v })} options={METODOS_COSTO} />
+            <NumberInput value={c.monto} onChange={(v) => upd(c.key, { monto: v })} placeholder="0" />
+            <button className="icon-btn danger" onClick={() => del(c.key)}>×</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 'var(--s-2)', marginTop: 6 }}>
+            <MedioPagoSelect value={c.medio} onChange={(v) => upd(c.key, { medio: v })} invalid={num(c.monto) > 0 && !c.medio?.cuentaId} placeholder="— cuenta de este costo —" />
+            <DateInput value={c.fecha || ''} onChange={(v) => upd(c.key, { fecha: v })} />
+          </div>
+        </div>
+      ))}
+
+      {faltaPeso && <div style={{ fontSize: 12, color: 'var(--warning)', marginTop: 6 }}>⚠ Elegiste "Por peso" pero ningún SKU tiene peso — ese costo caerá a "por cantidad" hasta que pongas los pesos.</div>}
+
+      {totalCostos > 0 && validLineas.length > 0 && (
+        <div style={{ marginTop: 10, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>Vista previa del reparto ({monedaLabel})</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ color: 'var(--text-3)', fontSize: 10, textTransform: 'uppercase' }}>
+                <th style={{ textAlign: 'left', padding: '2px 0' }}>SKU</th>
+                <th style={{ textAlign: 'right' }}>Peso</th>
+                <th style={{ textAlign: 'right' }}>Le toca</th>
+                <th style={{ textAlign: 'right' }}>Por ud</th>
+              </tr>
+            </thead>
+            <tbody>
+              {validLineas.map((l) => {
+                const r = reparto[l.key ?? l.skuId] || { total: 0, porUd: 0 };
+                return (
+                  <tr key={l.key ?? l.skuId} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '4px 0' }}>{l.skuId || '—'}</td>
+                    <td style={{ textAlign: 'right', color: 'var(--text-3)' }}>{num(l.pesoLb) > 0 ? num(l.pesoLb).toFixed(2) + ' lb' : '—'}</td>
+                    <td className="num" style={{ textAlign: 'right' }}>{r.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="num" style={{ textAlign: 'right', color: 'var(--accent)' }}>{r.porUd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -885,38 +1001,59 @@ function FormLote({ onClose }) {
   const [moneda, setMoneda] = useState('RD');
   const [tasaCambio, setTasaCambio] = useState(() => Number(localStorage.getItem('tasa-cambio-usd')) || 60);
   const [medioPago, setMedioPago] = useState({ cuentaId: null, prestamoId: null });
-  const [envio, setEnvio] = useState('');
-  const [courier, setCourier] = useState('');
-  const [otros, setOtros] = useState('');
-  const [impuestos, setImpuestos] = useState('');
+  const [pesoUnidad, setPesoUnidad] = useState('kg'); // proveedores en KG; se guarda en LB
+  const [costos, setCostos] = useState([]); // lista flexible {tipo, metodo, monto}
   const [nota, setNota] = useState('');
-  const [lineas, setLineas] = useState([{ key: 'k0', skuId: null, cantidad: 1, costoUd: '' }]);
+  const [lineas, setLineas] = useState([{ key: 'k0', skuId: null, cantidad: 1, costoTotal: '', peso: '' }]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { if (Number(tasaCambio) > 0) localStorage.setItem('tasa-cambio-usd', String(tasaCambio)); }, [tasaCambio]);
 
+  // Cambiar la unidad de peso convierte los valores ya escritos (kg↔lb).
+  const cambiarUnidad = (u) => {
+    if (u === pesoUnidad) return;
+    setLineas((arr) => arr.map((l) => {
+      const p = num(l.peso);
+      if (!(p > 0)) return l;
+      return { ...l, peso: u === 'lb' ? +(p * KG_TO_LB).toFixed(4) : +(p / KG_TO_LB).toFixed(4) };
+    }));
+    setPesoUnidad(u);
+  };
+
   const esUSD = moneda === 'USD';
   const monLbl = esUSD ? 'USD$' : 'RD$';
   const lineasValidas = lineas.filter((l) => l.skuId && num(l.cantidad) > 0);
-  const costoBase = lineasValidas.reduce((s, l) => s + num(l.cantidad) * num(l.costoUd), 0);
-  const shared = num(envio) + num(courier) + num(otros) + num(impuestos);
+  // Se escribe el costo TOTAL por SKU; el costo/ud sale de total ÷ cantidad.
+  const costoBase = lineasValidas.reduce((s, l) => s + num(l.costoTotal), 0);
+  const shared = costos.reduce((s, c) => s + num(c.monto), 0);
   const totalMon = costoBase + shared;
   const tasa = num(tasaCambio);
   const totalRD = esUSD ? totalMon * tasa : totalMon;
+  // Líneas con pesoLb (canónico) para la vista previa del reparto.
+  const lineasPreview = lineasValidas.map((l) => ({ ...l, costoUd: num(l.cantidad) > 0 ? num(l.costoTotal) / num(l.cantidad) : 0, pesoLb: toLb(l.peso, pesoUnidad) }));
 
-  const valid = lineasValidas.length > 0 && medioPago.cuentaId && (!esUSD || tasa > 0);
+  const costoSinMedio = costos.some((c) => num(c.monto) > 0 && !c.medio?.cuentaId);
+  const valid = lineasValidas.length > 0 && medioPago.cuentaId && !costoSinMedio && (!esUSD || tasa > 0);
 
   async function submit() {
     if (!lineasValidas.length) { t.err('Sin líneas', 'Agregá al menos un SKU al lote'); return; }
     if (!medioPago.cuentaId) { t.err('Falta medio de pago', 'Elegí de dónde sale el dinero del lote'); return; }
+    if (costoSinMedio) { t.err('Falta medio de pago', 'Cada costo necesita su cuenta de pago'); return; }
     if (esUSD && !(tasa > 0)) { t.err('Falta la tasa', 'En USD necesitás la tasa de cambio USD→RD'); return; }
     setBusy(true);
     try {
       const res = await createLote({
         fecha, proveedorId, status, moneda, tasaCambio: tasa,
-        envio: num(envio), courier: num(courier), otros: num(otros), impuestos: num(impuestos),
+        costos: costos.filter((c) => num(c.monto) > 0).map((c) => ({
+          tipo: c.tipo, metodo: c.metodo, monto: num(c.monto),
+          cuentaPagoId: c.medio?.cuentaId || null, prestamoId: c.medio?.prestamoId ?? null, fecha: c.fecha || fecha,
+        })),
         cuentaPagoId: medioPago.cuentaId, prestamoId: medioPago.prestamoId, nota,
-        lineas: lineasValidas.map((l) => ({ skuId: l.skuId, cantidad: num(l.cantidad), costoUd: num(l.costoUd) })),
+        lineas: lineasValidas.map((l) => ({
+          skuId: l.skuId, cantidad: num(l.cantidad),
+          costoUd: num(l.cantidad) > 0 ? num(l.costoTotal) / num(l.cantidad) : 0,
+          pesoLb: toLb(l.peso, pesoUnidad),
+        })),
       }, data.lotes);
       await data.refreshAll();
       t.ok('Lote registrado', `${res.codigo} · ${lineasValidas.length} SKU(s) · ${money(totalRD)}`);
@@ -934,7 +1071,17 @@ function FormLote({ onClose }) {
         <Field label="Moneda"><Select value={moneda} onChange={setMoneda} options={[{ value: 'RD', label: 'RD$' }, { value: 'USD', label: 'USD$' }]} /></Field>
       </div>
 
-      <LineasSku lineas={lineas} setLineas={setLineas} monedaLabel={monLbl} />
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>Peso en:</span>
+          {['kg', 'lb'].map((u) => (
+            <button key={u} className="pill" onClick={() => cambiarUnidad(u)}
+              style={{ background: pesoUnidad === u ? 'var(--surface-3)' : 'var(--surface)', color: pesoUnidad === u ? 'var(--text)' : 'var(--text-2)' }}>{u}</button>
+          ))}
+        </div>
+        <LineasSku lineas={lineas} setLineas={setLineas} monedaLabel={monLbl} pesoUnidad={pesoUnidad} />
+        <div className="field-hint" style={{ marginTop: 4 }}>Proveedor pesa en kg; el courier cobra en lb. Se guarda en lb (conversión automática).</div>
+      </div>
 
       {esUSD && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4 }}>
@@ -945,12 +1092,8 @@ function FormLote({ onClose }) {
         </div>
       )}
 
-      <div className="row-4">
-        <Field label={`Envío (${monLbl})`} hint="China → USA"><MoneyInput value={envio} onChange={setEnvio} placeholder="0" /></Field>
-        <Field label={`Courier (${monLbl})`} hint="USA → DR"><MoneyInput value={courier} onChange={setCourier} placeholder="0" /></Field>
-        <Field label={`Impuestos (${monLbl})`} hint="Aduana"><MoneyInput value={impuestos} onChange={setImpuestos} placeholder="0" /></Field>
-        <Field label={`Otros (${monLbl})`} hint="Fee / comisión"><MoneyInput value={otros} onChange={setOtros} placeholder="0" /></Field>
-      </div>
+      <CostosEditor costos={costos} setCostos={setCostos} lineas={lineasPreview} monedaLabel={monLbl}
+        defaultMedio={medioPago} defaultFecha={fecha} />
 
       <div className="row">
         <Field label="Medio de pago" required hint="Si es tarjeta, se registra como DRAWDOWN ligado a la tarjeta">
@@ -986,29 +1129,97 @@ function EditLoteModal({ lote, onClose }) {
   const [status, setStatus] = useState(lote.status || 'PENDIENTE');
   const [proveedorId, setProveedorId] = useState(lote.proveedorId || null);
   const [fechaRecibido, setFechaRecibido] = useState(lote.fechaRecibido || '');
-  // EditLote SIEMPRE en RD$: los valores existentes (entradas/costos) ya vienen
-  // convertidos a RD$ del loader; re-convertir a USD corrompería el CPP. Para
-  // capturar una compra NUEVA en USD, usar "+ Nuevo lote" (FormLote sí maneja USD→RD).
+  // EditLote SIEMPRE en RD$: los valores existentes ya vienen convertidos del
+  // loader. Para una compra NUEVA en USD, usar "+ Nuevo lote" (FormLote maneja USD).
   const moneda = 'RD';
   const tasa = 1;
-  const [envio, setEnvio] = useState(lote.envio || '');
-  const [courier, setCourier] = useState(lote.courier || '');
-  const [otros, setOtros] = useState(lote.otros || '');
-  const [impuestos, setImpuestos] = useState(lote.impuestos || '');
-  // Líneas: existentes (con id de entrada) + nuevas (sin id).
-  const [lineas, setLineas] = useState(() => lote.entradas.map((e) => ({
-    key: 'e' + e.id, entradaId: e.id, skuId: e.skuId, cantidad: e.cantidad, costoUd: e.costoBase, status: e.status, isNew: false,
-  })));
-  const [busy, setBusy] = useState(false);
-
   const monLbl = 'RD$';
 
-  const addLinea = () => setLineas((arr) => [...arr, { key: 'n' + Date.now() + Math.random(), entradaId: null, skuId: null, cantidad: 1, costoUd: '', isNew: true }]);
+  // Costos compartidos como LISTA flexible (Fase 2). Si el lote no tiene
+  // lote_costos, se migran los 4 campos legados (método CANTIDAD = mismo reparto).
+  const [pesoUnidad, setPesoUnidad] = useState('lb'); // los datos existentes están en lb
+
+  // Medio de pago sugerido (para pre-cargar costos): la cuenta de un movimiento
+  // de costos/envío/mercancía ya ligado al lote.
+  const medioDefault = useMemo(() => {
+    const movs = (data.movimientos || []).filter((mm) => mm.loteId === lote.loteId);
+    const comp = movs.find((mm) => /^(Costo:|Costos del lote|Env[íi]o\/courier|Aduana\/otros)/i.test(mm.notas || ''))
+      || movs.find((mm) => /^Compra mercanc/i.test(mm.notas || '')) || movs[0];
+    return comp ? { cuentaId: comp.cuentaId, prestamoId: comp.prestamoId || null } : { cuentaId: null, prestamoId: null };
+  }, [data.movimientos, lote.loteId]);
+
+  // Costos como LISTA flexible (Fase 2b), cada uno con su medio + fecha. Si el
+  // lote no tiene lote_costos, se migran los 4 campos legados (método CANTIDAD).
+  const costosIniciales = useMemo(() => {
+    if (lote.costos && lote.costos.length) return lote.costos.map((c) => ({
+      key: 'c' + c.id, tipo: c.tipo, metodo: c.metodo, monto: c.monto,
+      medio: { cuentaId: c.cuentaPagoId || null, prestamoId: c.prestamoId || null }, fecha: c.fecha || lote.fecha,
+    }));
+    const mk = (key, tipo, monto) => ({ key, tipo, metodo: 'CANTIDAD', monto: num(monto), medio: medioDefault, fecha: lote.fecha });
+    const out = [];
+    if (num(lote.courier) > 0) out.push(mk('lc-cou', 'Courier (USA→RD)', lote.courier));
+    if (num(lote.envio) > 0) out.push(mk('lc-env', 'Envío (China→USA)', lote.envio));
+    if (num(lote.impuestos) > 0) out.push(mk('lc-imp', 'Impuestos / Aduana', lote.impuestos));
+    if (num(lote.otros) > 0) out.push(mk('lc-otr', 'Otro', lote.otros));
+    return out;
+  }, [lote, medioDefault]);
+  const [costos, setCostos] = useState(costosIniciales);
+  const hayCompartidos = costos.some((c) => num(c.monto) > 0);
+  const costoSinMedio = costos.some((c) => num(c.monto) > 0 && !c.medio?.cuentaId);
+
+  // Info por tanda (fecha + cuenta) para mostrar cada compra por separado.
+  const tandaInfo = useMemo(() => {
+    const movs = (data.movimientos || []).filter((mm) => mm.loteId === lote.loteId && /^Compra mercanc/i.test(mm.notas || ''));
+    const info = {};
+    lote.entradas.forEach((e) => {
+      const tk = e.tanda || 'sin-tanda';
+      if (info[tk]) return;
+      const mov = movs.find((mm) => (mm.notas || '').endsWith(`· ${tk}`))
+        || (tk === `T${lote.loteId}` ? movs.find((mm) => !/· T\S+$/.test(mm.notas || '')) : null);
+      info[tk] = { fecha: e.fecha, cuenta: mov ? (data.cuentas.find((c) => c.id === mov.cuentaId)?.nombre || '') : '' };
+    });
+    return info;
+  }, [data.movimientos, data.cuentas, lote]);
+
+  // Líneas existentes (con id de entrada). Se escribe el COSTO TOTAL por SKU.
+  // `peso` está en la unidad activa (inicia en lb = lo guardado).
+  const [lineas, setLineas] = useState(() => lote.entradas.map((e) => ({
+    key: 'e' + e.id, entradaId: e.id, skuId: e.skuId, cantidad: e.cantidad,
+    costoTotal: num(e.costoBase) * num(e.cantidad), tanda: e.tanda || `T${lote.loteId}`,
+    peso: e.pesoLb != null ? e.pesoLb : '',
+  })));
   const updateLinea = (key, patch) => setLineas((arr) => arr.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const removeLineaLocal = (key) => setLineas((arr) => arr.filter((l) => l.key !== key));
 
+  // Nueva compra (nueva tanda): fecha + medio + líneas propias. null = panel cerrado.
+  const [nuevaFecha, setNuevaFecha] = useState(todayISO());
+  const [nuevaMedio, setNuevaMedio] = useState(medioDefault);
+  const [nuevaLineas, setNuevaLineas] = useState(null);
+
+  const [busy, setBusy] = useState(false);
+
+  // Cambiar la unidad de peso convierte los valores ya escritos (existentes + nuevos).
+  const cambiarUnidad = (u) => {
+    if (u === pesoUnidad) return;
+    const conv = (arr) => (arr || []).map((l) => { const p = num(l.peso); return p > 0 ? { ...l, peso: u === 'lb' ? +(p * KG_TO_LB).toFixed(4) : +(p / KG_TO_LB).toFixed(4) } : l; });
+    setLineas((arr) => conv(arr));
+    setNuevaLineas((arr) => (arr ? conv(arr) : arr));
+    setPesoUnidad(u);
+  };
+  // Líneas válidas con pesoLb canónico para la vista previa del reparto.
+  const lineasPreview = lineas.filter((l) => l.skuId && num(l.cantidad) > 0)
+    .map((l) => ({ ...l, costoUd: num(l.cantidad) > 0 ? num(l.costoTotal) / num(l.cantidad) : 0, pesoLb: toLb(l.peso, pesoUnidad) }));
+
+  // Agrupar líneas existentes por tanda, en orden de aparición.
+  const grupos = useMemo(() => {
+    const order = [];
+    const byT = {};
+    lineas.forEach((l) => { if (!byT[l.tanda]) { byT[l.tanda] = []; order.push(l.tanda); } byT[l.tanda].push(l); });
+    return order.map((tk) => ({ tanda: tk, info: tandaInfo[tk] || {}, lineas: byT[tk] }));
+  }, [lineas, tandaInfo]);
+
   async function removeLineaPersistida(l) {
-    const ok = await confirm({ title: 'Borrar línea', body: `Quitar ${l.skuId} del lote. Reduce stock/CPP en cascada.`, confirmLabel: 'Borrar' });
+    const ok = await confirm({ title: 'Borrar línea', body: `Quitar ${l.skuId} del lote. Reduce stock/CPP en cascada y re-sincroniza el movimiento de esa compra.`, confirmLabel: 'Borrar' });
     if (!ok) return;
     setBusy(true);
     try {
@@ -1021,33 +1232,57 @@ function EditLoteModal({ lote, onClose }) {
   }
 
   async function save() {
+    if (costoSinMedio) { t.err('Falta medio de pago', 'Cada costo necesita su cuenta de pago'); return; }
+    const nuevasValidas = (nuevaLineas || []).filter((l) => l.skuId && num(l.cantidad) > 0);
+    if (nuevasValidas.length && !nuevaMedio.cuentaId) { t.err('Falta medio de pago', 'Elegí de qué cuenta salió la compra nueva'); return; }
     setBusy(true);
     try {
-      // 1) Header
+      // 1) Costos flexibles (lote_costos) + su caja (un movimiento por costo, su medio).
+      await saveLoteCostos(lote.loteId, costos.filter((c) => num(c.monto) > 0).map((c) => ({
+        tipo: c.tipo, metodo: c.metodo, monto: num(c.monto),
+        cuentaPagoId: c.medio?.cuentaId || null, prestamoId: c.medio?.prestamoId ?? null, fecha: c.fecha || lote.fecha,
+      })), lote.fecha);
+      // 2) Header (status/proveedor + limpia los 4 campos legados → todo vive en lote_costos).
       await updateLoteHeader(lote.loteId, {
         status, proveedorId,
         fechaRecibido: status === 'RECIBIDO' ? (fechaRecibido || lote.fecha) : (fechaRecibido || null),
-        envio: num(envio), courier: num(courier), otros: num(otros), impuestos: num(impuestos),
+        envio: 0, courier: 0, otros: 0, impuestos: 0,
       }, moneda, tasa);
-      // 2) Entradas: nuevas → addEntradaToLote; existentes modificadas → updateEntrada
+      // 3) Entradas existentes modificadas → updateEntrada (incluye peso; re-sincroniza SU tanda).
       for (const l of lineas) {
         if (!l.skuId || num(l.cantidad) <= 0) continue;
-        if (l.isNew) {
-          await addEntradaToLote(lote.loteId, { fecha: lote.fecha, skuId: l.skuId, cantidad: num(l.cantidad), costoUd: num(l.costoUd), nota: '' }, status, moneda, tasa);
-        } else {
-          const orig = lote.entradas.find((e) => e.id === l.entradaId);
-          const cambiado = orig && (orig.skuId !== l.skuId || orig.cantidad !== num(l.cantidad) || orig.costoBase !== num(l.costoUd));
-          if (cambiado) {
-            await updateEntrada(l.entradaId, { skuId: l.skuId, cantidad: num(l.cantidad), costoUd: num(l.costoUd) }, moneda, tasa);
-          }
+        const orig = lote.entradas.find((e) => e.id === l.entradaId);
+        const nuevoCostoUd = num(l.cantidad) > 0 ? num(l.costoTotal) / num(l.cantidad) : 0;
+        const nuevoPeso = toLb(l.peso, pesoUnidad);
+        const cambiado = orig && (orig.skuId !== l.skuId || orig.cantidad !== num(l.cantidad) || orig.costoBase !== nuevoCostoUd || num(orig.pesoLb) !== nuevoPeso);
+        if (cambiado) {
+          await updateEntrada(l.entradaId, { skuId: l.skuId, cantidad: num(l.cantidad), costoUd: nuevoCostoUd, pesoLb: nuevoPeso }, moneda, tasa);
         }
       }
+      // 4) Compra nueva → tanda propia (movimiento de mercancía aparte).
+      if (nuevasValidas.length) {
+        await addTandaToLote(lote.loteId, nuevasValidas.map((l) => ({
+          skuId: l.skuId, cantidad: num(l.cantidad), costoUd: num(l.cantidad) > 0 ? num(l.costoTotal) / num(l.cantidad) : 0,
+          pesoLb: toLb(l.peso, pesoUnidad),
+        })), { fecha: nuevaFecha, cuentaPagoId: nuevaMedio.cuentaId, prestamoId: nuevaMedio.prestamoId, status });
+      }
       await data.refreshAll();
-      t.ok('Lote actualizado', `${lote.codigo} · ${lineas.length} línea(s)`);
+      t.ok('Lote actualizado', `${lote.codigo}${nuevasValidas.length ? ` · +${nuevasValidas.length} SKU(s) nuevos` : ''}`);
       onClose();
     } catch (e) { t.err('No se pudo guardar', e.message); }
     setBusy(false);
   }
+
+  const headRow = (
+    <div className="line-row" style={{ gridTemplateColumns: LINEA_COLS, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
+      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>SKU</span>
+      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Cant.</span>
+      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo total ({monLbl})</span>
+      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Peso ({pesoUnidad})</span>
+      <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo/ud</span>
+      <span></span>
+    </div>
+  );
 
   return (
     <Modal title={`Editar lote · ${lote.codigo}`} width={920} onClose={onClose}>
@@ -1058,39 +1293,66 @@ function EditLoteModal({ lote, onClose }) {
         <Field label="Moneda" hint="Edición en RD$"><div className="input" style={{ background: 'var(--surface-3)', color: 'var(--text-3)' }}>RD$</div></Field>
       </div>
 
+      {/* Compras del lote, agrupadas por tanda (cada tanda = un movimiento). */}
       <div style={{ marginTop: 'var(--s-4)' }}>
-        <div className="field-label" style={{ marginBottom: 8 }}>SKUs del lote</div>
-        <div className="line-row" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 4 }}>
-          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase' }}>SKU</span>
-          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Cantidad</span>
-          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Costo/ud ({monLbl})</span>
-          <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', textAlign: 'right' }}>Subtotal</span>
-          <span></span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div className="field-label">Compras del lote</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-3)' }}>Peso en:</span>
+            {['kg', 'lb'].map((u) => (
+              <button key={u} className="pill" onClick={() => cambiarUnidad(u)}
+                style={{ background: pesoUnidad === u ? 'var(--surface-3)' : 'var(--surface)', color: pesoUnidad === u ? 'var(--text)' : 'var(--text-2)' }}>{u}</button>
+            ))}
+          </div>
         </div>
-        {lineas.map((l) => {
-          const subtotal = num(l.cantidad) * num(l.costoUd);
-          return (
-            <div key={l.key} className="line-row">
-              <SkuSelect value={l.skuId} onChange={(v) => updateLinea(l.key, { skuId: v })} soloActivos={false} />
-              <NumberInput value={l.cantidad} onChange={(v) => updateLinea(l.key, { cantidad: v })} min="1" />
-              <NumberInput value={l.costoUd} onChange={(v) => updateLinea(l.key, { costoUd: v })} placeholder="0" />
-              <span className="num" style={{ fontSize: 12, textAlign: 'right' }}>
-                {subtotal > 0 ? subtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
-                {l.isNew && <div style={{ fontSize: 10, color: 'var(--accent)' }}>NUEVO</div>}
-              </span>
-              <button className="icon-btn danger" disabled={busy}
-                onClick={() => (l.isNew ? removeLineaLocal(l.key) : removeLineaPersistida(l))}>×</button>
+        {grupos.map((g) => (
+          <div key={g.tanda} style={{ marginBottom: 'var(--s-3)' }}>
+            <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>
+              Compra{g.info.fecha ? ` del ${fmtDate(g.info.fecha)}` : ''}{g.info.cuenta ? ` · ${g.info.cuenta}` : ''}
             </div>
-          );
-        })}
-        <button className="btn ghost" style={{ marginTop: 8 }} onClick={addLinea}>+ Añadir SKU</button>
+            {headRow}
+            {g.lineas.map((l) => {
+              const cant = num(l.cantidad);
+              const costoUd = cant > 0 ? num(l.costoTotal) / cant : 0;
+              return (
+                <div key={l.key} className="line-row" style={{ gridTemplateColumns: LINEA_COLS }}>
+                  <SkuSelect value={l.skuId} onChange={(v) => updateLinea(l.key, { skuId: v })} soloActivos={false} />
+                  <NumberInput value={l.cantidad} onChange={(v) => updateLinea(l.key, { cantidad: v })} min="1" />
+                  <NumberInput value={l.costoTotal} onChange={(v) => updateLinea(l.key, { costoTotal: v })} placeholder="0" />
+                  <NumberInput value={l.peso} onChange={(v) => updateLinea(l.key, { peso: v })} placeholder="0" step="0.01" />
+                  <span className="num" style={{ fontSize: 12, textAlign: 'right', color: costoUd > 0 ? 'var(--text)' : 'var(--text-3)' }}>{costoUd > 0 ? costoUd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}</span>
+                  <button className="icon-btn danger" disabled={busy} onClick={() => removeLineaPersistida(l)}>×</button>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+
+        {/* Nueva compra al lote → tanda propia (fecha + medio de pago propios). */}
+        {nuevaLineas == null ? (
+          <button className="btn ghost" style={{ marginTop: 4 }} onClick={() => setNuevaLineas([{ key: 'n0', skuId: null, cantidad: 1, costoTotal: '', peso: '' }])}>
+            + Agregar compra al lote (nueva fecha / cuenta)
+          </button>
+        ) : (
+          <div style={{ marginTop: 'var(--s-3)', padding: 'var(--s-3)', background: 'var(--surface-2)', borderRadius: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s-2)' }}>
+              <div className="field-label" style={{ color: 'var(--accent)' }}>Nueva compra (movimiento aparte)</div>
+              <button className="icon-btn" onClick={() => setNuevaLineas(null)} title="Cancelar compra nueva">×</button>
+            </div>
+            <div className="row" style={{ marginBottom: 'var(--s-3)' }}>
+              <Field label="Fecha de la compra"><DateInput value={nuevaFecha} onChange={setNuevaFecha} /></Field>
+              <Field label="Medio de pago" required hint="Si es tarjeta → DRAWDOWN">
+                <MedioPagoSelect value={nuevaMedio} onChange={setNuevaMedio} invalid={!nuevaMedio.cuentaId} />
+              </Field>
+            </div>
+            <LineasSku lineas={nuevaLineas} setLineas={setNuevaLineas} monedaLabel={monLbl} pesoUnidad={pesoUnidad} titulo="SKUs de esta compra" />
+          </div>
+        )}
       </div>
 
-      <div className="row-4" style={{ marginTop: 'var(--s-4)' }}>
-        <Field label={`Envío (${monLbl})`}><MoneyInput value={envio} onChange={setEnvio} placeholder="0" /></Field>
-        <Field label={`Courier (${monLbl})`}><MoneyInput value={courier} onChange={setCourier} placeholder="0" /></Field>
-        <Field label={`Impuestos (${monLbl})`}><MoneyInput value={impuestos} onChange={setImpuestos} placeholder="0" /></Field>
-        <Field label={`Otros (${monLbl})`}><MoneyInput value={otros} onChange={setOtros} placeholder="0" /></Field>
+      <div style={{ marginTop: 'var(--s-4)' }}>
+        <CostosEditor costos={costos} setCostos={setCostos} lineas={lineasPreview} monedaLabel={monLbl}
+          defaultMedio={medioDefault} defaultFecha={lote.fecha} />
       </div>
       <div className="field-hint" style={{ marginTop: 6 }}>
         Nota: cambiar el estado a "Recibido" marca todas las entradas como recibidas y dispara el recálculo de CPP en la DB.

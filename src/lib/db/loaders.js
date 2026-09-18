@@ -119,18 +119,29 @@ export async function loadVentas() {
 
 /* ──────────── Lotes + entradas ──────────── */
 export async function loadLotes() {
-  const [{ data: entradas, error: e1 }, { data: skus }] = await Promise.all([
+  const [{ data: entradas, error: e1 }, { data: skus }, { data: costos }] = await Promise.all([
     supabase.from('entradas').select(`
       id, fecha, sku_id, status, cantidad, costo_unitario_base,
-      costo_compartido_asignado, costo_unitario_total, lote_id, notas,
+      costo_compartido_asignado, costo_unitario_total, lote_id, tanda, peso_lb, notas,
       lotes ( id, codigo, fecha_pedido, fecha_recibido, proveedor_id, status,
               costo_envio, costo_courier, costo_otros, costo_impuestos, moneda,
               proveedor:contrapartes!proveedor_id ( nombre ) )
     `).order('fecha', { ascending: false }),
     supabase.from('skus').select('id_sku, nombre'),
+    supabase.from('lote_costos').select('id, lote_id, tipo, metodo, monto, cuenta_pago_id, prestamo_id, fecha, notas').order('id'),
   ]);
   if (e1) throw e1;
   const skuName = Object.fromEntries((skus || []).map((s) => [s.id_sku, s.nombre]));
+  // Costos flexibles por lote (Fase 2). Los lotes sin filas aquí usan los 4
+  // campos fijos legados (reparto por cantidad).
+  const costosByLote = {};
+  (costos || []).forEach((c) => {
+    (costosByLote[c.lote_id] ||= []).push({
+      id: c.id, tipo: c.tipo, metodo: c.metodo, monto: num(c.monto),
+      cuentaPagoId: c.cuenta_pago_id || null, prestamoId: c.prestamo_id || null,
+      fecha: c.fecha || null, notas: c.notas || '',
+    });
+  });
 
   const byKey = {};
   (entradas || []).forEach((e) => {
@@ -151,6 +162,7 @@ export async function loadLotes() {
         courier: num(L?.costo_courier),
         otros: num(L?.costo_otros),
         impuestos: num(L?.costo_impuestos),
+        costos: e.lote_id ? (costosByLote[e.lote_id] || []) : [],
         notas: e.notas || '',
         entradas: [],
       };
@@ -160,6 +172,9 @@ export async function loadLotes() {
       skuId: e.sku_id,
       skuNombre: skuName[e.sku_id] || e.sku_id,
       status: e.status,
+      fecha: e.fecha,
+      tanda: e.tanda || null,
+      pesoLb: e.peso_lb != null ? num(e.peso_lb) : null,
       cantidad: num(e.cantidad),
       costoBase: num(e.costo_unitario_base),
       costoCompartido: num(e.costo_compartido_asignado),

@@ -239,13 +239,33 @@ export async function createLote(l, lotesExistentes) {
   }).select().single();
   if (e0) throw new Error(`createLote header: ${e0.message}`);
 
-  // 2. Entradas — costo_unitario_base SIEMPRE en RD$ 🐛 INV-1
+  // Tanda inicial: todas las líneas de la creación son UNA tanda (un movimiento
+  // de mercancía). Las compras que se agreguen luego al lote serán otras tandas.
+  const tanda = `T${lote.id}-${Date.now()}`;
+
+  // 2. Entradas — costo_unitario_base SIEMPRE en RD$ 🐛 INV-1. peso_lb en LB.
   const rows = l.lineas.filter((x) => x.skuId && num(x.cantidad) > 0).map((x) => ({
     lote_id: lote.id, fecha: l.fecha, sku_id: x.skuId, status: entStatus,
-    cantidad: num(x.cantidad), costo_unitario_base: toRD(x.costoUd, moneda, tasa), notas: l.nota || '',
+    cantidad: num(x.cantidad), costo_unitario_base: toRD(x.costoUd, moneda, tasa), tanda,
+    peso_lb: x.pesoLb != null && num(x.pesoLb) > 0 ? num(x.pesoLb) : null, notas: l.nota || '',
   }));
   const { error: e1 } = await supabase.from('entradas').insert(rows);
   if (e1) { await supabase.from('lotes').delete().eq('id', lote.id); throw new Error(`createLote entradas: ${e1.message}`); }
+
+  // 2b. Costos flexibles (Fase 2): lista {tipo, metodo, monto}. Montos → RD$.
+  //     El trigger de lote_costos re-dispara el prorrateo por método.
+  const costos = (l.costos || []).filter((c) => num(c.monto) > 0);
+  if (costos.length) {
+    const crows = costos.map((c) => ({
+      lote_id: lote.id, tipo: c.tipo || 'OTRO', metodo: c.metodo || 'CANTIDAD',
+      monto: toRD(c.monto, moneda, tasa),
+      cuenta_pago_id: c.cuentaPagoId || l.cuentaPagoId || null,
+      prestamo_id: c.prestamoId != null ? c.prestamoId : null,
+      fecha: c.fecha || l.fecha, notas: c.notas || '',
+    }));
+    const { error: ec } = await supabase.from('lote_costos').insert(crows);
+    if (ec) { await supabase.from('entradas').delete().eq('lote_id', lote.id); await supabase.from('lotes').delete().eq('id', lote.id); throw new Error(`createLote costos: ${ec.message}`); }
+  }
 
   // 3. Caja — ligada al lote por lote_id 🐛 INV-5. USD persistido 🐛 INV-4.
   //    Si paga con tarjeta → DRAWDOWN + prestamo_id 🐛 regla 7.
@@ -254,16 +274,22 @@ export async function createLote(l, lotesExistentes) {
     const merchRD = rows.reduce((s, r) => s + num(r.cantidad) * num(r.costo_unitario_base), 0);
     const merchUSD = moneda === 'USD' && tasa > 0 ? merchRD / tasa : null;
     const movs = [];
-    if (merchRD > 0) movs.push(cajaLote('COMPRA_MERCANCIA', merchRD, merchUSD, tasa, moneda, l, lote.id, esTarjeta, `Compra mercancía · lote ${codigo}`));
-    const shipRD = envioRD + courierRD;
-    if (shipRD > 0) movs.push(cajaLote('ENVIO_LOTE', shipRD, moneda === 'USD' && tasa > 0 ? shipRD / tasa : null, tasa, moneda, l, lote.id, esTarjeta, `Envío/courier · lote ${codigo}`));
-    const customsRD = otrosRD + impuestosRD;
-    if (customsRD > 0) movs.push(cajaLote('COMPRA_OPERATIVA', customsRD, null, tasa, moneda, l, lote.id, esTarjeta, `Aduana/otros · lote ${codigo}`));
+    if (merchRD > 0) movs.push(cajaLote('COMPRA_MERCANCIA', merchRD, merchUSD, tasa, moneda, l, lote.id, esTarjeta, `Compra mercancía · lote ${codigo} · ${tanda}`));
+    if (!costos.length) {
+      // Legado (sin lista de costos): envío/courier + aduana/otros de los 4 campos.
+      const shipRD = envioRD + courierRD;
+      if (shipRD > 0) movs.push(cajaLote('ENVIO_LOTE', shipRD, moneda === 'USD' && tasa > 0 ? shipRD / tasa : null, tasa, moneda, l, lote.id, esTarjeta, `Envío/courier · lote ${codigo}`));
+      const customsRD = otrosRD + impuestosRD;
+      if (customsRD > 0) movs.push(cajaLote('COMPRA_OPERATIVA', customsRD, null, tasa, moneda, l, lote.id, esTarjeta, `Aduana/otros · lote ${codigo}`));
+    }
     if (movs.length) {
       const { error: e2 } = await supabase.from('movimientos').insert(movs);
       if (e2) throw new Error(e2.message);
     }
+    // Fase 2b: la caja de costos = UN movimiento por costo, desde su propio medio.
+    if (costos.length) await syncCostosCompartidos(lote.id);
   } catch (err) {
+    await supabase.from('lote_costos').delete().eq('lote_id', lote.id);
     await supabase.from('entradas').delete().eq('lote_id', lote.id);
     await supabase.from('lotes').delete().eq('id', lote.id);
     throw new Error(`createLote caja: ${err.message}`);
@@ -287,56 +313,167 @@ function cajaLote(tipo, montoRD, montoUSD, tasa, moneda, l, loteId, esTarjeta, n
   };
 }
 
-// Editar una entrada (qty/costo/sku). 🐛 INV-2: re-sincronizar el COMPRA_MERCANCIA
-// del lote para que la caja siga el costo de mercancía.
+// Editar una entrada existente (qty/costo/sku). Re-sincroniza SOLO el movimiento
+// de mercancía de SU tanda (conserva la fecha y el medio de pago de esa compra).
 export async function updateEntrada(entradaId, patch, moneda, tasa) {
   const row = {};
   if (patch.skuId !== undefined) row.sku_id = patch.skuId;
   if (patch.cantidad !== undefined) row.cantidad = num(patch.cantidad);
   if (patch.costoUd !== undefined) row.costo_unitario_base = toRD(patch.costoUd, moneda, tasa); // 🐛 INV-1
+  if (patch.pesoLb !== undefined) row.peso_lb = num(patch.pesoLb) > 0 ? num(patch.pesoLb) : null;
   if (patch.status !== undefined) row.status = patch.status;
   if (patch.notas !== undefined) row.notas = patch.notas;
-  const { data, error } = await supabase.from('entradas').update(row).eq('id', entradaId).select('lote_id').single();
+  const { data, error } = await supabase.from('entradas').update(row).eq('id', entradaId).select('lote_id, tanda').single();
   if (error) throw new Error(`updateEntrada: ${error.message}`);
-  if (data?.lote_id) await syncCompraLote(data.lote_id);
+  if (data?.lote_id) await syncMerchTanda(data.lote_id, data.tanda);
   return { id: entradaId };
 }
 
-export async function addEntradaToLote(loteId, linea, status, moneda, tasa) {
-  const { error } = await supabase.from('entradas').insert({
-    lote_id: loteId, fecha: linea.fecha, sku_id: linea.skuId,
-    status: LOTE_TO_ENTRADA_STATUS[status] || 'PENDIENTE',
-    cantidad: num(linea.cantidad), costo_unitario_base: toRD(linea.costoUd, moneda, tasa), notas: linea.nota || '',
+// Agrega una COMPRA nueva (tanda) a un lote existente: inserta sus entradas con
+// un token de tanda propio y crea UN movimiento de mercancía con su fecha y medio
+// de pago propios (regla 7: tarjeta → DRAWDOWN). Cada tanda = un movimiento, así
+// dos compras al mismo lote en fechas/cuentas distintas se ven por separado.
+export async function addTandaToLote(loteId, lineas, { fecha, cuentaPagoId, prestamoId, status, moneda = 'RD', tasa = 1 } = {}) {
+  if (!cuentaPagoId) throw new Error('Selecciona el medio de pago de la compra'); // 🐛 CTA-1
+  const valid = (lineas || []).filter((l) => l.skuId && num(l.cantidad) > 0);
+  if (!valid.length) throw new Error('Agregá al menos un SKU a la compra');
+  const { data: lote, error: e0 } = await supabase.from('lotes').select('codigo, proveedor_id, status').eq('id', loteId).single();
+  if (e0 || !lote) throw new Error('addTandaToLote: lote no encontrado');
+  const f = fecha || todayISO();
+  const tanda = `T${loteId}-${Date.now()}`;
+  const entStatus = LOTE_TO_ENTRADA_STATUS[status || lote.status] || 'PENDIENTE';
+  const rows = valid.map((l) => ({
+    lote_id: loteId, fecha: f, sku_id: l.skuId, status: entStatus,
+    cantidad: num(l.cantidad), costo_unitario_base: toRD(l.costoUd, moneda, tasa), tanda,
+    peso_lb: l.pesoLb != null && num(l.pesoLb) > 0 ? num(l.pesoLb) : null, notas: l.nota || '',
+  }));
+  const { error: e1 } = await supabase.from('entradas').insert(rows);
+  if (e1) throw new Error(`addTandaToLote entradas: ${e1.message}`);
+  const merch = rows.reduce((s, r) => s + num(r.cantidad) * num(r.costo_unitario_base), 0);
+  const esTarjeta = prestamoId != null;
+  const { error: e2 } = await supabase.from('movimientos').insert({
+    fecha: f, tipo: esTarjeta ? 'DRAWDOWN' : 'COMPRA_MERCANCIA', cuenta_id: cuentaPagoId,
+    contraparte_id: lote.proveedor_id || null,
+    entrada: esTarjeta ? merch : 0, salida: esTarjeta ? 0 : merch,
+    prestamo_id: esTarjeta ? prestamoId : null, lote_id: loteId,
+    notas: `Compra mercancía · lote ${lote.codigo} · ${tanda}`,
   });
-  if (error) throw new Error(`addEntradaToLote: ${error.message}`);
-  await syncCompraLote(loteId);
-  return { ok: true };
+  if (e2) { await supabase.from('entradas').delete().eq('lote_id', loteId).eq('tanda', tanda); throw new Error(`addTandaToLote caja: ${e2.message}`); }
+  return { ok: true, tanda };
 }
 
 export async function removeEntrada(entradaId) {
-  const { data } = await supabase.from('entradas').select('lote_id').eq('id', entradaId).single();
+  const { data } = await supabase.from('entradas').select('lote_id, tanda').eq('id', entradaId).single();
   const { error } = await supabase.from('entradas').delete().eq('id', entradaId);
   if (error) throw new Error(`removeEntrada: ${error.message}`);
-  if (data?.lote_id) await syncCompraLote(data.lote_id);
+  if (data?.lote_id) await syncMerchTanda(data.lote_id, data.tanda);
   return { deleted: true };
 }
 
-// Re-sincroniza el movimiento COMPRA_MERCANCIA del lote con el costo real de
-// sus entradas. 🐛 INV-2.
-async function syncCompraLote(loteId) {
-  const { data: ents } = await supabase.from('entradas').select('cantidad, costo_unitario_base').eq('lote_id', loteId);
+// Reconcilia el movimiento de mercancía de UNA tanda con el costo real de sus
+// entradas. Conserva la fecha y el medio de pago del movimiento (no los cambia).
+// Sin entradas en la tanda → borra su movimiento. 🐛 INV-2.
+async function syncMerchTanda(loteId, tanda) {
+  if (!tanda) return;
+  const { data: ents } = await supabase.from('entradas')
+    .select('cantidad, costo_unitario_base').eq('lote_id', loteId).eq('tanda', tanda);
   const merch = (ents || []).reduce((s, e) => s + num(e.cantidad) * num(e.costo_unitario_base), 0);
-  const { data: mov } = await supabase.from('movimientos').select('id, entrada, salida, prestamo_id').eq('lote_id', loteId).eq('tipo', 'COMPRA_MERCANCIA').limit(1);
-  if (mov && mov.length) {
-    const m = mov[0];
-    const esTarjeta = m.prestamo_id != null;
-    const patch = esTarjeta ? { entrada: merch } : { salida: merch };
-    await supabase.from('movimientos').update(patch).eq('id', m.id);
+  const { data: movs } = await supabase.from('movimientos')
+    .select('id, prestamo_id, notas').eq('lote_id', loteId);
+  const merchMovs = (movs || []).filter((m) => /^Compra mercanc/i.test(m.notas || ''));
+  let mov = merchMovs.find((m) => (m.notas || '').endsWith(`· ${tanda}`));
+  // Legacy: lote de una sola tanda 'T{loteId}' cuyo movimiento aún no tiene token.
+  if (!mov && tanda === `T${loteId}`) mov = merchMovs.find((m) => !/· T\S+$/.test(m.notas || ''));
+  if (merch > 0) {
+    if (mov) {
+      const esTarjeta = mov.prestamo_id != null;
+      const patch = esTarjeta ? { entrada: merch, salida: 0 } : { salida: merch, entrada: 0 };
+      const { error } = await supabase.from('movimientos').update(patch).eq('id', mov.id);
+      if (error) throw new Error(`syncMerchTanda update: ${error.message}`);
+    }
+    // Si no hay movimiento (tanda sin caja), no lo inventamos: addTandaToLote lo crea.
+  } else if (mov) {
+    const { error } = await supabase.from('movimientos').delete().eq('id', mov.id);
+    if (error) throw new Error(`syncMerchTanda delete: ${error.message}`);
   }
 }
 
-// Editar header del lote (status, proveedor, shared costs). 🐛 INV-3: convierte
-// USD, re-sincroniza caja de envío/courier/aduana, respeta regla 7.
+// Reconcilia los movimientos de COSTOS COMPARTIDOS del lote (envío/courier y
+// aduana/otros) — son del lote entero, no de una tanda. 🐛 INV-3. Monto>0 →
+// upsert; monto=0 → borra. `medio` con cuentaPagoId re-apunta la cuenta (regla 7:
+// tarjeta → DRAWDOWN entrada>0 + prestamo_id); sin `medio`, preserva la existente.
+async function syncCostosCompartidos(loteId, medio = null) {
+  const { data: lote } = await supabase.from('lotes')
+    .select('codigo, fecha_pedido, proveedor_id, costo_envio, costo_courier, costo_otros, costo_impuestos')
+    .eq('id', loteId).single();
+  if (!lote) return;
+  const { data: costos } = await supabase.from('lote_costos')
+    .select('id, tipo, monto, cuenta_pago_id, prestamo_id, fecha').eq('lote_id', loteId);
+  const { data: movs } = await supabase.from('movimientos')
+    .select('id, cuenta_id, prestamo_id, notas').eq('lote_id', loteId);
+  const existing = movs || [];
+
+  // Fase 2b: UN movimiento de caja por cada costo, desde su propio medio de pago
+  // y fecha. Full-replace: se borran los movimientos de costos viejos y se recrean.
+  if (costos && costos.length) {
+    for (const m of existing) {
+      if (/^(Env[íi]o\/courier|Aduana\/otros|Costos del lote|Costo:)/i.test(m.notas || '')) await supabase.from('movimientos').delete().eq('id', m.id);
+    }
+    const rows = [];
+    for (const c of costos) {
+      const monto = num(c.monto);
+      if (!(monto > 0)) continue;
+      if (!c.cuenta_pago_id) throw new Error(`Falta la cuenta de pago del costo "${c.tipo}"`); // 🐛 CTA-1
+      const esTarjeta = c.prestamo_id != null;
+      rows.push({
+        fecha: c.fecha || lote.fecha_pedido,
+        tipo: esTarjeta ? 'DRAWDOWN' : 'COMPRA_OPERATIVA',
+        cuenta_id: c.cuenta_pago_id, contraparte_id: lote.proveedor_id || null,
+        entrada: esTarjeta ? monto : 0, salida: esTarjeta ? 0 : monto,
+        prestamo_id: esTarjeta ? c.prestamo_id : null, lote_id: loteId,
+        notas: `Costo: ${c.tipo} · lote ${lote.codigo} · #lc${c.id}`,
+      });
+    }
+    if (rows.length) { const { error } = await supabase.from('movimientos').insert(rows); if (error) throw new Error(`syncCostosCompartidos: ${error.message}`); }
+    return;
+  }
+
+  // Legado (sin lote_costos): 2 buckets desde los 4 campos, con el medio único.
+  const find = (rx) => existing.find((m) => rx.test(m.notas || ''));
+  const ship = num(lote.costo_envio) + num(lote.costo_courier);
+  const customs = num(lote.costo_otros) + num(lote.costo_impuestos);
+  const buckets = [
+    { rx: /^Env[íi]o\/courier/i, base: 'ENVIO_LOTE', monto: ship, nota: `Envío/courier · lote ${lote.codigo}` },
+    { rx: /^Aduana\/otros/i, base: 'COMPRA_OPERATIVA', monto: customs, nota: `Aduana/otros · lote ${lote.codigo}` },
+  ];
+
+  for (const b of buckets) {
+    const mov = find(b.rx);
+    const cuentaId = medio?.cuentaPagoId != null ? medio.cuentaPagoId : mov?.cuenta_id;
+    const prestamoId = medio?.cuentaPagoId != null ? (medio.prestamoId ?? null) : (mov?.prestamo_id ?? null);
+    const esTarjeta = prestamoId != null;
+    if (b.monto > 0) {
+      if (!cuentaId) throw new Error('Falta la cuenta de pago de los costos del lote'); // 🐛 CTA-1
+      const row = { tipo: esTarjeta ? 'DRAWDOWN' : b.base, cuenta_id: cuentaId, entrada: esTarjeta ? b.monto : 0, salida: esTarjeta ? 0 : b.monto, prestamo_id: esTarjeta ? prestamoId : null };
+      if (mov) {
+        const { error } = await supabase.from('movimientos').update(row).eq('id', mov.id);
+        if (error) throw new Error(`syncCostosCompartidos update: ${error.message}`);
+      } else {
+        const { error } = await supabase.from('movimientos').insert({ ...row, fecha: lote.fecha_pedido, contraparte_id: lote.proveedor_id || null, lote_id: loteId, notas: b.nota });
+        if (error) throw new Error(`syncCostosCompartidos insert: ${error.message}`);
+      }
+    } else if (mov) {
+      const { error } = await supabase.from('movimientos').delete().eq('id', mov.id);
+      if (error) throw new Error(`syncCostosCompartidos delete: ${error.message}`);
+    }
+  }
+}
+
+// Editar header del lote (status, proveedor, costos compartidos, medio de pago
+// de esos costos). 🐛 INV-3: convierte USD, re-sincroniza la caja de
+// envío/courier/aduana y respeta regla 7. La caja de MERCANCÍA es por tanda
+// (ver addTandaToLote / syncMerchTanda), no se toca aquí. Si `patch.cuentaPagoId`
+// viene, re-apunta la cuenta de los costos compartidos.
 export async function updateLoteHeader(loteId, patch, moneda, tasa) {
   const m = String(moneda || 'RD').toUpperCase();
   const lhRow = {};
@@ -355,7 +492,34 @@ export async function updateLoteHeader(loteId, patch, moneda, tasa) {
   if (patch.status != null) {
     await supabase.from('entradas').update({ status: LOTE_TO_ENTRADA_STATUS[patch.status] || 'PENDIENTE' }).eq('lote_id', loteId);
   }
+  // 🐛 INV-3: re-sincronizar la caja de costos compartidos (envío/courier/aduana).
+  const medio = patch.cuentaPagoId != null
+    ? { cuentaPagoId: patch.cuentaPagoId, prestamoId: patch.prestamoId ?? null }
+    : null;
+  await syncCostosCompartidos(loteId, medio);
   return { id: loteId };
+}
+
+// Reemplaza la LISTA de costos del lote (Fase 2). Borra e inserta; el trigger de
+// lote_costos re-dispara el prorrateo por método, y re-sincroniza la caja
+// compartida (un movimiento "Costos del lote" desde `medio`).
+// costos: [{tipo, metodo, monto}]. medio: { cuentaPagoId, prestamoId }.
+export async function saveLoteCostos(loteId, costos, fechaFallback = null, moneda = 'RD', tasa = 1) {
+  const valid = (costos || []).filter((c) => num(c.monto) > 0);
+  await supabase.from('lote_costos').delete().eq('lote_id', loteId);
+  if (valid.length) {
+    const rows = valid.map((c) => ({
+      lote_id: loteId, tipo: c.tipo || 'OTRO', metodo: c.metodo || 'CANTIDAD',
+      monto: toRD(c.monto, moneda, tasa),
+      cuenta_pago_id: c.cuentaPagoId || null,
+      prestamo_id: c.prestamoId != null ? c.prestamoId : null,
+      fecha: c.fecha || fechaFallback, notas: c.notas || '',
+    }));
+    const { error } = await supabase.from('lote_costos').insert(rows);
+    if (error) throw new Error(`saveLoteCostos: ${error.message}`);
+  }
+  await syncCostosCompartidos(loteId);
+  return { ok: true };
 }
 
 export async function removeLote(loteId) {
