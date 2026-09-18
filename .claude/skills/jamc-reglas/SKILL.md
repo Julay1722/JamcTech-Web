@@ -177,6 +177,29 @@ FKs siempre ligadas) y cada KPI/saldo lee **una sola fuente de verdad** (vistas
   `#TRF-...` compartido en `notas`; al borrar una pata se borran ambas (sin pata
   huérfana). Arreglado en `createMovimiento`/`removeMovimiento` (src/lib/db/writers.js),
   verificado contra `vw_saldo_cuenta`.
+- **Editar lote no sincronizaba la caja ni el medio de pago** (RESUELTO): al
+  editar un lote (`EditLoteModal` / `updateLoteHeader`) solo se actualizaba la
+  tabla `lotes`; los `movimientos` (mercancía/envío/courier/aduana) quedaban
+  pegados a la cuenta original y las modificaciones NO aparecían en Finanzas
+  (reporte de Julio sobre L-260908-01: pagos con otra cuenta seguían saliendo del
+  medio original). Correcto = `updateLoteHeader` re-sincroniza los 3 buckets de
+  caja vía `syncCajaLote(loteId, medio)`: montos actuales de las entradas +
+  costos compartidos, re-apuntando la cuenta y respetando regla 7 (tarjeta →
+  DRAWDOWN entrada>0 + prestamo_id). `EditLoteModal` ahora expone
+  `MedioPagoSelect` (pre-cargado desde el movimiento de mercancía del lote).
+  Bucket identificado por prefijo de nota (estable aunque el tipo sea DRAWDOWN);
+  monto 0 → borra el movimiento. Arreglado en `src/lib/db/writers.js` y
+  `src/pages/Inventario.jsx` (EditLoteModal).
+- **Compras de un lote por TANDAS** (mejora pedida por Julio): un lote puede tener
+  varias compras/pagos en fechas y cuentas distintas. Cada "tanda" (columna
+  `entradas.tanda`, token `T{lote_id}-{ts}`) genera SU PROPIO movimiento de
+  mercancía (fecha + medio de pago propios) → se ven por separado en Finanzas, no
+  colapsados en uno. `createLote` = tanda inicial; `addTandaToLote` agrega compras
+  nuevas; `syncMerchTanda` reconcilia el movimiento de una tanda (conserva su
+  fecha/cuenta); los costos compartidos (envío/courier/aduana) siguen siendo del
+  lote entero (`syncCostosCompartidos`, su propio medio de pago). En los forms de
+  lote se escribe el **costo TOTAL** por SKU y el costo/ud lo calcula el sistema.
+  Legacy = tanda `T{lote_id}` (fallback al movimiento de mercancía sin token).
 - *(Añadir aquí cada nuevo hallazgo: form/KPI afectado, qué guardaba mal, cuál
   es el guardado correcto y dónde se arregló.)*
 

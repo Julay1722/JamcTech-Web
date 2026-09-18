@@ -58,6 +58,7 @@ PK: `id` (bigint)
 | costo_unitario_base | numeric | costo del producto sin shared costs. **OJO INV-1: debe estar en RD$ (si la compra fue USD, convertir antes de guardar).** |
 | costo_compartido_asignado | numeric | **Calculado por trigger** (prorrateo de envío/courier/impuestos/otros del lote) |
 | costo_unitario_total | numeric | base + compartido. Esto entra al CPP |
+| tanda | text | Agrupa las entradas de una misma compra/pago dentro del lote (token `T{lote_id}-{ts}`). Cada tanda genera su propio movimiento de mercancía con fecha + medio de pago propios. Legacy = `T{lote_id}`. |
 | notas | text | |
 
 ### `lotes` — Agrupa entradas que compartieron costos

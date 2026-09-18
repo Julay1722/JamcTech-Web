@@ -3,6 +3,8 @@
 .env.*
 *.pat
 *.token
+# ...pero SÍ versionar la plantilla de variables (sin secretos reales)
+!.env.example
 
 # ── Documentos locales (no se publican en el sitio Netlify) ─────
 # El prompt de reconstrucción y las instrucciones a Julio viven solo
